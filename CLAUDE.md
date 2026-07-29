@@ -74,11 +74,18 @@ Violating any of these is a bug, regardless of what else the code does correctly
 <!-- Fill these in as they come into existence; keep them accurate. -->
 
 ```
-make build          # build the binary
+make build          # build the binary into ./dist/ambar
 make test           # run all tests
-make run            # run locally against ./testdata
+make test-race      # tests under the race detector (needs cgo + a C compiler)
+make check          # gofmt + vet + test; what CI should run
+make run            # run locally against ./testdata on :8080
+make user-add USERNAME=x   # create a user against ./testdata
 make docker         # build the container image
+make docker-run     # run that image against ./testdata on :8973
 ```
+
+`GO`, `GOFMT` and `DOCKER` are overridable when the toolchain is not on `PATH`,
+e.g. `make test GO="/usr/local/go/bin/go"`.
 
 ## Environment
 
