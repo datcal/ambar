@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{block "title" .}}Ambar{{end}}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+{{/*
+  §11: configure hx-headers globally so every htmx request carries the CSRF
+  token without each control having to remember to. Plain <form> posts use the
+  hidden field instead.
+*/}}
+<body hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'>
+  <header class="topbar">
+    <a class="brand" href="/">ambar</a>
+    <nav>
+      {{if .User}}
+        <span class="who">{{.User.Username}}</span>
+        <form method="post" action="/logout" class="inline">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <button type="submit" class="linkish">log out</button>
+        </form>
+      {{end}}
+    </nav>
+  </header>
+
+  <main>
+    {{block "content" .}}{{end}}
+  </main>
+
+  <footer class="footer">
+    <span>ambar {{.Version}}</span>
+  </footer>
+</body>
+</html>

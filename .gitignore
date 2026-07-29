@@ -1,0 +1,43 @@
+# §17: no real hostnames, paths or usernames in the repository. .env.example
+# uses placeholders only; the real .env stays local.
+.env
+.env.local
+
+# Build output.
+/dist/
+
+# Local data. The database, derivatives and backups all live under a data root
+# that must never be committed.
+/data/
+/testdata/library/*
+/testdata/data/*
+!/testdata/library/.gitkeep
+!/testdata/data/.gitkeep
+
+# SQLite, including the WAL sidecar files.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Backups.
+/backups/
+ambar-*.db
+
+# Editor and OS noise. __MACOSX and .DS_Store are also §5.1 library junk, but
+# here they are just the usual clutter.
+.DS_Store
+Thumbs.db
+desktop.ini
+__MACOSX/
+._*
+*.swp
+*~
+.idea/
+.vscode/
+
+# Go.
+*.test
+*.out
+coverage.*

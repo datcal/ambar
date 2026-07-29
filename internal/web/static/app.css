@@ -1,0 +1,177 @@
+/* M0 baseline styling. Deliberately small: the real UI arrives with the grid in
+   M1, and there is no point styling pages that do not exist yet.
+
+   Dark by default — §6 mentions compositing thumbnails over mid-grey "so
+   alpha-heavy sprites are visible in a dark UI", so that is the assumed
+   direction. No inline styles anywhere, which keeps the CSP at
+   default-src 'self' with no 'unsafe-inline'. */
+
+:root {
+  --bg: #16181c;
+  --surface: #1e2128;
+  --border: #2c313a;
+  --text: #e4e6eb;
+  --muted: #9aa3b2;
+  --accent: #6ea8fe;
+  --error: #ff8a8a;
+  --error-bg: #3a1f22;
+  --radius: 6px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* --- chrome --- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1.2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.topbar nav {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.who { color: var(--muted); font-size: 0.9rem; }
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1.2rem;
+}
+
+.footer {
+  padding: 0.8rem 1.2rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* --- blocks --- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.6rem;
+}
+
+.card.narrow { max-width: 24rem; margin: 3rem auto; }
+
+h1 { margin: 0 0 1rem; font-size: 1.25rem; }
+
+.hint { color: var(--muted); font-size: 0.87rem; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.87em;
+  background: #00000040;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+.error {
+  background: var(--error-bg);
+  border: 1px solid #6b3336;
+  border-radius: var(--radius);
+  color: var(--error);
+  padding: 0.6rem 0.8rem;
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 1rem;
+  margin: 1.2rem 0 0;
+  font-size: 0.9rem;
+}
+
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+
+/* --- forms --- */
+
+form.inline { display: inline; }
+
+label {
+  display: block;
+  margin: 0.9rem 0 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+input:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  margin-top: 1.2rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #10131a;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.08); }
+
+button.linkish {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-weight: 400;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+button.linkish:hover { color: var(--text); filter: none; }
+
+a { color: var(--accent); }

@@ -1,0 +1,20 @@
+{{define "title"}}Ambar{{end}}
+
+{{define "content"}}
+<div class="card">
+  <h1>Ambar is running</h1>
+  <p>
+    Signed in as <strong>{{.User.Username}}</strong>.
+  </p>
+  <p class="hint">
+    This is the M0 placeholder. The library grid, search and viewers arrive in
+    later milestones — M1 brings <code>ambar scan</code> and the asset grid.
+  </p>
+  <dl class="facts">
+    <dt>Version</dt><dd>{{.Version}}</dd>
+    <dt>Library root</dt><dd><code>{{.LibraryRoot}}</code></dd>
+    <dt>Data root</dt><dd><code>{{.DataRoot}}</code></dd>
+    <dt>Health</dt><dd><a href="/api/v1/healthz">/api/v1/healthz</a></dd>
+  </dl>
+</div>
+{{end}}

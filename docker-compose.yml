@@ -1,0 +1,63 @@
+# Ambar deployment. See spec §17 for the reasoning behind each choice here.
+#
+# DSM 7.2+ ships Container Manager, which imports this file directly as a
+# "project". Plain `docker compose up -d` over SSH works too.
+
+services:
+  ambar:
+    image: ghcr.io/datcal/ambar:latest
+    container_name: ambar
+    restart: unless-stopped
+
+    # REQUIRED — substitute the real uid:gid of the user that owns the library.
+    # Get them with `ssh <user>@<nas> id`. On Synology, human users typically
+    # start at uid 1026 and the `users` group is gid 100.
+    #
+    # This is not cosmetic: files extracted from _inbox by a root container are
+    # owned by root and cannot be edited or deleted over SMB afterwards. The
+    # container fails to start if it cannot write to /data, which is how a wrong
+    # value here surfaces immediately instead of days later.
+    user: "1026:100"
+
+    ports:
+      # host:container. DSM occupies 5000/5001 and several Synology packages take
+      # 8080, so pick something unlikely to collide. Check with
+      # `sudo netstat -tlnp` before settling on a number.
+      - "8973:8080"
+
+    volumes:
+      # The existing library, left exactly as it is. Read-write is required:
+      # sidecars are written beside originals and _inbox extracts into the tree.
+      # Originals themselves are never modified.
+      - /volume2/game/assets:/library
+
+      # ambar.db, derivatives/, tools/, logs/, backups/.
+      #
+      # Deliberately a SIBLING of the library, not a child: derivatives grow to
+      # several GB, and the database must not sit inside the tree that `scan`
+      # walks or that a file-level backup copies while it is being written.
+      #
+      # This must be a real local volume. WAL corrupts on a network filesystem,
+      # so never point this at another machine's SMB/NFS share.
+      - /volume2/game/ambar:/data
+
+    env_file: .env
+
+    # Uncomment to keep container logs from growing without bound on a NAS.
+    # logging:
+    #   driver: json-file
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "3"
+
+# First run, once the container is up:
+#
+#   docker exec -it ambar /ambar user add <username>
+#
+# There is no self-registration and no default account (§11). Then open
+# http://<nas>:8973/ and sign in.
+#
+# Manual backup, or from DSM Task Scheduler — do not hand-edit the Synology
+# crontab, since DSM updates can overwrite it:
+#
+#   docker exec ambar /ambar backup        # available from M11
