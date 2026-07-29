@@ -2,14 +2,29 @@
 
 {{define "content"}}
 <div class="card">
-  <h1>Ambar is running</h1>
-  <p>
-    Signed in as <strong>{{.User.Username}}</strong>.
-  </p>
-  <p class="hint">
-    This is the M0 placeholder. The library grid, search and viewers arrive in
-    later milestones — M1 brings <code>ambar scan</code> and the asset grid.
-  </p>
+  <h1>Ambar</h1>
+  <p>Signed in as <strong>{{.User.Username}}</strong>.</p>
+
+  {{if .Stats}}
+    {{if eq .Stats.Assets 0}}
+      <p>The index is empty.</p>
+      <p class="hint">
+        Run <code>ambar scan</code> to index the library at
+        <code>{{.LibraryRoot}}</code>. In the container that is
+        <code>docker exec ambar /ambar scan</code>.
+      </p>
+    {{else}}
+      <dl class="facts">
+        <dt>Assets</dt><dd>{{.Stats.Assets}}</dd>
+        <dt>Packs</dt><dd>{{.Stats.Packs}}</dd>
+        <dt>Total size</dt><dd>{{bytes .Stats.TotalBytes}}</dd>
+        {{if .Stats.Missing}}<dt>Missing</dt><dd>{{.Stats.Missing}}</dd>{{end}}
+        {{if .Stats.ContentChanged}}<dt>Content changed</dt><dd>{{.Stats.ContentChanged}}</dd>{{end}}
+      </dl>
+      <p class="actions"><a class="button" href="/assets">Browse assets</a></p>
+    {{end}}
+  {{end}}
+
   <dl class="facts">
     <dt>Version</dt><dd>{{.Version}}</dd>
     <dt>Library root</dt><dd><code>{{.LibraryRoot}}</code></dd>

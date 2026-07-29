@@ -133,34 +133,55 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 	}
 }
 
-// TestMigrationsCreateM0TablesOnly guards the scope decision: M0 creates only
-// what M0 uses. If a later milestone's tables appear here, they were added
-// without the code that reads them.
-func TestMigrationsCreateM0TablesOnly(t *testing.T) {
+// TestMigrationsCreateOnlyShippedTables guards the scope policy: a milestone
+// creates only the tables it populates, because a column with no writer is a
+// column with no meaning.
+//
+// Asserted as "these exist" plus "these do not" rather than as an exact list,
+// because FTS5 also creates shadow tables (assets_fts_data, assets_fts_idx, ...)
+// whose names are an implementation detail of the SQLite version.
+func TestMigrationsCreateOnlyShippedTables(t *testing.T) {
 	d := openTestDB(t)
 
-	rows, err := d.Reader.Query(
-		`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-
-	var got []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+	exists := func(name string) bool {
+		t.Helper()
+		var n int
+		if err := d.Reader.QueryRow(
+			`SELECT count(*) FROM sqlite_master WHERE type IN ('table','view') AND name = ?`,
+			name).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, name)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
+		return n > 0
 	}
 
-	want := []string{"audit_log", "schema_migrations", "sessions", "users"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("tables = %v, want %v", got, want)
+	// M0 (0001_init) and M1 (0002_library).
+	for _, name := range []string{
+		"schema_migrations", "users", "sessions", "audit_log",
+		"packs", "assets", "assets_fts",
+	} {
+		if !exists(name) {
+			t.Errorf("table %q is missing", name)
+		}
+	}
+
+	// Tables from §4 that belong to later milestones. If one appears here it was
+	// created ahead of the code that reads it.
+	for name, milestone := range map[string]string{
+		"licenses":       "M4",
+		"tags":           "M3",
+		"tag_aliases":    "M3",
+		"asset_tags":     "M3",
+		"pack_tags":      "M3",
+		"asset_groups":   "M2",
+		"jobs":           "M2",
+		"projects":       "M9",
+		"project_uses":   "M9",
+		"saved_searches": "M3",
+		"api_tokens":     "M8",
+	} {
+		if exists(name) {
+			t.Errorf("table %q exists but belongs to %s", name, milestone)
+		}
 	}
 }
 

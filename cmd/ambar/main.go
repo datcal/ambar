@@ -25,6 +25,7 @@ const usage = `ambar — self-hosted game asset library
 
 Usage:
   ambar serve                       run the HTTP server
+  ambar scan [--dry-run]            index the library
   ambar user add <username>         create a user (there is no self-registration)
   ambar user list                   list users
   ambar version                     print version information
@@ -54,6 +55,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:])
+	case "scan":
+		return runScan(args[1:])
 	case "user":
 		return runUser(args[1:])
 	case "version", "--version", "-version":

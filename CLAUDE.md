@@ -13,6 +13,10 @@ here.
 **Before implementing anything, read the relevant sections of `docs/spec.md`.** Section
 numbers are stable; work is organised by the milestones in §14.
 
+`docs/decisions.md` records the resolutions to the open questions in §15 and every
+deliberate deviation from the spec. Read it before revisiting a choice that looks
+arbitrary — and add to it rather than deviating silently.
+
 ## Non-negotiable invariants
 
 Violating any of these is a bug, regardless of what else the code does correctly.
@@ -79,6 +83,7 @@ make test           # run all tests
 make test-race      # tests under the race detector (needs cgo + a C compiler)
 make check          # gofmt + vet + test; what CI should run
 make run            # run locally against ./testdata on :8080
+make scan           # index ./testdata
 make user-add USERNAME=x   # create a user against ./testdata
 make docker         # build the container image
 make docker-run     # run that image against ./testdata on :8973

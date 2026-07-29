@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/datcal/ambar/internal/library"
 )
 
 // Where the session secret is persisted when it is not supplied by the
@@ -65,6 +67,15 @@ type Config struct {
 	// are opaque random values stored as hashes and need no secret.
 	SessionSecret       []byte
 	SessionSecretSource string // "env", "file" or "generated"
+
+	// --- Library interpretation (§5.1, §17) ---
+
+	// IgnoreGlobs is the junk list. §5.1 requires it be configurable; §13's
+	// variable list predates that requirement.
+	IgnoreGlobs []string
+	// LibraryBuckets are the organisational parents that are never treated as
+	// packs. Configurable so §17's "must not depend on this layout" stays true.
+	LibraryBuckets []string
 
 	// --- Parsed but not yet read ---
 
@@ -196,6 +207,19 @@ func Load() (*Config, error) {
 		fail("AMBAR_TRASH_RETENTION must not be negative, got %s", c.TrashRetention)
 	}
 
+	// §5.1 requires the ignore list be configurable, with its own list as the
+	// defaults. Validated here so a bad glob fails at startup rather than
+	// silently matching nothing.
+	c.IgnoreGlobs = envList("AMBAR_IGNORE_GLOBS", library.DefaultIgnoreGlobs)
+	if _, err := library.NewMatcher(c.IgnoreGlobs); err != nil {
+		fail("AMBAR_IGNORE_GLOBS: %w", err)
+	}
+
+	// The organisational parents that are never packs (§5.1, §17). An explicitly
+	// empty value disables bucket recognition, which makes every top-level
+	// directory a pack.
+	c.LibraryBuckets = envList("AMBAR_LIBRARY_BUCKETS", library.DefaultBucketNames)
+
 	c.DedupeLinkMode = envStr("AMBAR_DEDUPE_LINK_MODE", "reflink")
 	switch c.DedupeLinkMode {
 	case "reflink", "hardlink", "off":
@@ -314,6 +338,26 @@ func envInt64(key string, def int64) (int64, error) {
 
 // envDuration treats an empty or unset value as the default. Blanking a line in
 // a .env file is how people disable an override, and it should not mean zero.
+// envList parses a comma-separated list. An unset variable takes the default; an
+// explicitly empty one means an empty list, which is how bucket recognition is
+// switched off.
+func envList(key string, def []string) []string {
+	raw, set := os.LookupEnv(key)
+	if !set {
+		return def
+	}
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func envDuration(key string, def time.Duration) (time.Duration, error) {
 	raw := envStr(key, "")
 	if raw == "" {

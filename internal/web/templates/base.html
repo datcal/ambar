@@ -17,6 +17,7 @@
     <a class="brand" href="/">ambar</a>
     <nav>
       {{if .User}}
+        <a href="/assets">assets</a>
         <span class="who">{{.User.Username}}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
