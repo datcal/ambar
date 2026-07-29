@@ -1,0 +1,21 @@
+# Keep the build context small and the image reproducible.
+.git
+.gitignore
+.claude
+
+# Local data must never end up in an image.
+dist/
+testdata/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# Not needed to compile.
+docs/
+README.md
+Makefile
+docker-compose.yml
+.dockerignore
+Dockerfile
