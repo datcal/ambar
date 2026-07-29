@@ -154,10 +154,11 @@ func TestMigrationsCreateOnlyShippedTables(t *testing.T) {
 		return n > 0
 	}
 
-	// M0 (0001_init) and M1 (0002_library).
+	// M0 (0001_init), M1 (0002_library) and M2 (0003_derive).
 	for _, name := range []string{
 		"schema_migrations", "users", "sessions", "audit_log",
 		"packs", "assets", "assets_fts",
+		"jobs", "asset_groups",
 	} {
 		if !exists(name) {
 			t.Errorf("table %q is missing", name)
@@ -172,8 +173,6 @@ func TestMigrationsCreateOnlyShippedTables(t *testing.T) {
 		"tag_aliases":    "M3",
 		"asset_tags":     "M3",
 		"pack_tags":      "M3",
-		"asset_groups":   "M2",
-		"jobs":           "M2",
 		"projects":       "M9",
 		"project_uses":   "M9",
 		"saved_searches": "M3",

@@ -29,7 +29,7 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run scan user-add clean docker docker-run check
+.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive user-add clean docker docker-run check
 
 all: check build
 
@@ -90,6 +90,13 @@ scan: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
 	AMBAR_LIBRARY_ROOT=$(TESTDATA_LIBRARY) \
 	AMBAR_DATA_ROOT=$(TESTDATA_DATA) \
 	$(BIN) scan $(ARGS)
+
+# Generate thumbnails and previews for anything missing them, then exit. The same work
+# happens automatically while `make run` is going.
+derive: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
+	AMBAR_LIBRARY_ROOT=$(TESTDATA_LIBRARY) \
+	AMBAR_DATA_ROOT=$(TESTDATA_DATA) \
+	$(BIN) derive $(ARGS)
 
 # Convenience wrapper for the first run, where the database has no users yet.
 user-add: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)

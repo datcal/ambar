@@ -109,6 +109,11 @@ type ScanReport struct {
 	MarkedMissing  int
 	Reappeared     int
 
+	// Asset groups (§5.1). MultiVariantGroups is the interesting number: each one
+	// would otherwise be several grid rows for the same artwork.
+	Groups             int
+	MultiVariantGroups int
+
 	IgnoredJunk     int
 	Buckets         []string
 	ReservedSkipped []string
@@ -346,6 +351,15 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 	if err := ix.applyUpdates(ctx, updates); err != nil {
 		return nil, err
 	}
+
+	// Grouping is derived from rel_path alone, so it costs no file reads and must run
+	// after reconciliation has settled every path (§5.1).
+	groupStats, err := ix.Regroup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	report.Groups = groupStats.Groups
+	report.MultiVariantGroups = groupStats.MultiVariant
 
 	report.Duration = ix.now().Sub(start)
 	return report, nil

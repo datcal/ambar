@@ -30,7 +30,8 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	page, err := s.index.List(r.Context(), opts)
+	// Groups, not individual files: §5.1's collapsing is what makes the grid usable.
+	page, err := s.index.ListGroups(r.Context(), opts)
 	if err != nil {
 		// A malformed cursor is the user's URL being wrong, not a server fault.
 		if strings.Contains(err.Error(), "cursor") {
@@ -60,7 +61,10 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "assets.html", http.StatusOK, data)
 }
 
-// handleAsset renders one asset's indexed metadata.
+// handleAsset renders one asset, plus its format variants.
+//
+// §5.1: "The grid shows one entry per group; the detail panel lists variants with
+// download links per format."
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	asset, ok := s.lookupAsset(w, r)
 	if !ok {
@@ -69,6 +73,16 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	data := s.newPageData(r)
 	data.Asset = &asset
+
+	// A missing group is not fatal — an asset indexed but not yet grouped still has a
+	// usable detail page.
+	if group, err := s.index.GroupOf(r.Context(), asset.ID); err == nil {
+		data.Group = &group
+		if variants, err := s.index.Variants(r.Context(), group.ID); err == nil {
+			data.Variants = variants
+		}
+	}
+
 	s.render(w, r, "asset.html", http.StatusOK, data)
 }
 

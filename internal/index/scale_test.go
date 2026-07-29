@@ -19,39 +19,62 @@ const scaleAssets = 20_000
 // a few extra microseconds.
 const queryBudget = 500 * time.Millisecond
 
-// buildScaleLibrary writes a synthetic library shaped like the real one: packs
-// under buckets, format-variant subfolders, a mix of kinds.
+// buildScaleLibrary writes a synthetic library shaped like the real one: packs under
+// buckets, format-variant subfolders, and a mix of kinds.
+//
+// Three quarters of the files are variant triples — the same base name in PNG/, PSD/
+// and ASEPRITE/, exactly the craftpix shape §5.1 describes — and the rest stand alone.
+// That matters: an earlier version gave every file a unique name, so nothing collapsed
+// and the group queries were measured against a workload that cannot occur.
 func buildScaleLibrary(t *testing.T, root string, count int) {
 	t.Helper()
 
-	const (
-		packs   = 40
-		buckets = 4
-	)
+	const packs = 40
 	bucketNames := []string{"2d", "3d", "mix", "audio"}
-	formats := []string{"PNG", "PSD", "ASEPRITE"}
-	exts := []string{"png", "psd", "aseprite", "glb", "wav", "tmx"}
+
+	// The three format folders of one artwork, and the extension each holds.
+	variants := []struct{ folder, ext string }{
+		{"PNG", "png"},
+		{"PSD", "psd"},
+		{"ASEPRITE", "aseprite"},
+	}
+	soloExts := []string{"glb", "wav", "tmx", "ogg"}
 
 	// One MkdirAll per directory rather than per file.
 	made := map[string]bool{}
-	for i := 0; i < count; i++ {
-		bucket := bucketNames[i%buckets]
-		pack := fmt.Sprintf("vendor-pack-%03d", i%packs)
-		format := formats[i%len(formats)]
-		dir := filepath.Join(root, bucket, pack, format)
+	write := func(dir, name, content string) {
+		t.Helper()
 		if !made[dir] {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			made[dir] = true
 		}
-		name := fmt.Sprintf("asset_%06d.%s", i, exts[i%len(exts)])
-		// Content varies so every hash differs, which is the realistic case for
-		// move detection and for M13's duplicate finder.
-		if err := os.WriteFile(filepath.Join(dir, name),
-			[]byte(fmt.Sprintf("asset number %d padding padding padding", i)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	for i := 0; i < count; i++ {
+		// Bucket and pack derive from the ARTWORK index, not the file index, so all
+		// variants of one artwork land in the same pack. Group keys are per-pack, so
+		// deriving them from i scattered every triple across three packs and nothing
+		// grouped — a fixture bug that made the group queries look untested.
+		artwork := i / 4
+		bucket := bucketNames[artwork%len(bucketNames)]
+		pack := fmt.Sprintf("vendor-pack-%03d", artwork%packs)
+		packDir := filepath.Join(root, bucket, pack)
+
+		// Content varies per file so every hash differs, which is the realistic case
+		// for move detection and for M13's duplicate finder.
+		content := fmt.Sprintf("asset number %d padding padding padding", i)
+
+		if i%4 == 3 {
+			write(packDir, fmt.Sprintf("solo_%06d.%s", i, soloExts[i%len(soloExts)]), content)
+			continue
+		}
+		v := variants[i%4]
+		write(filepath.Join(packDir, v.folder), fmt.Sprintf("art_%06d.%s", i/4, v.ext), content)
 	}
 }
 
@@ -145,7 +168,7 @@ func TestScaleTwentyThousandAssets(t *testing.T) {
 	}
 
 	timed("search", func() error {
-		page, err := f.ix.List(ctx, ListOptions{Query: "asset_000042"})
+		page, err := f.ix.List(ctx, ListOptions{Query: "art_000042"})
 		if err != nil {
 			return err
 		}
@@ -156,7 +179,7 @@ func TestScaleTwentyThousandAssets(t *testing.T) {
 	})
 
 	timed("prefix search matching many rows", func() error {
-		_, err := f.ix.List(ctx, ListOptions{Query: "asset"})
+		_, err := f.ix.List(ctx, ListOptions{Query: "art"})
 		return err
 	})
 
@@ -245,4 +268,100 @@ func TestScaleMoveDetectionDoesNotDegrade(t *testing.T) {
 	if got := f.assetCount(); got != count {
 		t.Errorf("%d rows after the move, want %d", got, count)
 	}
+}
+
+// TestScaleGroupQueriesStayFlat extends the §16 requirement to the group-based grid
+// that M2 introduced.
+//
+// The group query joins three tables and, when filtered, runs an EXISTS subquery per
+// row — so it deserves its own check rather than inheriting confidence from the asset
+// query.
+func TestScaleGroupQueriesStayFlat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a large library; skipped under -short")
+	}
+	if raceEnabled {
+		t.Skip("performance budgets are not meaningful under -race; run via `make test`")
+	}
+
+	const count = 12_000
+
+	f := newFixture(t)
+	buildScaleLibrary(t, f.root, count)
+	f.scan()
+
+	ctx := context.Background()
+
+	timed := func(name string, fn func() error) time.Duration {
+		t.Helper()
+		start := time.Now()
+		if err := fn(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		d := time.Since(start)
+		t.Logf("%-34s %s", name, d.Round(time.Microsecond))
+		if d > queryBudget {
+			t.Errorf("%s took %s, over the %s budget", name, d.Round(time.Millisecond), queryBudget)
+		}
+		return d
+	}
+
+	var first *GroupPage
+	firstDuration := timed("group grid, first page", func() error {
+		var err error
+		first, err = f.ix.ListGroups(ctx, ListOptions{})
+		return err
+	})
+	if first.Total == 0 {
+		t.Fatal("no groups")
+	}
+	// The fixture writes PNG/PSD/ASEPRITE variants of shared names, so grouping should
+	// have collapsed a meaningful fraction.
+	t.Logf("%d files collapsed into %d groups", count, first.Total)
+	// Three of every four files are variant triples, so the collapse should be close
+	// to 2:1. Asserting a ratio rather than an exact number keeps this robust to
+	// fixture tweaks while still catching grouping being switched off.
+	if first.Total >= count*3/4 {
+		t.Errorf("%d groups from %d files — far too little was collapsed", first.Total, count)
+	}
+
+	timed("group grid, search", func() error {
+		_, err := f.ix.ListGroups(ctx, ListOptions{Query: "art"})
+		return err
+	})
+	timed("group grid, kind filter (EXISTS)", func() error {
+		_, err := f.ix.ListGroups(ctx, ListOptions{Kind: "model"})
+		return err
+	})
+
+	// Page deep and confirm it costs the same as the first page.
+	cursor := first.NextCursor
+	const deepPages = 50
+	for i := 0; i < deepPages && cursor != ""; i++ {
+		page, err := f.ix.ListGroups(ctx, ListOptions{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("paging to depth %d: %v", i, err)
+		}
+		cursor = page.NextCursor
+	}
+	if cursor == "" {
+		t.Skip("not enough groups to page that deep")
+	}
+
+	deepDuration := timed(fmt.Sprintf("group grid, page at depth %d", deepPages), func() error {
+		_, err := f.ix.ListGroups(ctx, ListOptions{Cursor: cursor})
+		return err
+	})
+
+	if firstDuration > 0 && deepDuration > 10*firstDuration && deepDuration > 20*time.Millisecond {
+		t.Errorf("a group page at depth %d took %s versus %s for the first; "+
+			"pagination is not keyset", deepPages, deepDuration.Round(time.Millisecond),
+			firstDuration.Round(time.Millisecond))
+	}
+
+	// Regrouping the whole library must also stay cheap, since it runs on every scan.
+	timed("regroup the whole library", func() error {
+		_, err := f.ix.Regroup(ctx)
+		return err
+	})
 }

@@ -30,7 +30,7 @@ func setMinimalEnv(t *testing.T) (libraryRoot, dataRoot string) {
 		"AMBAR_BACKUP_DIR", "AMBAR_BACKUP_KEEP", "AMBAR_TRASH_DIR", "AMBAR_TRASH_RETENTION",
 		"AMBAR_DEDUPE_LINK_MODE", "AMBAR_ASEPRITE_BIN", "AMBAR_BLENDER_BIN",
 		"AMBAR_SESSION_SECRET", "AMBAR_COOKIE_SECURE",
-		"AMBAR_IGNORE_GLOBS", "AMBAR_LIBRARY_BUCKETS",
+		"AMBAR_IGNORE_GLOBS", "AMBAR_LIBRARY_BUCKETS", "AMBAR_MAX_IMAGE_PIXELS",
 	} {
 		// t.Setenv registers the restore of the original value; os.Unsetenv then
 		// removes it entirely. Unset rather than empty matters, because for
@@ -86,6 +86,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DedupeLinkMode != "reflink" {
 		t.Errorf("DedupeLinkMode = %q, want reflink", cfg.DedupeLinkMode)
 	}
+	if cfg.MaxImagePixels != 50_000_000 {
+		t.Errorf("MaxImagePixels = %d, want 50000000", cfg.MaxImagePixels)
+	}
 	// §13: empty means never auto-purge, which is also the default.
 	if cfg.TrashRetention != 0 {
 		t.Errorf("TrashRetention = %s, want 0 (never auto-purge)", cfg.TrashRetention)
@@ -131,6 +134,8 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		{"unknown link mode", "AMBAR_DEDUPE_LINK_MODE", "symlink", "reflink, hardlink or off"},
 		{"unknown cookie secure", "AMBAR_COOKIE_SECURE", "maybe", "auto, true or false"},
 		{"invalid ignore glob", "AMBAR_IGNORE_GLOBS", "[", "not a valid pattern"},
+		{"zero image pixel cap", "AMBAR_MAX_IMAGE_PIXELS", "0", "must be positive"},
+		{"non-numeric image pixel cap", "AMBAR_MAX_IMAGE_PIXELS", "lots", "must be an integer"},
 	}
 
 	for _, tc := range tests {

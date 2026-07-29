@@ -84,6 +84,7 @@ make test-race      # tests under the race detector (needs cgo + a C compiler)
 make check          # gofmt + vet + test; what CI should run
 make run            # run locally against ./testdata on :8080
 make scan           # index ./testdata
+make derive         # generate thumbnails for ./testdata
 make user-add USERNAME=x   # create a user against ./testdata
 make docker         # build the container image
 make docker-run     # run that image against ./testdata on :8973

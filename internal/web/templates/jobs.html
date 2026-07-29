@@ -1,0 +1,88 @@
+{{define "title"}}Background work — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Background work</h1>
+
+  {{/* §12: "Job failures inspectable in the UI, not only in container logs — a
+       silently failing derivative pipeline is easy to miss for weeks." */}}
+
+  {{if .JobStats}}
+    <nav class="kinds" aria-label="Filter by job state">
+      <a class="chip{{if not .JobState}} chip-on{{end}}" href="/jobs">all</a>
+      <a class="chip{{if eq .JobState "queued"}} chip-on{{end}}" href="/jobs?state=queued">queued {{.JobStats.Queued}}</a>
+      <a class="chip{{if eq .JobState "running"}} chip-on{{end}}" href="/jobs?state=running">running {{.JobStats.Running}}</a>
+      <a class="chip{{if eq .JobState "done"}} chip-on{{end}}" href="/jobs?state=done">done {{.JobStats.Done}}</a>
+      <a class="chip{{if eq .JobState "failed"}} chip-on{{end}}" href="/jobs?state=failed">failed {{.JobStats.Failed}}</a>
+    </nav>
+  {{end}}
+
+  <div class="actions-row">
+    <form method="post" action="/scan" class="inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit">Scan the library</button>
+    </form>
+
+    {{if and .JobStats (or .JobStats.Failed (and .DeriveStats .DeriveStats.Failed))}}
+      <form method="post" action="/jobs/retry-failed" class="inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button type="submit">Retry everything that failed</button>
+      </form>
+    {{end}}
+  </div>
+
+  {{if .DeriveStats}}
+    <div class="card">
+      <h2>Previews</h2>
+      <dl class="facts">
+        <dt>Generated</dt><dd>{{.DeriveStats.OK}}</dd>
+        {{if .DeriveStats.Pending}}<dt>Waiting</dt><dd>{{.DeriveStats.Pending}}</dd>{{end}}
+        {{if .DeriveStats.Unsupported}}
+          <dt>No decoder</dt>
+          <dd>{{.DeriveStats.Unsupported}}
+            <span class="hint">— formats without a pure-Go decoder yet, such as
+            <code>.xcf</code> and <code>.tga</code>. Not an error, and not retried.</span></dd>
+        {{end}}
+        {{if .DeriveStats.Failed}}<dt>Failed</dt><dd>{{.DeriveStats.Failed}}</dd>{{end}}
+      </dl>
+    </div>
+  {{end}}
+
+  {{if .Jobs}}
+    <div class="tablewrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th scope="col">Job</th>
+            <th scope="col">State</th>
+            <th scope="col" class="num">Tries</th>
+            <th scope="col" class="num">Took</th>
+            <th scope="col">Created</th>
+            <th scope="col">Last error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Jobs}}
+            <tr>
+              <td><code>{{.Type}}</code> <span class="dir">#{{.ID}}</span></td>
+              <td><span class="state state-{{.State}}">{{.State}}</span></td>
+              <td class="num">{{.Attempts}}</td>
+              <td class="num">{{if .StartedAt}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td>
+              <td>{{jobAge .CreatedAt}}</td>
+              <td class="errorcell">{{if .LastError}}{{.LastError}}{{else}}—{{end}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  {{else}}
+    <div class="card">
+      <p>No background work to show.</p>
+      <p class="hint">
+        Scanning and preview generation both run here. Start a scan with the button
+        above, or from the command line with <code>ambar scan</code>.
+      </p>
+    </div>
+  {{end}}
+</div>
+{{end}}

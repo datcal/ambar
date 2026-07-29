@@ -77,6 +77,13 @@ type Config struct {
 	// packs. Configurable so §17's "must not depend on this layout" stays true.
 	LibraryBuckets []string
 
+	// MaxImagePixels refuses to decode an image larger than this.
+	//
+	// Decoding allocates roughly width*height*4 bytes, so a 30000x30000 PNG is an
+	// out-of-memory on a NAS. This is the image equivalent of §5's zip-bomb caps;
+	// §13's variable list predates the need for it.
+	MaxImagePixels int64
+
 	// --- Parsed but not yet read ---
 
 	Workers int // M2, worker pool
@@ -219,6 +226,14 @@ func Load() (*Config, error) {
 	// empty value disables bucket recognition, which makes every top-level
 	// directory a pack.
 	c.LibraryBuckets = envList("AMBAR_LIBRARY_BUCKETS", library.DefaultBucketNames)
+
+	// 50 megapixels: comfortably above any real 8K texture, far below what would
+	// exhaust a NAS.
+	if c.MaxImagePixels, err = envInt64("AMBAR_MAX_IMAGE_PIXELS", 50_000_000); err != nil {
+		fail("%w", err)
+	} else if c.MaxImagePixels < 1 {
+		fail("AMBAR_MAX_IMAGE_PIXELS must be positive, got %d", c.MaxImagePixels)
+	}
 
 	c.DedupeLinkMode = envStr("AMBAR_DEDUPE_LINK_MODE", "reflink")
 	switch c.DedupeLinkMode {

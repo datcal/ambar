@@ -6,6 +6,9 @@
   <title>{{block "title" .}}Ambar{{end}}</title>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
+  {{/* The §8 viewer, as an ES module island. It looks for .viewer and does nothing
+       when the page has none, so loading it everywhere costs one cached request. */}}
+  <script src="/static/viewer2d.js" type="module"></script>
 </head>
 {{/*
   §11: configure hx-headers globally so every htmx request carries the CSRF

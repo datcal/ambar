@@ -12,7 +12,7 @@ the milestones in §14.
 
 ## Status
 
-**M0 and M1 complete.** What exists today:
+**M0, M1 and M2 complete.** What exists today:
 
 - Configuration from the environment, with validation that fails at startup
 - SQLite with WAL, a single writer connection and a separate read pool
@@ -22,24 +22,39 @@ the milestones in §14.
 - `/healthz` (public liveness) and `/api/v1/healthz` (authenticated detail)
 - **`ambar scan`** — depth-agnostic pack detection, junk exclusion, classification,
   hashing, and reconciliation that recognises moves and never deletes a row
-- **A searchable grid** with FTS5 filename and pack search, kind filters, keyset
-  pagination, a detail page, and original-file download
+- **A searchable grid** of thumbnails with FTS5 filename and pack search, kind
+  filters, keyset pagination, and original-file download
+- **A background job queue** with retries, crash recovery and a status page — so a
+  scan can be started from the UI without a long-running request
+- **Thumbnails and previews** with the pixel-art path: nearest-neighbour resizing for
+  pixel art, composited over mid-grey, plus a transparent variant and an animated GIF
+  for multi-frame sources
+- **Format-variant collapsing** — the PNG, PSD and ASEPRITE of one artwork are one
+  grid tile, with the sources listed on the detail page
+- **An `.aseprite` decoder** reading the binary format directly, including frame tags,
+  durations and layer compositing
+- **A 2D viewer**: zoom, pan, and a background toggle
 - `ambar user add` / `ambar user list`
 - Container image and compose file
 
-Measured at 20,000 assets: first scan 1.7s, rescan 154ms with nothing re-hashed,
-and a page 10,000 rows deep costs the same as the first.
+Measured at 20,000 assets: first scan 2.9s, rescan 157ms with nothing re-hashed, and
+both the asset grid and the group grid stay flat as you page — a page 10,000 rows deep
+costs the same as the first.
 
-Not yet: thumbnails and previews, the job queue, format-variant collapsing, tags,
-the full query language, ingest, the JSON API, the Godot plugin. M2 brings
-thumbnails, the worker queue, and asset grouping.
+Not yet: tags and the full query language (M3), ingest (M4), audio (M5), 3D and HDRI
+(M6), spritesheet grid detection (M7), the JSON API (M8), the Godot plugin (M9).
 
-### Known rough edge in M1
+### Known gaps in M2
 
-The PNG, PSD and ASEPRITE of one artwork appear as **three separate rows**.
-Collapsing them into one asset group is M2 (§5.1), and §14 sequences it that way
-deliberately. The index already stores everything M2 needs, so no re-scan will be
-required.
+- **`.tga` and `.xcf` have no decoder.** Both are recorded as
+  `derive_state=unsupported` with a reason, visible in the UI, rather than failing
+  silently. See `docs/decisions.md`.
+- **The `.aseprite` decoder has never seen a file Aseprite actually wrote.** Its tests
+  build files to the documented format, which verifies the implementation against the
+  spec but not against reality. Dropping one real `.aseprite` into
+  `testdata/fixtures/` is the most valuable contribution available.
+- **Blend modes other than Normal are approximated** as Normal when compositing
+  Aseprite layers, and say so in the job log.
 
 ### FTS5
 
@@ -82,8 +97,12 @@ if the resulting binary is dynamically linked.
 make user-add USERNAME=yourname   # first run only; there is no default account
 make scan ARGS=--dry-run          # see what would be indexed, without writing
 make scan                         # index ./testdata/library
+make derive                       # generate thumbnails and previews
 make run                          # serve on :8080
 ```
+
+`make run` also generates derivatives in the background, so `make derive` is only
+needed for a one-shot pass outside the server.
 
 Then open <http://localhost:8080/>.
 
@@ -112,6 +131,25 @@ depend on the human-facing folder layout: `AMBAR_IGNORE_GLOBS` for junk (leaving
 `__MACOSX` out of it roughly doubles the apparent asset count) and
 `AMBAR_LIBRARY_BUCKETS` for the organisational parents that are not themselves
 packs. A `.ambar.json` sidecar always overrides the heuristics.
+
+### Thumbnails and background work
+
+Scanning and thumbnail generation both run through a job queue, which is what lets the
+UI start a scan without holding a request open. `/jobs` shows what is queued, running
+and failed, with the error text — a failing preview pipeline should be obvious rather
+than something you notice weeks later.
+
+Three states are worth distinguishing on that page:
+
+- **failed** — something went wrong and is worth retrying. Retryable from the UI.
+- **unsupported** — there is no decoder for the format, so retrying changes nothing
+  until the code does. Not an error.
+- **pending** — queued, not yet generated.
+
+Pixel art is resized with nearest-neighbour rather than smoothed. That is the single
+thing §6 is most insistent about, and it is detected from colour count and edge
+hardness rather than image size, so a large pixel-art tileset atlas is handled
+correctly — see `docs/decisions.md` for the measurements behind the thresholds.
 
 Configuration is entirely by environment variable. See
 [.env.example](.env.example), which documents every one.

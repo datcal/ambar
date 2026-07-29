@@ -11,7 +11,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/library"
 )
 
@@ -82,6 +84,20 @@ func runScan(args []string) error {
 
 	printScanReport(report, *verbose)
 
+	// Queue the derivative work this scan uncovered. The jobs are picked up by
+	// `ambar serve`, or immediately by `ambar derive`.
+	if !*dryRun {
+		queue := jobs.New(database, jobs.Options{Workers: cfg.Workers, Log: log})
+		queued, err := derive.EnqueueStale(ctx, database, queue)
+		if err != nil {
+			return err
+		}
+		if queued > 0 {
+			fmt.Printf("\nqueued %d derivative job(s). Run `ambar derive` to generate them now,\n"+
+				"or leave them for `ambar serve` to pick up.\n", queued)
+		}
+	}
+
 	// A scan that hit per-file errors has still done useful work, so this is not
 	// a failure — but the exit code should let a cron job notice.
 	if len(report.Errors) > 0 {
@@ -102,6 +118,12 @@ func printScanReport(r *index.ScanReport, verbose bool) {
 	line("found", r.PacksFound)
 	if !r.DryRun {
 		line("new", r.PacksNew)
+	}
+	// §5.1: without collapsing, each multi-variant group would be several grid rows
+	// for the same artwork.
+	if r.Groups > 0 {
+		line("asset groups", r.Groups)
+		line("  multi-format", r.MultiVariantGroups)
 	}
 
 	fmt.Fprintln(w)

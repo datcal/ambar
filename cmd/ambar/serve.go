@@ -6,13 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/library"
 	"github.com/datcal/ambar/internal/server"
 )
@@ -99,7 +103,35 @@ func runServe(args []string) error {
 		Log:     log,
 	})
 
-	srv, err := server.New(cfg, database, indexer, log,
+	// §12 wants derivatives on a real volume; the health check probes this directory,
+	// so it has to exist before the first request.
+	if err := os.MkdirAll(filepath.Join(cfg.DataRoot, "derivatives"), 0o755); err != nil {
+		return fmt.Errorf("create the derivatives directory: %w", err)
+	}
+
+	queue := jobs.New(database, jobs.Options{Workers: cfg.Workers, Log: log})
+	deriver := derive.New(database, derive.Options{
+		LibraryRoot: cfg.LibraryRoot,
+		DataRoot:    cfg.DataRoot,
+		MaxPixels:   cfg.MaxImagePixels,
+		Log:         log,
+	})
+	deriver.Register(queue)
+
+	// A scan enqueues the derivative work it discovered. Passing this in as a
+	// callback keeps internal/index unaware of internal/derive.
+	indexer.RegisterScanJob(queue, func(ctx context.Context) error {
+		n, err := derive.EnqueueStale(ctx, database, queue)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.InfoContext(ctx, "enqueued derivative jobs", "count", n)
+		}
+		return nil
+	})
+
+	srv, err := server.New(cfg, database, indexer, queue, log,
 		server.BuildInfo{Version: version, Commit: commit})
 	if err != nil {
 		return err
@@ -126,6 +158,23 @@ func runServe(args []string) error {
 		// and ReadHeaderTimeout already covers the slow-loris case. Revisit with
 		// per-route deadlines when those milestones land.
 		ErrorLog: nil,
+	}
+
+	// Workers run in-process: §0 is explicit that there is "no agent/server split, no
+	// separate worker container".
+	workersDone := make(chan struct{})
+	go func() {
+		defer close(workersDone)
+		if err := queue.Run(ctx); err != nil {
+			log.Error("job workers stopped with an error", "error", err)
+		}
+	}()
+
+	// Anything left pending from a previous run, picked up without waiting for a scan.
+	if n, err := derive.EnqueueStale(ctx, database, queue); err != nil {
+		log.Warn("could not enqueue outstanding derivatives", "error", err)
+	} else if n > 0 {
+		log.Info("enqueued outstanding derivative jobs", "count", n)
 	}
 
 	// Serve in the background so the main goroutine can wait on the signal.
@@ -158,6 +207,14 @@ func runServe(args []string) error {
 		// database Close still runs.
 		return fmt.Errorf("graceful shutdown did not finish within %s: %w", shutdownGrace, err)
 	}
+	// Workers get the same grace period. Anything still running is left in the
+	// 'running' state and requeued at next startup (§12).
+	select {
+	case <-workersDone:
+	case <-shutdownCtx.Done():
+		log.Warn("job workers did not finish draining; in-flight jobs will be requeued on restart")
+	}
+
 	log.Info("stopped cleanly")
 	return nil
 }

@@ -3,31 +3,157 @@
 {{define "content"}}
 {{with .Asset}}
 <div class="stack">
-  <p class="breadcrumb"><a href="/assets">assets</a> / {{.PackName}}</p>
+  <p class="breadcrumb"><a href="/assets">assets</a> / <a href="/assets?pack={{.PackID}}">{{.PackName}}</a></p>
+
+  <h1>{{.Filename}}</h1>
+
+  {{if .Missing}}
+    <p class="note note-warn">
+      This file was not present at the last scan. Its index entry is kept — §12 never
+      deletes one — so restoring the file at <code>{{.LibraryPath}}</code> and
+      re-scanning restores everything.
+    </p>
+  {{end}}
+  {{if .ContentChangedAt}}
+    <p class="note note-warn">
+      The bytes at this path changed since it was first indexed. The index now records
+      the new content.
+    </p>
+  {{end}}
+  {{if eq .DeriveState "failed"}}
+    <p class="note note-warn">
+      A preview could not be generated: {{.DeriveError}}
+      <a href="/jobs">See background work</a> to retry.
+    </p>
+  {{else if eq .DeriveState "unsupported"}}
+    <p class="note">No preview is available: {{.DeriveError}}</p>
+  {{else if eq .DeriveState "pending"}}
+    <p class="note">A preview is still being generated. <a href="/jobs">Background work</a>.</p>
+  {{end}}
+
+  {{if .HasPreview}}
+    {{/* The 2D viewer from §8: zoom, pan, background toggle.
+         It loads preview.webp rather than the original — §11 forbids serving library
+         content inline, and these bytes came from our own encoder. Configuration
+         travels in data- attributes so the CSP needs no inline script. */}}
+    <div class="viewer" id="viewer2d"
+         data-src="/assets/{{.ID}}/preview.webp"
+         data-alpha-src="/assets/{{.ID}}/thumb?size=alpha"
+         {{if .Animated}}data-anim-src="/assets/{{.ID}}/anim.gif"{{end}}
+         data-pixel-art="{{if .IsPixelArt}}true{{else}}false{{end}}"
+         data-width="{{.Width}}" data-height="{{.Height}}">
+      <div class="viewer-toolbar">
+        <span class="viewer-group" role="group" aria-label="Zoom">
+          <button type="button" data-zoom="fit">Fit</button>
+          <button type="button" data-zoom="1">100%</button>
+          <button type="button" data-zoom="2">200%</button>
+          <button type="button" data-zoom="4">400%</button>
+          <button type="button" data-zoom="8">800%</button>
+        </span>
+        {{/* §8: "You cannot evaluate a sprite's edges without this." */}}
+        <span class="viewer-group" role="group" aria-label="Background">
+          <button type="button" data-bg="checker" title="Checkerboard">▦</button>
+          <button type="button" data-bg="grey" title="Mid-grey">◧</button>
+          <button type="button" data-bg="black" title="Black">■</button>
+          <button type="button" data-bg="white" title="White">□</button>
+        </span>
+        {{if .Animated}}
+          <span class="viewer-group">
+            <button type="button" data-toggle="anim">Play</button>
+          </span>
+        {{end}}
+        <span class="viewer-status" data-role="status"></span>
+      </div>
+      <div class="viewer-stage" data-role="stage" tabindex="0">
+        <img data-role="image" src="/assets/{{.ID}}/preview.webp" alt="{{.Filename}}">
+      </div>
+      <p class="hint viewer-hint">
+        Scroll to zoom, drag to pan.
+        {{if .IsPixelArt}}Pixel art: rendered without smoothing above 100%.{{end}}
+      </p>
+    </div>
+  {{end}}
+
+  {{if $.Group}}
+    {{if $.Group.MultiVariant}}
+      {{/* §5.1: "The grid shows one entry per group; the detail panel lists variants
+           with download links per format." These are the same artwork, not
+           duplicates — invariant 7. */}}
+      <div class="card">
+        <h2>{{$.Group.VariantCount}} formats of this artwork</h2>
+        <p class="hint">
+          One logical asset, several files. The engine-ready format is the primary;
+          the rest are editable sources.
+        </p>
+        <div class="tablewrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th scope="col">Format</th>
+                <th scope="col">Path</th>
+                <th scope="col" class="num">Size</th>
+                <th scope="col"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $.Variants}}
+                <tr{{if .Missing}} class="row-missing"{{end}}>
+                  <td>
+                    <code>.{{.Ext}}</code>
+                    {{if eq .ID $.Group.Primary.ID}}<span class="badge">primary</span>{{end}}
+                  </td>
+                  <td>
+                    {{if eq .ID $.Asset.ID}}
+                      <span class="dir">{{.RelPath}}</span>
+                    {{else}}
+                      <a href="/assets/{{.ID}}">{{.RelPath}}</a>
+                    {{end}}
+                  </td>
+                  <td class="num">{{bytes .Size}}</td>
+                  <td class="num">
+                    {{if not .Missing}}<a href="/assets/{{.ID}}/download">download</a>{{end}}
+                  </td>
+                </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {{end}}
+  {{end}}
 
   <div class="card">
-    <h1>{{.Filename}}</h1>
-
-    {{if .Missing}}
-      <p class="note note-warn">
-        This file was not present at the last scan. Its index entry is kept — §12
-        never deletes one — so restoring the file at
-        <code>{{.LibraryPath}}</code> and re-scanning restores everything.
-      </p>
-    {{end}}
-    {{if .ContentChangedAt}}
-      <p class="note note-warn">
-        The bytes at this path changed since it was first indexed. The index now
-        records the new content.
-      </p>
-    {{end}}
-
+    <h2>Details</h2>
     <dl class="facts">
       <dt>Path</dt><dd><code>{{.LibraryPath}}</code></dd>
       <dt>Pack</dt><dd><a href="/assets?pack={{.PackID}}">{{.PackName}}</a></dd>
       <dt>Kind</dt><dd><span class="kind">{{.Kind}}</span></dd>
       <dt>Size</dt><dd>{{bytes .Size}}</dd>
       {{with .Dimensions}}<dt>Dimensions</dt><dd>{{.}}</dd>{{end}}
+      {{if .ColorCount}}
+        <dt>Colours</dt>
+        <dd>{{.ColorCount}}{{if .IsPixelArt}} <span class="badge">pixel art</span>{{end}}</dd>
+      {{end}}
+      {{if .HasAlpha}}
+        <dt>Alpha</dt>
+        <dd>
+          yes
+          {{if .HasSemitransparent}}
+            {{/* §8: in pixel art these "are usually an authoring mistake and worth
+                 surfacing". */}}
+            <span class="badge badge-warn">semi-transparent pixels</span>
+          {{end}}
+        </dd>
+      {{end}}
+      {{if .Animated}}
+        <dt>Frames</dt>
+        <dd>{{.FrameCount}}{{if .FPS}} at {{printf "%.0f" .FPS}} fps{{end}}</dd>
+      {{end}}
+      {{if .AnimationNames}}
+        {{/* §6: Aseprite frame tags map directly onto animation_names. */}}
+        <dt>Animations</dt>
+        <dd>{{range $i, $n := .AnimationNames}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}</dd>
+      {{end}}
       {{with .Ext}}<dt>Extension</dt><dd><code>.{{.}}</code></dd>{{end}}
       <dt>SHA-256</dt><dd><code class="hash">{{.SHA256}}</code></dd>
       <dt>Modified</dt><dd>{{.ModTime.Format "2006-01-02 15:04"}}</dd>
@@ -38,12 +164,6 @@
     {{if not .Missing}}
       <p class="actions"><a class="button" href="/assets/{{.ID}}/download">Download original</a></p>
     {{end}}
-
-    <p class="hint">
-      Previews arrive with the viewers in M2 and later; this page shows what the
-      index knows. Note that the PNG, PSD and ASEPRITE of one artwork still appear
-      as separate rows — collapsing format variants into one asset group is M2.
-    </p>
   </div>
 </div>
 {{end}}

@@ -329,6 +329,127 @@ make serving library bytes safe — resolved through `safepath`,
 `Content-Disposition: attachment`, `nosniff`, ETag and `Range`. Confirmed with the
 operator.
 
+### Pixel-art detection uses two of §6's three signals (M2)
+
+§6 says to detect pixel art by "low dimensions (either axis under 256), low
+unique-colour count, and hard edges", and is emphatic about the stakes:
+"Bilinear-downscaling pixel art into mush is the single most annoying failure of every
+existing tool; get this right."
+
+**Dimensions are deliberately not used.** As a requirement the rule misclassifies the
+image it most needs to catch — a 2048×2048 pixel-art tileset atlas is common in this
+library, fails "either axis under 256", and is exactly what must not be
+bilinear-downscaled. As a tie-breaker it only re-admits antialiased vector art, which
+genuinely *should* be smoothly downscaled.
+
+The other two signals do the work, with one refinement that turned out to matter:
+**edge hardness is measured against transitions, not against all pixels.** Both pixel
+art and a flat vector icon are mostly uniform interior, so soft-pixels-over-all-pixels
+is near zero for both and separates nothing. Asking instead "of the places where
+neighbouring pixels differ, how many differ only slightly" separates them cleanly.
+Measured:
+
+| Fixture | Colours | Soft-transition ratio | Verdict |
+| --- | --- | --- | --- |
+| flat-palette sprite, 128px | 5 | 0.000 | pixel art |
+| the same sprite at 1024px | 5 | 0.000 | pixel art |
+| antialiased vector shape | 120 | 0.542 | not pixel art |
+| photographic gradient | 4096 (capped) | 1.000 | not pixel art |
+
+The threshold sits at 0.40, in the middle of a wide gap. A test records these numbers
+and fails if the margin narrows, so the threshold stays evidence-backed rather than
+tuned until the tests went green.
+
+### WebP is encoded losslessly by a native Go encoder (M2)
+
+§3 and §6 want `thumb.webp`, but `golang.org/x/image/webp` is decode-only. Of the
+cgo-free encoders, `github.com/HugoSmits86/nativewebp` was chosen: genuinely native Go,
+MIT, one dependency (`x/image`, already present), and **lossless VP8L only**.
+
+Lossless is the right trade rather than a limitation. Lossy compression destroys exactly
+the hard edges §6 cares about, and at thumbnail sizes the file is small either way. The
+alternative, `gen2brain/webp`, supports lossy and animation but embeds a
+WASM-transpiled libwebp — multi-MB binary growth for a capability this application does
+not want.
+
+Animated previews are therefore GIF via the standard library, which §6 explicitly
+permits ("Keep animation in GIF/WebP thumbnails").
+
+### The 2D viewer loads a generated preview, never the original (M2)
+
+§11 forbids serving library content inline — "an uploaded `.html` or `.svg` served
+inline from the app origin is stored XSS" — but §8's viewer needs an inline image.
+
+Resolved by generating `preview.webp` alongside the thumbnails and serving that. The
+bytes came from our own encoder, so there is no XSS surface, and it makes the viewer
+work identically for PSD, SVG and Aseprite sources. Originals remain download-only with
+`Content-Disposition: attachment`.
+
+### `.aseprite` is parsed from scratch; its fixtures are generated (M2)
+
+§6 calls Aseprite support "first-class, not a nice-to-have". No library reads the binary
+format: `github.com/solarlune/goaseprite`, the obvious candidate, parses Aseprite's
+*JSON export*, which requires the user to have exported a spritesheet first — defeating
+§6's stated goal that "an animated preview can be generated from the `.aseprite` itself
+without needing the exported PNG sequence".
+
+Implemented against `ase-file-specs`: colour depths 32/16/8, cel types raw/linked/zlib,
+layer visibility and opacity, frame durations, and frame tags mapped onto
+`animation_names`. **Blend modes other than Normal are treated as Normal**, and tilemap
+cels are skipped — both reported through `Notes` rather than silently mishandled, since
+a wrong composite is only dangerous when it is quiet.
+
+**The fixtures are constructed to the spec, not authored by Aseprite.** That tests the
+decoder against the documentation rather than against real output. The parser therefore
+degrades to an error rather than guessing, and §6's `AMBAR_ASEPRITE_BIN` remains the
+escape hatch. **Dropping one real `.aseprite` from the library into
+`testdata/fixtures/` is the highest-value follow-up available.**
+
+The fuzz sweep in those tests earned its place immediately: it found that
+`make([]cel, 0, chunkCount)` trusted a 32-bit count read from the file, so a crafted
+value asked for a 240 GB allocation. Every count is clamped now.
+
+### New `AMBAR_MAX_IMAGE_PIXELS`, default 50 megapixels (M2)
+
+Decoding allocates roughly `width × height × 4` bytes, so a 30000×30000 PNG is an
+out-of-memory on a NAS — the image equivalent of §5's zip-bomb caps, which §13's
+variable list predates. `image.DecodeConfig` reads only the header, so the guard costs
+nothing. Over the cap is `derive_state=unsupported`, which the UI shows with its reason.
+
+### `.tga` ships unsupported despite §6 listing it (M2)
+
+`x/image` has no TGA decoder and both pure-Go options were last touched in 2015. It
+degrades visibly — `derive_state=unsupported` with a reason, shown in the UI — rather
+than silently. A minimal decoder (uncompressed plus RLE, roughly 120 lines) is a
+contained follow-up. `.xcf` is unsupported too, which §6 already asks for, and
+`.hdr`/`.exr` wait for M6 where §6 groups them with the 3D work.
+
+### One derive job updates every asset sharing its content hash (M2)
+
+§6 wants derivatives "idempotent, keyed on `sha256` + `derive_version`". Taken literally
+for the *job* as well as the files, two identical files share one job — and if that job
+only updated the asset it was dispatched for, the other copy sat at
+`derive_state=pending` forever with no thumbnail, even though the thumbnail was on disk.
+
+So the outcome is written to every non-missing asset with that hash. Identical bytes have
+identical analysis, so this is exact rather than an approximation.
+
+### `ambar derive` stops at "nothing runnable", not "queue empty" (M2)
+
+A failed job is requeued behind an exponential backoff, which is right for a
+long-running server and wrong for a one-shot command: the first version of `ambar derive`
+sat through 30 seconds of backoff for a single undecodable file. It now stops when
+nothing could start immediately, reports how many are waiting on a retry, and leaves them
+for the next run.
+
+### A completed job's bookkeeping survives shutdown (M2)
+
+Found by the race detector, whose slowdown made the window wide enough to hit reliably:
+if the context was cancelled between a handler succeeding and the completion being
+written, the write failed and the row stayed `running` — so the next startup requeued it
+and the job ran twice. Harmless for an idempotent derive, wrong in general. The
+completion write now uses `context.WithoutCancel`.
+
 ### M0 created only the tables M0 uses
 
 `schema_migrations`, `users`, `sessions`, `audit_log` — not the rest of §4. §4
@@ -342,6 +463,9 @@ M1 followed the same policy: `packs` and `assets` carry only the columns M1
 populates. §14 lists "pack model" under M4, but §5.1's detection rules belong to the
 milestone whose grid depends on them — so M1 detects packs with identity columns
 only, and M4 adds the provenance fields, the capture form and sidecars.
+
+M2 added `jobs`, `asset_groups`, and the derive and image-analysis columns — and took
+the agreed exception for `phash`, which is written in M2 and read by nothing until M13.
 
 ---
 
