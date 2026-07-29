@@ -30,6 +30,7 @@ func setMinimalEnv(t *testing.T) (libraryRoot, dataRoot string) {
 		"AMBAR_BACKUP_DIR", "AMBAR_BACKUP_KEEP", "AMBAR_TRASH_DIR", "AMBAR_TRASH_RETENTION",
 		"AMBAR_DEDUPE_LINK_MODE", "AMBAR_ASEPRITE_BIN", "AMBAR_BLENDER_BIN",
 		"AMBAR_SESSION_SECRET", "AMBAR_COOKIE_SECURE",
+		"AMBAR_IGNORE_GLOBS", "AMBAR_LIBRARY_BUCKETS",
 	} {
 		// t.Setenv registers the restore of the original value; os.Unsetenv then
 		// removes it entirely. Unset rather than empty matters, because for
@@ -129,6 +130,7 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		{"zero backup keep", "AMBAR_BACKUP_KEEP", "0", "at least 1"},
 		{"unknown link mode", "AMBAR_DEDUPE_LINK_MODE", "symlink", "reflink, hardlink or off"},
 		{"unknown cookie secure", "AMBAR_COOKIE_SECURE", "maybe", "auto, true or false"},
+		{"invalid ignore glob", "AMBAR_IGNORE_GLOBS", "[", "not a valid pattern"},
 	}
 
 	for _, tc := range tests {
@@ -459,5 +461,83 @@ func TestRelativeRootsAreMadeAbsolute(t *testing.T) {
 	}
 	if !filepath.IsAbs(cfg.LibraryRoot) {
 		t.Errorf("LibraryRoot = %q, want an absolute path", cfg.LibraryRoot)
+	}
+}
+
+// --- library interpretation (§5.1, §17) ------------------------------------
+
+func TestIgnoreGlobsDefaultToTheSpecList(t *testing.T) {
+	setMinimalEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// §5.1's list. __MACOSX matters most: without it the asset count doubles.
+	want := map[string]bool{
+		"__MACOSX": false, ".DS_Store": false, "Thumbs.db": false,
+		"desktop.ini": false, "._*": false, ".git": false,
+	}
+	for _, g := range cfg.IgnoreGlobs {
+		want[g] = true
+	}
+	for glob, present := range want {
+		if !present {
+			t.Errorf("the default ignore list is missing %q", glob)
+		}
+	}
+}
+
+func TestIgnoreGlobsOverride(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv("AMBAR_IGNORE_GLOBS", "__MACOSX, *.tmp ,.DS_Store")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if strings.Join(cfg.IgnoreGlobs, "|") != "__MACOSX|*.tmp|.DS_Store" {
+		t.Errorf("IgnoreGlobs = %v", cfg.IgnoreGlobs)
+	}
+}
+
+// TestLibraryBucketsAreConfigurable is what keeps §17's "the application ... must
+// not depend on this layout" true: the bucket names are configuration.
+func TestLibraryBucketsAreConfigurable(t *testing.T) {
+	setMinimalEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// §5.1 names 2d, 3d, mix and raw; §17's layout adds audio.
+	for _, want := range []string{"2d", "3d", "mix", "raw", "audio"} {
+		found := false
+		for _, b := range cfg.LibraryBuckets {
+			if b == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the default bucket list is missing %q", want)
+		}
+	}
+
+	t.Setenv("AMBAR_LIBRARY_BUCKETS", "assets-2d,assets-3d")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.LibraryBuckets, "|") != "assets-2d|assets-3d" {
+		t.Errorf("LibraryBuckets = %v", cfg.LibraryBuckets)
+	}
+
+	// An explicitly empty value disables bucket recognition entirely, which makes
+	// every top-level directory a pack.
+	t.Setenv("AMBAR_LIBRARY_BUCKETS", "")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.LibraryBuckets) != 0 {
+		t.Errorf("an empty AMBAR_LIBRARY_BUCKETS gave %v, want no buckets", cfg.LibraryBuckets)
 	}
 }

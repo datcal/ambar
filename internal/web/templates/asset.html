@@ -1,0 +1,50 @@
+{{define "title"}}{{.Asset.Filename}} — Ambar{{end}}
+
+{{define "content"}}
+{{with .Asset}}
+<div class="stack">
+  <p class="breadcrumb"><a href="/assets">assets</a> / {{.PackName}}</p>
+
+  <div class="card">
+    <h1>{{.Filename}}</h1>
+
+    {{if .Missing}}
+      <p class="note note-warn">
+        This file was not present at the last scan. Its index entry is kept — §12
+        never deletes one — so restoring the file at
+        <code>{{.LibraryPath}}</code> and re-scanning restores everything.
+      </p>
+    {{end}}
+    {{if .ContentChangedAt}}
+      <p class="note note-warn">
+        The bytes at this path changed since it was first indexed. The index now
+        records the new content.
+      </p>
+    {{end}}
+
+    <dl class="facts">
+      <dt>Path</dt><dd><code>{{.LibraryPath}}</code></dd>
+      <dt>Pack</dt><dd><a href="/assets?pack={{.PackID}}">{{.PackName}}</a></dd>
+      <dt>Kind</dt><dd><span class="kind">{{.Kind}}</span></dd>
+      <dt>Size</dt><dd>{{bytes .Size}}</dd>
+      {{with .Dimensions}}<dt>Dimensions</dt><dd>{{.}}</dd>{{end}}
+      {{with .Ext}}<dt>Extension</dt><dd><code>.{{.}}</code></dd>{{end}}
+      <dt>SHA-256</dt><dd><code class="hash">{{.SHA256}}</code></dd>
+      <dt>Modified</dt><dd>{{.ModTime.Format "2006-01-02 15:04"}}</dd>
+      <dt>First indexed</dt><dd>{{.FirstSeenAt.Format "2006-01-02 15:04"}}</dd>
+      <dt>Last verified</dt><dd>{{.LastVerifiedAt.Format "2006-01-02 15:04"}}</dd>
+    </dl>
+
+    {{if not .Missing}}
+      <p class="actions"><a class="button" href="/assets/{{.ID}}/download">Download original</a></p>
+    {{end}}
+
+    <p class="hint">
+      Previews arrive with the viewers in M2 and later; this page shows what the
+      index knows. Note that the PNG, PSD and ASEPRITE of one artwork still appear
+      as separate rows — collapsing format variants into one asset group is M2.
+    </p>
+  </div>
+</div>
+{{end}}
+{{end}}

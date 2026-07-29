@@ -1,0 +1,125 @@
+{{define "title"}}Assets — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+
+  <form method="get" action="/assets" class="searchbar" role="search">
+    <input type="search" name="q" value="{{.Search}}" placeholder="Search filenames and packs…"
+           autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Search assets">
+    {{/* Filters travel with the search so submitting does not silently drop them. */}}
+    {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+    {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+    <button type="submit">Search</button>
+    {{if or .Search .Kind .IncludeMissing}}
+      <a class="clear" href="/assets">Clear</a>
+    {{end}}
+  </form>
+
+  {{if .Stats}}
+    <nav class="kinds" aria-label="Filter by kind">
+      <a href="/assets{{if .Search}}?q={{.Search}}{{end}}"
+         class="chip{{if not .Kind}} chip-on{{end}}">all {{.Stats.Assets}}</a>
+      {{range .Stats.ByKind}}
+        <a class="chip{{if eq $.Kind .Kind}} chip-on{{end}}"
+           href="/assets?kind={{.Kind}}{{if $.Search}}&amp;q={{$.Search}}{{end}}">{{.Kind}} {{.Count}}</a>
+      {{end}}
+    </nav>
+
+    {{if .Stats.Missing}}
+      {{/* §12: these rows are kept, never deleted. Say so plainly, because a
+           count of missing files is alarming without the explanation. */}}
+      <p class="note">
+        {{.Stats.Missing}} indexed file{{if ne .Stats.Missing 1}}s were{{else}} was{{end}}
+        not present at the last scan. The index entries are kept, so restoring the
+        files restores everything.
+        {{if .IncludeMissing}}
+          <a href="/assets{{if .Search}}?q={{.Search}}{{end}}">Hide them</a>.
+        {{else}}
+          <a href="/assets?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">Show them</a>.
+        {{end}}
+      </p>
+    {{end}}
+  {{end}}
+
+  {{if .Page}}
+    <p class="resultcount">
+      {{if .Search}}
+        {{.Page.Total}} match{{if ne .Page.Total 1}}es{{end}} for “{{.Search}}”
+      {{else}}
+        {{.Page.Total}} asset{{if ne .Page.Total 1}}s{{end}}
+      {{end}}
+    </p>
+
+    {{if .Page.Assets}}
+      <div class="tablewrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th scope="col">Filename</th>
+              <th scope="col">Pack</th>
+              <th scope="col">Kind</th>
+              <th scope="col" class="num">Size</th>
+              <th scope="col" class="num">Dimensions</th>
+              <th scope="col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Page.Assets}}
+              <tr{{if .Missing}} class="row-missing"{{end}}>
+                <td>
+                  <a href="/assets/{{.ID}}">{{.Filename}}</a>
+                  {{with libraryDir .LibraryPath}}<span class="dir">{{.}}</span>{{end}}
+                  {{if .Missing}}<span class="badge">missing</span>{{end}}
+                  {{if .ContentChangedAt}}<span class="badge badge-warn">changed</span>{{end}}
+                </td>
+                <td>{{.PackName}}</td>
+                <td><span class="kind">{{.Kind}}</span></td>
+                <td class="num">{{bytes .Size}}</td>
+                <td class="num">{{with .Dimensions}}{{.}}{{else}}—{{end}}</td>
+                <td class="num">
+                  {{if not .Missing}}
+                    <a href="/assets/{{.ID}}/download">download</a>
+                  {{end}}
+                </td>
+              </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      {{if .NextURL}}
+        {{/* htmx swaps the next page in place of this button and appends the rows
+             (§2: no bundler, no SPA). Without JavaScript it is an ordinary link,
+             which is the whole appeal of htmx here. */}}
+        <div class="more" id="more">
+          <a href="{{.NextURL}}"
+             hx-get="{{.NextURL}}"
+             hx-select=".grid tbody tr"
+             hx-target=".grid tbody"
+             hx-swap="beforeend"
+             hx-select-oob="#more">Load more</a>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="card">
+        {{if .Search}}
+          <p>Nothing matched “{{.Search}}”.</p>
+          <p class="hint">
+            Search covers filenames and pack names. Words are matched as prefixes,
+            so <code>swo</code> finds <code>wooden_sword_01.glb</code>.
+            The full query language — tags, negation, numeric comparisons — arrives in M3.
+          </p>
+        {{else if .Stats}}
+          {{if eq .Stats.Assets 0}}
+            <p>The index is empty.</p>
+            <p class="hint">Run <code>ambar scan</code> to index the library at
+              <code>{{.LibraryRoot}}</code>.</p>
+          {{else}}
+            <p>No assets match this filter.</p>
+          {{end}}
+        {{end}}
+      </div>
+    {{end}}
+  {{end}}
+</div>
+{{end}}

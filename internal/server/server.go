@@ -15,6 +15,7 @@ import (
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/httpx"
+	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/web"
 )
 
@@ -31,6 +32,7 @@ type Server struct {
 	log   *slog.Logger
 	build BuildInfo
 
+	index    *index.Indexer
 	users    *auth.UserStore
 	sessions *auth.SessionStore
 	audit    *audit.Logger
@@ -54,7 +56,9 @@ type Server struct {
 // New builds the server. It fails rather than starting degraded: a template
 // that does not parse or a missing static asset is a build mistake, and finding
 // out at startup beats finding out when a user hits the page.
-func New(cfg *config.Config, database *db.DB, log *slog.Logger, build BuildInfo) (*Server, error) {
+func New(cfg *config.Config, database *db.DB, indexer *index.Indexer,
+	log *slog.Logger, build BuildInfo) (*Server, error) {
+
 	templates, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -68,6 +72,7 @@ func New(cfg *config.Config, database *db.DB, log *slog.Logger, build BuildInfo)
 	s := &Server{
 		cfg:         cfg,
 		db:          database,
+		index:       indexer,
 		log:         log,
 		build:       build,
 		users:       auth.NewUserStore(database),
@@ -107,6 +112,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
 	mux.HandleFunc("POST /logout", s.handleLogout)
+
+	mux.Handle("GET /assets", auth.RequireUser(http.HandlerFunc(s.handleAssets)))
+	mux.Handle("GET /assets/{id}", auth.RequireUser(http.HandlerFunc(s.handleAsset)))
+	mux.Handle("GET /assets/{id}/download", auth.RequireUser(http.HandlerFunc(s.handleAssetDownload)))
 
 	mux.Handle("GET /api/v1/healthz", auth.RequireUser(http.HandlerFunc(s.handleHealth)))
 
@@ -168,6 +177,15 @@ type pageData struct {
 
 	LibraryRoot string
 	DataRoot    string
+
+	// Asset browsing (M1).
+	Page           *index.Page
+	Asset          *index.Asset
+	Stats          *index.Stats
+	Search         string
+	Kind           string
+	IncludeMissing bool
+	NextURL        string
 }
 
 func (s *Server) newPageData(r *http.Request) pageData {
@@ -186,10 +204,18 @@ func (s *Server) newPageData(r *http.Request) pageData {
 // parseTemplates builds one template set per page, each combining base.html
 // with that page's content block.
 func parseTemplates() (map[string]*template.Template, error) {
-	pages := []string{"login.html", "index.html"}
+	// Helpers the templates need. Kept small and side-effect free: anything that
+	// can fail belongs in a handler, not in a template.
+	funcs := template.FuncMap{
+		"bytes":      FormatBytes,
+		"libraryDir": libraryDir,
+	}
+
+	pages := []string{"login.html", "index.html", "assets.html", "asset.html"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
-		t, err := template.New("base.html").ParseFS(web.FS, "templates/base.html", "templates/"+page)
+		t, err := template.New("base.html").Funcs(funcs).
+			ParseFS(web.FS, "templates/base.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", page, err)
 		}
@@ -228,5 +254,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, sta
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "index.html", http.StatusOK, s.newPageData(r))
+	data := s.newPageData(r)
+
+	// A failing stats query should not blank the home page; the rest of it is
+	// still useful, and the health endpoint is the place that reports trouble.
+	if stats, err := s.index.Stats(r.Context()); err != nil {
+		s.log.ErrorContext(r.Context(), "index stats failed", "error", err)
+	} else {
+		data.Stats = &stats
+	}
+
+	s.render(w, r, "index.html", http.StatusOK, data)
 }

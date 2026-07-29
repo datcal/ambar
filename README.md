@@ -12,19 +12,34 @@ the milestones in §14.
 
 ## Status
 
-**M0 complete.** What exists today:
+**M0 and M1 complete.** What exists today:
 
 - Configuration from the environment, with validation that fails at startup
 - SQLite with WAL, a single writer connection and a separate read pool
 - Embedded, forward-only migrations
 - Authentication: argon2id passwords, server-side sessions, login rate limiting,
   CSRF tokens
-- `ambar user add` / `ambar user list`
 - `/healthz` (public liveness) and `/api/v1/healthz` (authenticated detail)
+- **`ambar scan`** — depth-agnostic pack detection, junk exclusion, classification,
+  hashing, and reconciliation that recognises moves and never deletes a row
+- **A searchable grid** with FTS5 filename and pack search, kind filters, keyset
+  pagination, a detail page, and original-file download
+- `ambar user add` / `ambar user list`
 - Container image and compose file
 
-Not yet: scanning, indexing, thumbnails, tags, search, viewers, the API, the
-Godot plugin. M1 brings `ambar scan` and a grid view.
+Measured at 20,000 assets: first scan 1.7s, rescan 154ms with nothing re-hashed,
+and a page 10,000 rows deep costs the same as the first.
+
+Not yet: thumbnails and previews, the job queue, format-variant collapsing, tags,
+the full query language, ingest, the JSON API, the Godot plugin. M2 brings
+thumbnails, the worker queue, and asset grouping.
+
+### Known rough edge in M1
+
+The PNG, PSD and ASEPRITE of one artwork appear as **three separate rows**.
+Collapsing them into one asset group is M2 (§5.1), and §14 sequences it that way
+deliberately. The index already stores everything M2 needs, so no re-scan will be
+required.
 
 ### FTS5
 
@@ -64,11 +79,39 @@ if the resulting binary is dynamically linked.
 ## Running locally
 
 ```sh
-make run                          # against ./testdata, on :8080
 make user-add USERNAME=yourname   # first run only; there is no default account
+make scan ARGS=--dry-run          # see what would be indexed, without writing
+make scan                         # index ./testdata/library
+make run                          # serve on :8080
 ```
 
 Then open <http://localhost:8080/>.
+
+### Scanning
+
+`ambar scan` is safe to re-run and is the only way to update the index in M1. A UI
+trigger needs the job queue, which is M2 — invariant 8 forbids doing scan work in an
+HTTP handler.
+
+What it guarantees, and what the tests pin down:
+
+- **Nothing in the library is modified.** A test hashes every file before and after
+  a full scan cycle and asserts the set is byte-identical, mtimes included.
+- **A moved file is recognised as a move**, keeping its row and its id, never
+  becoming a second row (§9.1 rule 2).
+- **A missing file is marked, never deleted** (§12). Restore the file, re-scan, and
+  the entry comes back intact.
+- **A library that looks unmounted is refused.** If the walk finds no files while
+  the index holds thousands, the scan aborts rather than flagging everything —
+  §12 calls destroying the index over a temporarily-absent share catastrophic.
+- **Unchanged files are not re-read.** Change detection is `(size, mtime)`;
+  re-hashing everything is `ambar verify`'s job (M11).
+
+How the library is interpreted is configurable, because §17 requires the code not to
+depend on the human-facing folder layout: `AMBAR_IGNORE_GLOBS` for junk (leaving
+`__MACOSX` out of it roughly doubles the apparent asset count) and
+`AMBAR_LIBRARY_BUCKETS` for the organisational parents that are not themselves
+packs. A `.ambar.json` sidecar always overrides the heuristics.
 
 Configuration is entirely by environment variable. See
 [.env.example](.env.example), which documents every one.

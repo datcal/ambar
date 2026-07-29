@@ -12,6 +12,8 @@ import (
 
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/library"
 	"github.com/datcal/ambar/internal/server"
 )
 
@@ -86,7 +88,19 @@ func runServe(args []string) error {
 		log.Debug("database schema already up to date")
 	}
 
-	srv, err := server.New(cfg, database, log, server.BuildInfo{Version: version, Commit: commit})
+	ignore, err := library.NewMatcher(cfg.IgnoreGlobs)
+	if err != nil {
+		return err
+	}
+	indexer := index.New(database, index.Options{
+		Root:    cfg.LibraryRoot,
+		Ignore:  ignore,
+		Buckets: cfg.LibraryBuckets,
+		Log:     log,
+	})
+
+	srv, err := server.New(cfg, database, indexer, log,
+		server.BuildInfo{Version: version, Commit: commit})
 	if err != nil {
 		return err
 	}

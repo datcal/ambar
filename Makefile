@@ -29,7 +29,7 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run user-add clean docker docker-run check
+.PHONY: all build test test-race vet fmt fmt-check tidy run scan user-add clean docker docker-run check
 
 all: check build
 
@@ -84,6 +84,12 @@ run: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
 	AMBAR_BASE_URL=http://localhost:8080 \
 	AMBAR_LOG_LEVEL=debug \
 	$(BIN) serve
+
+# Index ./testdata. --dry-run first is the habit worth having on a real library.
+scan: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
+	AMBAR_LIBRARY_ROOT=$(TESTDATA_LIBRARY) \
+	AMBAR_DATA_ROOT=$(TESTDATA_DATA) \
+	$(BIN) scan $(ARGS)
 
 # Convenience wrapper for the first run, where the database has no users yet.
 user-add: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)

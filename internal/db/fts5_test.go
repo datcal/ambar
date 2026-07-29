@@ -16,8 +16,14 @@ import (
 // to make deliberately, not to discover in production.
 //
 // §4 specifies assets_fts as an FTS5 external-content table over filename,
-// pack_name, tag_text and notes. That exact shape is exercised below, so M1 can
-// build on it without re-verifying.
+// pack_name, tag_text and notes. That exact shape is exercised in
+// TestFTS5ExternalContent below (against its own demo tables, so it does not
+// collide with the real schema).
+//
+// M1 deliberately chose a *regular* FTS5 table for assets_fts instead — see
+// 0002_library.sql for why: the column set spans a join, which triggers cannot
+// maintain. The external-content assertions stay here anyway, because they prove
+// the capability exists should that decision ever be revisited.
 
 func TestFTS5IsCompiledIn(t *testing.T) {
 	d := openTestDB(t)
@@ -51,8 +57,8 @@ func TestFTS5QueryForms(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 
-	// tokenchars '_' keeps wooden_sword_01 as one token, which is what filename
-	// search needs; unicode61 would otherwise split on the underscore.
+	// Default tokenizer, which splits on _ and . — that is what the real
+	// assets_fts uses, and what makes searching "sword" find wooden_sword_01.glb.
 	if _, err := d.Writer.ExecContext(ctx,
 		`CREATE VIRTUAL TABLE docs USING fts5(filename, pack_name, tag_text, notes)`); err != nil {
 		t.Fatalf("create fts5 table: %v", err)
@@ -191,29 +197,29 @@ func TestFTS5ExternalContent(t *testing.T) {
 	ctx := context.Background()
 
 	schema := []string{
-		`CREATE TABLE assets (
+		`CREATE TABLE demo_content (
 			id        INTEGER PRIMARY KEY,
 			filename  TEXT NOT NULL,
 			pack_name TEXT,
 			tag_text  TEXT,
 			notes     TEXT
 		)`,
-		`CREATE VIRTUAL TABLE assets_fts USING fts5(
+		`CREATE VIRTUAL TABLE demo_fts USING fts5(
 			filename, pack_name, tag_text, notes,
-			content='assets', content_rowid='id'
+			content='demo_content', content_rowid='id'
 		)`,
-		`CREATE TRIGGER assets_fts_ai AFTER INSERT ON assets BEGIN
-			INSERT INTO assets_fts(rowid, filename, pack_name, tag_text, notes)
+		`CREATE TRIGGER demo_fts_ai AFTER INSERT ON demo_content BEGIN
+			INSERT INTO demo_fts(rowid, filename, pack_name, tag_text, notes)
 			VALUES (new.id, new.filename, new.pack_name, new.tag_text, new.notes);
 		END`,
-		`CREATE TRIGGER assets_fts_ad AFTER DELETE ON assets BEGIN
-			INSERT INTO assets_fts(assets_fts, rowid, filename, pack_name, tag_text, notes)
+		`CREATE TRIGGER demo_fts_ad AFTER DELETE ON demo_content BEGIN
+			INSERT INTO demo_fts(demo_fts, rowid, filename, pack_name, tag_text, notes)
 			VALUES ('delete', old.id, old.filename, old.pack_name, old.tag_text, old.notes);
 		END`,
-		`CREATE TRIGGER assets_fts_au AFTER UPDATE ON assets BEGIN
-			INSERT INTO assets_fts(assets_fts, rowid, filename, pack_name, tag_text, notes)
+		`CREATE TRIGGER demo_fts_au AFTER UPDATE ON demo_content BEGIN
+			INSERT INTO demo_fts(demo_fts, rowid, filename, pack_name, tag_text, notes)
 			VALUES ('delete', old.id, old.filename, old.pack_name, old.tag_text, old.notes);
-			INSERT INTO assets_fts(rowid, filename, pack_name, tag_text, notes)
+			INSERT INTO demo_fts(rowid, filename, pack_name, tag_text, notes)
 			VALUES (new.id, new.filename, new.pack_name, new.tag_text, new.notes);
 		END`,
 	}
@@ -224,7 +230,7 @@ func TestFTS5ExternalContent(t *testing.T) {
 	}
 
 	if _, err := d.Writer.ExecContext(ctx, `
-		INSERT INTO assets (id, filename, pack_name, tag_text, notes) VALUES
+		INSERT INTO demo_content (id, filename, pack_name, tag_text, notes) VALUES
 			(1, 'wooden_sword_01.glb', 'kenney-medieval', 'type:model', 'a sword'),
 			(2, 'laser_turret_a.glb',  'kenney-sci-fi',   'type:model', 'a turret')`); err != nil {
 		t.Fatal(err)
@@ -235,9 +241,9 @@ func TestFTS5ExternalContent(t *testing.T) {
 		t.Helper()
 		var n int
 		if err := d.Reader.QueryRowContext(ctx, `
-			SELECT count(*) FROM assets_fts
-			JOIN assets ON assets.id = assets_fts.rowid
-			WHERE assets_fts MATCH ?`, query).Scan(&n); err != nil {
+			SELECT count(*) FROM demo_fts
+			JOIN demo_content ON demo_content.id = demo_fts.rowid
+			WHERE demo_fts MATCH ?`, query).Scan(&n); err != nil {
 			t.Fatalf("external-content MATCH %q: %v", query, err)
 		}
 		return n
@@ -248,7 +254,7 @@ func TestFTS5ExternalContent(t *testing.T) {
 	}
 
 	if _, err := d.Writer.ExecContext(ctx,
-		`UPDATE assets SET filename = 'iron_sword_02.glb' WHERE id = 1`); err != nil {
+		`UPDATE demo_content SET filename = 'iron_sword_02.glb' WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if got := count(`iron*`); got != 1 {
@@ -258,7 +264,7 @@ func TestFTS5ExternalContent(t *testing.T) {
 		t.Errorf("after update, stale term 'wooden' matched %d rows, want 0", got)
 	}
 
-	if _, err := d.Writer.ExecContext(ctx, `DELETE FROM assets WHERE id = 1`); err != nil {
+	if _, err := d.Writer.ExecContext(ctx, `DELETE FROM demo_content WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if got := count(`sword`); got != 0 {
@@ -269,7 +275,7 @@ func TestFTS5ExternalContent(t *testing.T) {
 	// 'integrity-check' is how a corrupt index is detected rather than guessed at.
 	for _, cmd := range []string{"integrity-check", "rebuild", "optimize"} {
 		if _, err := d.Writer.ExecContext(ctx,
-			`INSERT INTO assets_fts(assets_fts) VALUES(?)`, cmd); err != nil {
+			`INSERT INTO demo_fts(demo_fts) VALUES(?)`, cmd); err != nil {
 			t.Errorf("fts5 command %q: %v", cmd, err)
 		}
 	}

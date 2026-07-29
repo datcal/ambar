@@ -20,6 +20,7 @@ import (
 	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/index"
 )
 
 const (
@@ -82,7 +83,10 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 	auth.DefaultParams = auth.Params{Memory: 8 * 1024, Time: 1, Threads: 1, SaltLen: 16, KeyLen: 32}
 	t.Cleanup(func() { auth.DefaultParams = originalParams })
 
-	srv, err := New(cfg, database, discardLogger(), BuildInfo{Version: "test", Commit: "abc1234"})
+	indexer := index.New(database, index.Options{Root: cfg.LibraryRoot})
+
+	srv, err := New(cfg, database, indexer, discardLogger(),
+		BuildInfo{Version: "test", Commit: "abc1234"})
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -877,8 +881,8 @@ func TestAccessLogRecordsClientIPAndRequestID(t *testing.T) {
 	var logs strings.Builder
 
 	ts := newTestServer(t)
-	srv, err := New(ts.cfg, ts.db, slog.New(slog.NewTextHandler(&logs, nil)),
-		BuildInfo{Version: "test"})
+	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -915,8 +919,8 @@ func TestAccessLogHonoursTrustedProxies(t *testing.T) {
 	ts := newTestServerWithConfig(t, func(cfg *config.Config) {
 		cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	})
-	srv, err := New(ts.cfg, ts.db, slog.New(slog.NewTextHandler(&logs, nil)),
-		BuildInfo{Version: "test"})
+	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -937,8 +941,8 @@ func TestAccessLogIgnoresSpoofedHeaders(t *testing.T) {
 	var logs strings.Builder
 
 	ts := newTestServer(t) // no trusted proxies
-	srv, err := New(ts.cfg, ts.db, slog.New(slog.NewTextHandler(&logs, nil)),
-		BuildInfo{Version: "test"})
+	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1037,7 +1041,8 @@ func TestAuthenticatedPagesAreNotCached(t *testing.T) {
 func TestPanicBecomesA500(t *testing.T) {
 	ts := newTestServer(t)
 
-	srv, err := New(ts.cfg, ts.db, discardLogger(), BuildInfo{Version: "test"})
+	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		discardLogger(), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
