@@ -14,8 +14,10 @@ import (
 	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/httpx"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/web"
 )
 
@@ -33,6 +35,7 @@ type Server struct {
 	build BuildInfo
 
 	index    *index.Indexer
+	jobs     *jobs.Queue
 	users    *auth.UserStore
 	sessions *auth.SessionStore
 	audit    *audit.Logger
@@ -56,7 +59,7 @@ type Server struct {
 // New builds the server. It fails rather than starting degraded: a template
 // that does not parse or a missing static asset is a build mistake, and finding
 // out at startup beats finding out when a user hits the page.
-func New(cfg *config.Config, database *db.DB, indexer *index.Indexer,
+func New(cfg *config.Config, database *db.DB, indexer *index.Indexer, queue *jobs.Queue,
 	log *slog.Logger, build BuildInfo) (*Server, error) {
 
 	templates, err := parseTemplates()
@@ -73,6 +76,7 @@ func New(cfg *config.Config, database *db.DB, indexer *index.Indexer,
 		cfg:         cfg,
 		db:          database,
 		index:       indexer,
+		jobs:        queue,
 		log:         log,
 		build:       build,
 		users:       auth.NewUserStore(database),
@@ -116,6 +120,18 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /assets", auth.RequireUser(http.HandlerFunc(s.handleAssets)))
 	mux.Handle("GET /assets/{id}", auth.RequireUser(http.HandlerFunc(s.handleAsset)))
 	mux.Handle("GET /assets/{id}/download", auth.RequireUser(http.HandlerFunc(s.handleAssetDownload)))
+
+	// Generated derivatives. Served inline, which is safe only because these bytes
+	// came from our own encoder — see the note on handleThumb.
+	mux.Handle("GET /assets/{id}/thumb", auth.RequireUser(http.HandlerFunc(s.handleThumb)))
+	mux.Handle("GET /assets/{id}/preview.webp", auth.RequireUser(http.HandlerFunc(s.handlePreview)))
+	mux.Handle("GET /assets/{id}/anim.gif", auth.RequireUser(http.HandlerFunc(s.handleAnimation)))
+
+	// Background work (§12). POST /scan enqueues and returns immediately, which is
+	// what invariant 8 requires of every scan trigger.
+	mux.Handle("GET /jobs", auth.RequireUser(http.HandlerFunc(s.handleJobs)))
+	mux.Handle("POST /scan", auth.RequireUser(http.HandlerFunc(s.handleScan)))
+	mux.Handle("POST /jobs/retry-failed", auth.RequireUser(http.HandlerFunc(s.handleRetryFailed)))
 
 	mux.Handle("GET /api/v1/healthz", auth.RequireUser(http.HandlerFunc(s.handleHealth)))
 
@@ -178,14 +194,23 @@ type pageData struct {
 	LibraryRoot string
 	DataRoot    string
 
-	// Asset browsing (M1).
-	Page           *index.Page
+	// Asset browsing (M1) and grouping (M2). Page holds groups rather than
+	// individual assets — see §5.1 and index.ListGroups.
+	Page           *index.GroupPage
+	Group          *index.Group
+	Variants       []index.Asset
 	Asset          *index.Asset
 	Stats          *index.Stats
 	Search         string
 	Kind           string
 	IncludeMissing bool
 	NextURL        string
+
+	// The jobs page (§12).
+	Jobs        []jobs.Job
+	JobStats    *jobs.Stats
+	DeriveStats *derive.Stats
+	JobState    string
 }
 
 func (s *Server) newPageData(r *http.Request) pageData {
@@ -209,9 +234,10 @@ func parseTemplates() (map[string]*template.Template, error) {
 	funcs := template.FuncMap{
 		"bytes":      FormatBytes,
 		"libraryDir": libraryDir,
+		"jobAge":     formatJobAge,
 	}
 
-	pages := []string{"login.html", "index.html", "assets.html", "asset.html"}
+	pages := []string{"login.html", "index.html", "assets.html", "asset.html", "jobs.html"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		t, err := template.New("base.html").Funcs(funcs).

@@ -310,3 +310,189 @@ a { color: var(--accent); }
 .button:hover { filter: brightness(1.08); }
 
 .hash { word-break: break-all; white-space: normal; }
+
+/* --- thumbnail grid (M2) --- */
+
+.thumbgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.tile-missing { opacity: 0.5; }
+
+.tilelink { text-decoration: none; color: var(--text); min-width: 0; }
+
+.thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  /* Mid-grey behind the thumbnail as well as composited into it, so an image with
+     transparent margins still reads as a single tile. */
+  background: #808080;
+}
+
+.thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+/* §6 and §8: pixel art is never smoothed. The thumbnail was already resized with
+   nearest-neighbour server-side; this keeps the browser from undoing that when the
+   tile is larger than the image. */
+.thumb-pixelated img { image-rendering: pixelated; }
+
+.thumb-none {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: #ffffffaa;
+  text-transform: uppercase;
+}
+
+.tilename {
+  display: block;
+  font-size: 0.85rem;
+  word-break: break-word;
+  margin-top: 0.4rem;
+}
+
+.tilemeta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.tilebadges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.tilebadges .badge { margin-left: 0; }
+.badge-variants { background: #6ea8fe28; color: var(--accent); }
+
+/* --- the 2D viewer (§8) --- */
+
+.viewer {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.viewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewer-group { display: flex; gap: 0.2rem; }
+
+.viewer-toolbar button {
+  margin: 0;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.viewer-toolbar button:hover { color: var(--text); filter: none; }
+.viewer-toolbar button.on { border-color: var(--accent); color: var(--accent); }
+
+.viewer-status {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.viewer-stage {
+  position: relative;
+  height: min(60vh, 32rem);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+}
+
+.viewer-stage.dragging { cursor: grabbing; }
+.viewer-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.viewer-stage img {
+  transform-origin: 0 0;
+  /* The transform is set by viewer2d.js; without a base position the origin maths
+     would be relative to a moving box. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  max-width: none;
+  max-height: none;
+}
+
+/* §8's background toggle. The checkerboard is the default because it is the only one
+   that shows both light and dark edges of a sprite at once. */
+.viewer-stage[data-bg="checker"] {
+  background-color: #4a4a4a;
+  background-image:
+    linear-gradient(45deg, #5a5a5a 25%, transparent 25%, transparent 75%, #5a5a5a 75%),
+    linear-gradient(45deg, #5a5a5a 25%, transparent 25%, transparent 75%, #5a5a5a 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.viewer-stage[data-bg="grey"]  { background: #808080; }
+.viewer-stage[data-bg="black"] { background: #000; }
+.viewer-stage[data-bg="white"] { background: #fff; }
+
+.viewer-hint { margin: 0; padding: 0.4rem 0.7rem 0.6rem; }
+
+/* --- jobs page --- */
+
+.actions-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.actions-row button { margin: 0; }
+
+.state {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  background: #ffffff14;
+  color: var(--muted);
+}
+
+.state-running { background: #6ea8fe28; color: var(--accent); }
+.state-failed  { background: #ff8a8a24; color: var(--error); }
+.state-done    { background: #4fa84f24; color: #86c586; }
+
+.errorcell {
+  max-width: 28rem;
+  white-space: normal;
+  color: var(--error);
+  font-size: 0.8rem;
+}
+
+h2 { font-size: 1rem; margin: 0 0 0.6rem; }

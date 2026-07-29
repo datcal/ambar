@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/datcal/ambar/internal/derive"
 )
 
 // handleLiveness is the container HEALTHCHECK and nothing more.
@@ -51,6 +54,11 @@ type healthReport struct {
 	UptimeSeconds int64         `json:"uptime_seconds"`
 	Checks        []healthCheck `json:"checks"`
 
+	// §12 asks for queue depth and failed-job count in the health endpoint.
+	QueueDepth  int           `json:"job_queue_depth"`
+	FailedJobs  int           `json:"failed_job_count"`
+	Derivatives *derive.Stats `json:"derivatives,omitempty"`
+
 	// NotYetImplemented names the §12 checks this milestone does not perform.
 	//
 	// A health endpoint that silently omits checks reads as "everything is
@@ -71,9 +79,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		StartedAt:     s.startedAt,
 		UptimeSeconds: int64(time.Since(s.startedAt).Seconds()),
 		NotYetImplemented: []string{
-			"job_queue_depth (M2)",
-			"failed_job_count (M2)",
-			"derivatives_dir_writable (M2)",
 			"blender_available (M6)",
 			"reflink_support (M13)",
 		},
@@ -91,7 +96,29 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks,
 		checkDirectory("library_root", s.cfg.LibraryRoot, !s.cfg.LibraryReadonly),
 		checkDirectory("data_root", s.cfg.DataRoot, true),
+		// §12 asks for this specifically: derivatives grow to several GB, and a full
+		// or read-only volume shows up here first.
+		checkDirectory("derivatives_dir", filepath.Join(s.cfg.DataRoot, "derivatives"), true),
 	)
+
+	// §12: job queue depth and failed job count.
+	if jobStats, err := s.jobs.Stats(ctx); err != nil {
+		report.Checks = append(report.Checks,
+			healthCheck{Name: "job_queue", OK: false, Detail: err.Error()})
+	} else {
+		report.QueueDepth = jobStats.Pending()
+		report.FailedJobs = jobStats.Failed
+		check := healthCheck{Name: "job_queue", OK: true,
+			Detail: fmt.Sprintf("%d pending, %d failed", jobStats.Pending(), jobStats.Failed)}
+		// A failed job is not an unhealthy *service* — the queue is working fine and
+		// said so. §12 wants it visible, which the count and the /jobs page do; making
+		// it a 503 would mean one corrupt PNG takes the container out of rotation.
+		report.Checks = append(report.Checks, check)
+	}
+
+	if deriveStats, err := derive.LoadStats(ctx, s.db); err == nil {
+		report.Derivatives = &deriveStats
+	}
 
 	report.Status = "ok"
 	status := http.StatusOK

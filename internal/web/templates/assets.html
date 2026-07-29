@@ -48,44 +48,53 @@
       {{else}}
         {{.Page.Total}} asset{{if ne .Page.Total 1}}s{{end}}
       {{end}}
+      {{if .Stats}}
+        {{if gt .Stats.Assets .Page.Total}}
+          <span class="hint">— {{.Stats.Assets}} files, collapsed by format variant</span>
+        {{end}}
+      {{end}}
     </p>
 
-    {{if .Page.Assets}}
-      <div class="tablewrap">
-        <table class="grid">
-          <thead>
-            <tr>
-              <th scope="col">Filename</th>
-              <th scope="col">Pack</th>
-              <th scope="col">Kind</th>
-              <th scope="col" class="num">Size</th>
-              <th scope="col" class="num">Dimensions</th>
-              <th scope="col"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .Page.Assets}}
-              <tr{{if .Missing}} class="row-missing"{{end}}>
-                <td>
-                  <a href="/assets/{{.ID}}">{{.Filename}}</a>
-                  {{with libraryDir .LibraryPath}}<span class="dir">{{.}}</span>{{end}}
-                  {{if .Missing}}<span class="badge">missing</span>{{end}}
-                  {{if .ContentChangedAt}}<span class="badge badge-warn">changed</span>{{end}}
-                </td>
-                <td>{{.PackName}}</td>
-                <td><span class="kind">{{.Kind}}</span></td>
-                <td class="num">{{bytes .Size}}</td>
-                <td class="num">{{with .Dimensions}}{{.}}{{else}}—{{end}}</td>
-                <td class="num">
-                  {{if not .Missing}}
-                    <a href="/assets/{{.ID}}/download">download</a>
+    {{if .Page.Groups}}
+      {{/* One tile per logical asset, not per file. §5.1: "Indexing them
+           independently means every sprite appears three or four times and the grid
+           becomes noise." Also invariant 7. */}}
+      <ul class="thumbgrid" id="thumbgrid">
+        {{range $group := .Page.Groups}}
+          {{with $group.Primary}}
+            <li class="tile{{if .Missing}} tile-missing{{end}}">
+              <a class="tilelink" href="/assets/{{.ID}}">
+                <span class="thumb{{if .IsPixelArt}} thumb-pixelated{{end}}">
+                  {{if .HasPreview}}
+                    {{/* Hovering swaps in the animated GIF, which §8 asks for in the
+                         grid. Handled in CSS + the data attribute, no inline JS. */}}
+                    <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}" loading="lazy"
+                         {{if .Animated}}data-anim="/assets/{{.ID}}/anim.gif"{{end}}>
+                  {{else}}
+                    <span class="thumb-none" title="{{.DeriveError}}">
+                      {{if eq .DeriveState "pending"}}…{{else}}{{.Ext}}{{end}}
+                    </span>
                   {{end}}
-                </td>
-              </tr>
-            {{end}}
-          </tbody>
-        </table>
-      </div>
+                </span>
+                <span class="tilename">{{.Filename}}</span>
+              </a>
+              <span class="tilemeta">
+                {{.PackName}} · {{bytes .Size}}{{with .Dimensions}} · {{.}}{{end}}
+              </span>
+              <span class="tilebadges">
+                {{if $group.MultiVariant}}
+                  {{/* §5.1: the grid shows one entry per group; the count tells you
+                       there are editable sources behind it. */}}
+                  <span class="badge badge-variants">{{$group.VariantCount}} variants</span>
+                {{end}}
+                {{if gt (len .AnimationNames) 0}}<span class="badge">{{len .AnimationNames}} anims</span>{{end}}
+                {{if .Missing}}<span class="badge">missing</span>{{end}}
+                {{if .ContentChangedAt}}<span class="badge badge-warn">changed</span>{{end}}
+              </span>
+            </li>
+          {{end}}
+        {{end}}
+      </ul>
 
       {{if .NextURL}}
         {{/* htmx swaps the next page in place of this button and appends the rows
@@ -94,8 +103,8 @@
         <div class="more" id="more">
           <a href="{{.NextURL}}"
              hx-get="{{.NextURL}}"
-             hx-select=".grid tbody tr"
-             hx-target=".grid tbody"
+             hx-select="#thumbgrid > li"
+             hx-target="#thumbgrid"
              hx-swap="beforeend"
              hx-select-oob="#more">Load more</a>
         </div>

@@ -20,7 +20,9 @@ import (
 	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/jobs"
 )
 
 const (
@@ -49,7 +51,7 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 	root := t.TempDir()
 	libraryRoot := filepath.Join(root, "library")
 	dataRoot := filepath.Join(root, "data")
-	for _, dir := range []string{libraryRoot, dataRoot} {
+	for _, dir := range []string{libraryRoot, dataRoot, filepath.Join(dataRoot, "derivatives")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -84,8 +86,16 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 	t.Cleanup(func() { auth.DefaultParams = originalParams })
 
 	indexer := index.New(database, index.Options{Root: cfg.LibraryRoot})
+	queue := jobs.New(database, jobs.Options{Workers: 1})
+	derive.New(database, derive.Options{
+		LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot,
+	}).Register(queue)
+	indexer.RegisterScanJob(queue, func(ctx context.Context) error {
+		_, err := derive.EnqueueStale(ctx, database, queue)
+		return err
+	})
 
-	srv, err := New(cfg, database, indexer, discardLogger(),
+	srv, err := New(cfg, database, indexer, queue, discardLogger(),
 		BuildInfo{Version: "test", Commit: "abc1234"})
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -278,7 +288,12 @@ func TestDetailedHealthReport(t *testing.T) {
 	}
 
 	// Every check must be present and passing on a healthy instance.
-	want := map[string]bool{"database": false, "library_root": false, "data_root": false}
+	// derivatives_dir and job_queue arrived in M2, replacing three
+	// not_yet_implemented entries.
+	want := map[string]bool{
+		"database": false, "library_root": false, "data_root": false,
+		"derivatives_dir": false, "job_queue": false,
+	}
 	for _, c := range report.Checks {
 		if _, expected := want[c.Name]; !expected {
 			t.Errorf("unexpected check %q", c.Name)
@@ -295,9 +310,16 @@ func TestDetailedHealthReport(t *testing.T) {
 	}
 
 	// §12 checks this milestone does not do must be named rather than silently
-	// omitted.
+	// omitted. M6 and M13 entries remain.
 	if len(report.NotYetImplemented) == 0 {
 		t.Error("not_yet_implemented is empty; a health report that omits checks silently is misleading")
+	}
+	for _, done := range []string{"job_queue_depth", "failed_job_count", "derivatives_dir_writable"} {
+		for _, pending := range report.NotYetImplemented {
+			if strings.Contains(pending, done) {
+				t.Errorf("%q is still listed as not implemented, but M2 added it", done)
+			}
+		}
 	}
 }
 
@@ -882,6 +904,7 @@ func TestAccessLogRecordsClientIPAndRequestID(t *testing.T) {
 
 	ts := newTestServer(t)
 	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		jobs.New(ts.db, jobs.Options{Workers: 1}),
 		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -920,6 +943,7 @@ func TestAccessLogHonoursTrustedProxies(t *testing.T) {
 		cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	})
 	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		jobs.New(ts.db, jobs.Options{Workers: 1}),
 		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -942,6 +966,7 @@ func TestAccessLogIgnoresSpoofedHeaders(t *testing.T) {
 
 	ts := newTestServer(t) // no trusted proxies
 	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		jobs.New(ts.db, jobs.Options{Workers: 1}),
 		slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -1042,6 +1067,7 @@ func TestPanicBecomesA500(t *testing.T) {
 	ts := newTestServer(t)
 
 	srv, err := New(ts.cfg, ts.db, index.New(ts.db, index.Options{Root: ts.cfg.LibraryRoot}),
+		jobs.New(ts.db, jobs.Options{Workers: 1}),
 		discardLogger(), BuildInfo{Version: "test"})
 	if err != nil {
 		t.Fatal(err)

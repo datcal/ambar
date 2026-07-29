@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -44,7 +45,28 @@ type Asset struct {
 	LastVerifiedAt   time.Time
 	MissingSince     *time.Time
 	ContentChangedAt *time.Time
+
+	// --- derivative state and image analysis (M2) ---
+
+	HasAlpha           bool
+	HasSemitransparent bool
+	ColorCount         int
+	IsPixelArt         bool
+	PHash              string
+	FrameCount         int
+	FPS                float64
+	AnimationNames     []string
+
+	DeriveState   string
+	DeriveError   string
+	DeriveVersion int
 }
+
+// HasPreview reports whether derivatives exist to show.
+func (a Asset) HasPreview() bool { return a.DeriveState == "ok" }
+
+// Animated reports whether an animated preview was generated.
+func (a Asset) Animated() bool { return a.FrameCount > 1 }
 
 // LibraryPath is the asset's path relative to AMBAR_LIBRARY_ROOT. This is the
 // value the download handler hands to safepath — never anything from a request.
@@ -93,7 +115,10 @@ type Page struct {
 const assetColumns = `
 	a.id, a.pack_id, p.name, p.slug, p.library_rel_path, a.rel_path,
 	a.filename, a.ext, a.kind, a.size, a.mtime, a.sha256, a.width, a.height,
-	a.first_seen_at, a.last_verified_at, a.missing_since, a.content_changed_at`
+	a.first_seen_at, a.last_verified_at, a.missing_since, a.content_changed_at,
+	a.has_alpha, a.has_semitransparent, a.color_count, a.is_pixel_art, a.phash,
+	a.frame_count, a.fps, a.animation_names,
+	a.derive_state, a.derive_error, a.derive_version`
 
 // List returns one page of assets.
 //
@@ -349,14 +374,20 @@ func scanAsset(row scanner) (Asset, error) {
 		lastVerified     int64
 		missingSince     sql.NullInt64
 		contentChangedAt sql.NullInt64
+		derived          deriveColumns
 	)
 	if err := row.Scan(
 		&a.ID, &a.PackID, &a.PackName, &a.PackSlug, &a.PackRelPath, &a.RelPath,
 		&a.Filename, &a.Ext, &a.Kind, &a.Size, &mtime, &a.SHA256, &width, &height,
 		&firstSeen, &lastVerified, &missingSince, &contentChangedAt,
+		&derived.hasAlpha, &derived.hasSemitransparent, &derived.colorCount,
+		&derived.isPixelArt, &derived.phash,
+		&derived.frameCount, &derived.fps, &derived.animationNames,
+		&a.DeriveState, &a.DeriveError, &a.DeriveVersion,
 	); err != nil {
 		return Asset{}, err
 	}
+	derived.apply(&a)
 
 	a.ModTime = time.Unix(mtime, 0)
 	a.FirstSeenAt = time.Unix(firstSeen, 0)
@@ -376,4 +407,43 @@ func scanAsset(row scanner) (Asset, error) {
 		a.ContentChangedAt = &t
 	}
 	return a, nil
+}
+
+// deriveColumns collects the nullable M2 columns so both scanAsset and scanGroupRow
+// read them the same way.
+type deriveColumns struct {
+	hasAlpha           sql.NullInt64
+	hasSemitransparent sql.NullInt64
+	colorCount         sql.NullInt64
+	isPixelArt         sql.NullInt64
+	phash              sql.NullString
+	frameCount         sql.NullInt64
+	fps                sql.NullFloat64
+	animationNames     sql.NullString
+}
+
+func (d deriveColumns) apply(a *Asset) {
+	a.HasAlpha = d.hasAlpha.Valid && d.hasAlpha.Int64 != 0
+	a.HasSemitransparent = d.hasSemitransparent.Valid && d.hasSemitransparent.Int64 != 0
+	a.IsPixelArt = d.isPixelArt.Valid && d.isPixelArt.Int64 != 0
+	if d.colorCount.Valid {
+		a.ColorCount = int(d.colorCount.Int64)
+	}
+	if d.phash.Valid {
+		a.PHash = d.phash.String
+	}
+	if d.frameCount.Valid {
+		a.FrameCount = int(d.frameCount.Int64)
+	}
+	if d.fps.Valid {
+		a.FPS = d.fps.Float64
+	}
+	if d.animationNames.Valid && d.animationNames.String != "" {
+		// Stored as a JSON array by the derive handler. A decode failure means the
+		// column was hand-edited; the rest of the asset is still perfectly usable.
+		var names []string
+		if err := json.Unmarshal([]byte(d.animationNames.String), &names); err == nil {
+			a.AnimationNames = names
+		}
+	}
 }
