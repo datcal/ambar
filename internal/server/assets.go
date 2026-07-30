@@ -57,6 +57,22 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	data.Kind = opts.Kind
 	data.IncludeMissing = opts.IncludeMissing
 	data.NextURL = nextPageURL(r, page.NextCursor)
+	data.Flash = q.Get("msg")
+
+	// §7 faceted sidebar: the tags present in this result set. A failure here is
+	// not fatal — the grid is still useful without the facets.
+	if facets, err := s.index.Facets(r.Context(), opts, index.DefaultFacetLimit); err != nil {
+		s.log.ErrorContext(r.Context(), "facets failed", "error", err)
+	} else {
+		data.Facets = facets
+	}
+
+	// §7 saved searches, shown as pinnable shortcuts.
+	if searches, err := s.saved.List(r.Context()); err != nil {
+		s.log.ErrorContext(r.Context(), "listing saved searches failed", "error", err)
+	} else {
+		data.SavedSearches = searches
+	}
 
 	s.render(w, r, "assets.html", http.StatusOK, data)
 }
@@ -73,6 +89,7 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	data := s.newPageData(r)
 	data.Asset = &asset
+	data.Flash = r.URL.Query().Get("msg")
 
 	// A missing group is not fatal — an asset indexed but not yet grouped still has a
 	// usable detail page.
@@ -81,6 +98,13 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		if variants, err := s.index.Variants(r.Context(), group.ID); err == nil {
 			data.Variants = variants
 		}
+	}
+
+	// Tags (§7): direct and inherited. A failure here should not blank the page.
+	if ats, err := s.tags.AssetTags(r.Context(), asset.ID); err != nil {
+		s.log.ErrorContext(r.Context(), "loading asset tags failed", "asset_id", asset.ID, "error", err)
+	} else {
+		data.AssetTags = ats
 	}
 
 	s.render(w, r, "asset.html", http.StatusOK, data)

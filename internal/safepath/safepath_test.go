@@ -25,7 +25,14 @@ import (
 func newLibrary(t *testing.T) string {
 	t.Helper()
 
+	// EvalSymlinks the temp dir up front: on macOS t.TempDir() hands back a
+	// /var/... path that is really a symlink to /private/var/..., and Resolve
+	// (correctly) returns the link-resolved form. Without this the expectations
+	// built from base never match on macOS, while Linux CI passes regardless.
 	base := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolved
+	}
 	root := filepath.Join(base, "root")
 
 	for _, dir := range []string{

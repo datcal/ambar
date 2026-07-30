@@ -90,7 +90,9 @@ type Config struct {
 
 	MaxUploadSize          int64         // M4, web upload cap
 	MaxArchiveUncompressed int64         // M4, zip-bomb defence
+	MaxArchiveEntries      int           // M4, zip-bomb defence (entry count)
 	InboxPollInterval      time.Duration // M4, _inbox polling
+	KeepArchives           bool          // M4, retain originals in _archives/ (§9)
 
 	BackupInterval time.Duration // M11, zero disables the internal scheduler
 	BackupDir      string        // M11
@@ -186,6 +188,16 @@ func Load() (*Config, error) {
 		fail("%w", err)
 	} else if c.MaxArchiveUncompressed < 1 {
 		fail("AMBAR_MAX_ARCHIVE_UNCOMPRESSED must be positive, got %d", c.MaxArchiveUncompressed)
+	}
+
+	if c.MaxArchiveEntries, err = envInt("AMBAR_MAX_ARCHIVE_ENTRIES", 200_000); err != nil {
+		fail("%v", err)
+	} else if c.MaxArchiveEntries < 1 {
+		fail("AMBAR_MAX_ARCHIVE_ENTRIES must be positive, got %d", c.MaxArchiveEntries)
+	}
+
+	if c.KeepArchives, err = envBool("AMBAR_KEEP_ARCHIVES", true); err != nil {
+		fail("%v", err)
 	}
 
 	if c.InboxPollInterval, err = envDuration("AMBAR_INBOX_POLL_INTERVAL", 30*time.Second); err != nil {

@@ -10,7 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/datcal/ambar/internal/palette"
 )
 
 // ErrNotFound means no asset has that id.
@@ -60,10 +61,117 @@ type Asset struct {
 	DeriveState   string
 	DeriveError   string
 	DeriveVersion int
+
+	// --- audio analysis (M5) ---
+	DurationMS int
+	SampleRate int
+	Channels   int
+	BitDepth   int
+	PeakDBFS   float64
+	IsLoopable bool
+
+	// --- 3D model (M6) ---
+	TriCount      int
+	VertCount     int
+	BBoxX         float64
+	BBoxY         float64
+	BBoxZ         float64
+	MaterialCount int
+
+	// --- spritesheet (M7) ---
+	FrameW      int
+	FrameH      int
+	FrameCols   int
+	FrameRows   int
+	FrameSource string // sidecar | detected | manual
+
+	// --- palette (M11.5) ---
+	// PaletteJSON is the raw swatch list as stored (§8); PaletteKind is exact or
+	// quantized. Both empty until the image is analysed. Parse with Palette().
+	PaletteJSON string
+	PaletteKind string
+}
+
+// IsSheet reports whether a frame grid has been proposed or confirmed (§6, §8).
+func (a Asset) IsSheet() bool { return a.FrameCols > 0 && a.FrameRows > 0 }
+
+// SheetConfirmed reports whether the grid is trusted (from a sidecar or a human),
+// as opposed to a detected guess awaiting confirmation (§6).
+func (a Asset) SheetConfirmed() bool {
+	return a.FrameSource == "manual" || a.FrameSource == "sidecar"
+}
+
+// IsModel reports whether this asset is a 3D model (§8 3D viewer).
+func (a Asset) IsModel() bool { return a.Kind == "model" }
+
+// HasModelPreview reports whether a normalised preview.glb was produced.
+func (a Asset) HasModelPreview() bool { return a.IsModel() && a.DeriveState == "ok" }
+
+// BBoxMetres renders the bounding box as "x × y × z m", or "" when unknown.
+func (a Asset) BBoxMetres() string {
+	if a.BBoxX == 0 && a.BBoxY == 0 && a.BBoxZ == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.2f × %.2f × %.2f m", a.BBoxX, a.BBoxY, a.BBoxZ)
+}
+
+// IsAudio reports whether this asset is a sound file (§6, §8 audio viewer).
+func (a Asset) IsAudio() bool { return a.Kind == "audio" }
+
+// Duration renders the audio length as m:ss, or "" when unknown.
+func (a Asset) Duration() string {
+	if a.DurationMS <= 0 {
+		return ""
+	}
+	total := a.DurationMS / 1000
+	return strconv.Itoa(total/60) + ":" + fmt.Sprintf("%02d", total%60)
+}
+
+// PeakLevel renders the peak in dBFS for display, or "" when unknown.
+func (a Asset) PeakLevel() string {
+	if a.SampleRate == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1f dBFS", a.PeakDBFS)
 }
 
 // HasPreview reports whether derivatives exist to show.
 func (a Asset) HasPreview() bool { return a.DeriveState == "ok" }
+
+// HasPalette reports whether a non-empty colour palette was extracted (§8).
+func (a Asset) HasPalette() bool {
+	return a.PaletteKind != "" && a.PaletteJSON != "" && a.PaletteJSON != "[]"
+}
+
+// PaletteApprox reports whether the palette is a median-cut summary rather than an
+// exact enumeration, which the UI must surface as approximate (§8).
+func (a Asset) PaletteApprox() bool { return a.PaletteKind == palette.KindQuantized }
+
+// AssetSwatch is one palette colour prepared for the detail page.
+type AssetSwatch struct {
+	palette.Swatch
+}
+
+// Percent renders the swatch's share of visible pixels for display (§8).
+func (s AssetSwatch) Percent() string { return fmt.Sprintf("%.1f", s.Ratio*100) }
+
+// PaletteSwatches parses the stored palette for rendering, most-used first. A parse
+// failure yields no swatches rather than an error: a broken palette must not blank
+// the whole detail page.
+func (a Asset) PaletteSwatches() []AssetSwatch {
+	if a.PaletteJSON == "" {
+		return nil
+	}
+	var raw []palette.Swatch
+	if err := json.Unmarshal([]byte(a.PaletteJSON), &raw); err != nil {
+		return nil
+	}
+	out := make([]AssetSwatch, len(raw))
+	for i, s := range raw {
+		out[i] = AssetSwatch{Swatch: s}
+	}
+	return out
+}
 
 // Animated reports whether an animated preview was generated.
 func (a Asset) Animated() bool { return a.FrameCount > 1 }
@@ -118,7 +226,11 @@ const assetColumns = `
 	a.first_seen_at, a.last_verified_at, a.missing_since, a.content_changed_at,
 	a.has_alpha, a.has_semitransparent, a.color_count, a.is_pixel_art, a.phash,
 	a.frame_count, a.fps, a.animation_names,
-	a.derive_state, a.derive_error, a.derive_version`
+	a.derive_state, a.derive_error, a.derive_version,
+	a.duration_ms, a.sample_rate, a.channels, a.bit_depth, a.peak_dbfs, a.is_loopable,
+	a.tri_count, a.vert_count, a.bbox_x, a.bbox_y, a.bbox_z, a.material_count,
+	a.frame_w, a.frame_h, a.frame_cols, a.frame_rows, a.frame_source,
+	a.palette_json, a.palette_kind`
 
 // List returns one page of assets.
 //
@@ -139,7 +251,7 @@ func (ix *Indexer) List(ctx context.Context, opts ListOptions) (*Page, error) {
 		limit = MaxPageSize
 	}
 
-	where, args, err := listFilters(opts)
+	where, args, err := ix.assetWhere(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -211,12 +323,8 @@ func listFilters(opts ListOptions) ([]string, []any, error) {
 		where = append(where, "a.pack_id = ?")
 		args = append(args, opts.PackID)
 	}
-	if match := FTSQuery(opts.Query); match != "" {
-		// A subquery rather than a join, so the FTS table cannot multiply rows and
-		// the (filename, id) keyset ordering stays unique.
-		where = append(where, "a.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?)")
-		args = append(args, match)
-	}
+	// The free-text and structured parts of opts.Query are compiled separately by
+	// the caller through the §7 parser; listFilters covers only the sidebar facets.
 	return where, args, nil
 }
 
@@ -231,6 +339,31 @@ func (ix *Indexer) Get(ctx context.Context, id int64) (Asset, error) {
 		return Asset{}, ErrNotFound
 	}
 	return a, err
+}
+
+// ContentHashes returns the set of distinct content hashes still referenced by an
+// asset, as lowercase hex. M12's junk view uses it to tell an orphaned derivative
+// (a hash directory matching nothing) from a live one.
+//
+// Missing assets are included deliberately: §12 keeps their rows, and a derivative
+// for a temporarily-absent file is not orphaned — the file may return on the next
+// scan, and its thumbnail should still be there when it does.
+func (ix *Indexer) ContentHashes(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := ix.db.Reader.QueryContext(ctx, `SELECT DISTINCT lower(sha256) FROM assets`)
+	if err != nil {
+		return nil, fmt.Errorf("load content hashes: %w", err)
+	}
+	defer rows.Close()
+
+	hashes := map[string]struct{}{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		hashes[h] = struct{}{}
+	}
+	return hashes, rows.Err()
 }
 
 // Stats summarises the index for the home page and the scan summary.
@@ -284,61 +417,6 @@ func (ix *Indexer) Stats(ctx context.Context) (Stats, error) {
 	return s, rows.Err()
 }
 
-// FTSQuery turns a user's search box input into a safe FTS5 MATCH expression.
-//
-// Raw input is never passed through. The M0 spike confirmed FTS5 returns a syntax
-// error for an unbalanced quote or a stray operator, so `sword"` typed into a
-// search box would otherwise 500. Instead every token is quoted as a literal — which
-// also neutralises `AND`, `OR`, `NOT`, `NEAR` and `*` as accidental operators — and
-// given a trailing `*` so partial words match as the user types.
-//
-// The result is an implicit AND of prefix-matched terms, which is what a filename
-// search should do. The full §7 query language, where operators are deliberate,
-// arrives in M3 with its own parser.
-func FTSQuery(input string) string {
-	var (
-		tokens []string
-		b      strings.Builder
-	)
-	flush := func() {
-		if b.Len() == 0 {
-			return
-		}
-		// Double-quoted, so the token is a literal string to FTS5 rather than a
-		// possible operator. The trailing * sits outside the quotes, which is the
-		// prefix syntax.
-		tokens = append(tokens, `"`+b.String()+`"*`)
-		b.Reset()
-	}
-
-	// Split on the same characters the tokenizer splits on, rather than deleting
-	// them. Deleting would join across separators: "wooden_sword" would become the
-	// single token "woodensword", which matches nothing, because the index holds
-	// "wooden" and "sword" separately.
-	for _, r := range input {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r > unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r)):
-			// Non-ASCII letters are legitimate: café, Hörn.
-			b.WriteRune(r)
-		default:
-			flush()
-		}
-	}
-	flush()
-
-	// Bound the query size. A pasted paragraph should search, not build a
-	// thousand-term expression.
-	if len(tokens) > maxSearchTokens {
-		tokens = tokens[:maxSearchTokens]
-	}
-	return strings.Join(tokens, " ")
-}
-
-// maxSearchTokens caps how many terms one search box entry becomes.
-const maxSearchTokens = 16
-
 // encodeCursor packs the keyset position into an opaque token.
 func encodeCursor(filename string, id int64) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(filename + "\x00" + strconv.FormatInt(id, 10)))
@@ -375,6 +453,25 @@ func scanAsset(row scanner) (Asset, error) {
 		missingSince     sql.NullInt64
 		contentChangedAt sql.NullInt64
 		derived          deriveColumns
+		durationMS       sql.NullInt64
+		sampleRate       sql.NullInt64
+		channels         sql.NullInt64
+		bitDepth         sql.NullInt64
+		peakDBFS         sql.NullFloat64
+		isLoopable       sql.NullInt64
+		triCount         sql.NullInt64
+		vertCount        sql.NullInt64
+		bboxX            sql.NullFloat64
+		bboxY            sql.NullFloat64
+		bboxZ            sql.NullFloat64
+		materialCount    sql.NullInt64
+		frameW           sql.NullInt64
+		frameH           sql.NullInt64
+		frameCols        sql.NullInt64
+		frameRows        sql.NullInt64
+		frameSource      sql.NullString
+		paletteJSON      sql.NullString
+		paletteKind      sql.NullString
 	)
 	if err := row.Scan(
 		&a.ID, &a.PackID, &a.PackName, &a.PackSlug, &a.PackRelPath, &a.RelPath,
@@ -384,10 +481,31 @@ func scanAsset(row scanner) (Asset, error) {
 		&derived.isPixelArt, &derived.phash,
 		&derived.frameCount, &derived.fps, &derived.animationNames,
 		&a.DeriveState, &a.DeriveError, &a.DeriveVersion,
+		&durationMS, &sampleRate, &channels, &bitDepth, &peakDBFS, &isLoopable,
+		&triCount, &vertCount, &bboxX, &bboxY, &bboxZ, &materialCount,
+		&frameW, &frameH, &frameCols, &frameRows, &frameSource,
+		&paletteJSON, &paletteKind,
 	); err != nil {
 		return Asset{}, err
 	}
 	derived.apply(&a)
+	a.DurationMS = int(durationMS.Int64)
+	a.SampleRate = int(sampleRate.Int64)
+	a.Channels = int(channels.Int64)
+	a.BitDepth = int(bitDepth.Int64)
+	a.PeakDBFS = peakDBFS.Float64
+	a.IsLoopable = isLoopable.Valid && isLoopable.Int64 != 0
+	a.TriCount = int(triCount.Int64)
+	a.VertCount = int(vertCount.Int64)
+	a.BBoxX, a.BBoxY, a.BBoxZ = bboxX.Float64, bboxY.Float64, bboxZ.Float64
+	a.MaterialCount = int(materialCount.Int64)
+	a.FrameW = int(frameW.Int64)
+	a.FrameH = int(frameH.Int64)
+	a.FrameCols = int(frameCols.Int64)
+	a.FrameRows = int(frameRows.Int64)
+	a.FrameSource = frameSource.String
+	a.PaletteJSON = paletteJSON.String
+	a.PaletteKind = paletteKind.String
 
 	a.ModTime = time.Unix(mtime, 0)
 	a.FirstSeenAt = time.Unix(firstSeen, 0)

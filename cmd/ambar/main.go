@@ -27,6 +27,13 @@ Usage:
   ambar serve                       run the HTTP server
   ambar scan [--dry-run]            index the library
   ambar derive                      generate thumbnails for anything missing them
+  ambar ingest <archive>            extract an archive into the library (§5)
+  ambar retag                       apply automatic path and type tags (§7)
+  ambar sidecar sync|import         write or import .ambar.json metadata (§3)
+  ambar rebuild-index               drop and rebuild the DB from the filesystem (§12)
+  ambar verify                      re-hash files to detect bit rot (§12)
+  ambar backup                      VACUUM INTO a timestamped copy (§12)
+  ambar junk                        report removable clutter, reporting only (§9.1)
   ambar user add <username>         create a user (there is no self-registration)
   ambar user list                   list users
   ambar version                     print version information
@@ -60,6 +67,20 @@ func run(args []string) error {
 		return runScan(args[1:])
 	case "derive":
 		return runDerive(args[1:])
+	case "ingest":
+		return runIngest(args[1:])
+	case "retag":
+		return runRetag(args[1:])
+	case "sidecar":
+		return runSidecar(args[1:])
+	case "rebuild-index":
+		return runRebuildIndex(args[1:])
+	case "verify":
+		return runVerify(args[1:])
+	case "backup":
+		return runBackup(args[1:])
+	case "junk":
+		return runJunk(args[1:])
 	case "user":
 		return runUser(args[1:])
 	case "version", "--version", "-version":

@@ -4,7 +4,8 @@
 <div class="stack">
 
   <form method="get" action="/assets" class="searchbar" role="search">
-    <input type="search" name="q" value="{{.Search}}" placeholder="Search filenames and packs…"
+    <input type="search" name="q" value="{{.Search}}"
+           placeholder="Search: wooden sword, type:model, theme:sci-fi -style:realistic…"
            autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Search assets">
     {{/* Filters travel with the search so submitting does not silently drop them. */}}
     {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
@@ -15,6 +16,33 @@
     {{end}}
   </form>
 
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  {{/* §7 saved searches: pinnable shortcuts, plus a save form for the current one. */}}
+  {{if .SavedSearches}}
+    <nav class="facets" aria-label="Saved searches">
+      <span class="facets-label">saved</span>
+      {{range .SavedSearches}}
+        <span class="chip saved-chip">
+          <a href="/assets?q={{.Query}}">{{.Name}}</a>
+          <form method="post" action="/searches/{{.ID}}/delete" class="tag-remove">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <button type="submit" aria-label="Delete saved search {{.Name}}" title="Delete">×</button>
+          </form>
+        </span>
+      {{end}}
+    </nav>
+  {{end}}
+  {{if .Search}}
+    <form method="post" action="/searches" class="save-search">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="q" value="{{.Search}}">
+      {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+      <input type="text" name="name" placeholder="Name this search to pin it" aria-label="Saved search name">
+      <button type="submit">Save search</button>
+    </form>
+  {{end}}
+
   {{if .Stats}}
     <nav class="kinds" aria-label="Filter by kind">
       <a href="/assets{{if .Search}}?q={{.Search}}{{end}}"
@@ -24,6 +52,19 @@
            href="/assets?kind={{.Kind}}{{if $.Search}}&amp;q={{$.Search}}{{end}}">{{.Kind}} {{.Count}}</a>
       {{end}}
     </nav>
+
+    {{/* §7 faceted sidebar: tags present in the current result set, live counts,
+         zero-match tags already excluded by the query. Clicking one narrows the
+         search by appending the tag — drill-down, not a static cloud. */}}
+    {{if .Facets}}
+      <nav class="facets" aria-label="Filter by tag">
+        <span class="facets-label">tags</span>
+        {{range .Facets}}
+          <a class="chip"
+             href="/assets?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">{{.Canonical}} <span class="facet-n">{{.Count}}</span></a>
+        {{end}}
+      </nav>
+    {{end}}
 
     {{if .Stats.Missing}}
       {{/* §12: these rows are kept, never deleted. Say so plainly, because a
@@ -56,13 +97,45 @@
     </p>
 
     {{if .Page.Groups}}
+      {{/* §8 keyboard audition. A no-op until enabled and only meaningful when the
+           results contain audio; audition.js wires the keys. */}}
+      <div class="audition" id="audition" hidden
+           data-tag-url-template="/assets/ID/tags">
+        <button type="button" data-role="toggle">▶ Audition audio (a)</button>
+        <span class="audition-now" data-role="now"></span>
+        <label class="audition-tag">quick-tag (press <kbd>t</kbd>):
+          <input type="text" data-role="quicktag" placeholder="namespace:name" autocomplete="off">
+        </label>
+        <span class="hint">↑/↓ next·prev · space play/pause · esc exit</span>
+      </div>
+
+      {{/* §7 bulk tagging. The whole grid is a form: check tiles and "Tag
+           selected", or "Tag all N matches" to tag the entire result set — the
+           second is the "tag everything matching this search" of §7. */}}
+      <form method="post" action="/assets/tags/bulk" class="bulkform">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <input type="hidden" name="q" value="{{.Search}}">
+        {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+        {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+        <div class="bulkbar">
+          <input type="text" name="tag" placeholder="tag to apply — namespace:name"
+                 list="bulk-suggestions" autocomplete="off" aria-label="Tag to apply"
+                 hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
+                 hx-target="#bulk-suggestions" hx-swap="innerHTML" hx-params="*">
+          <datalist id="bulk-suggestions"></datalist>
+          <button type="submit" name="scope" value="selected">Tag selected</button>
+          <button type="submit" name="scope" value="all">Tag all {{.Page.Total}} match{{if ne .Page.Total 1}}es{{end}}</button>
+        </div>
+
       {{/* One tile per logical asset, not per file. §5.1: "Indexing them
            independently means every sprite appears three or four times and the grid
            becomes noise." Also invariant 7. */}}
       <ul class="thumbgrid" id="thumbgrid">
         {{range $group := .Page.Groups}}
           {{with $group.Primary}}
-            <li class="tile{{if .Missing}} tile-missing{{end}}">
+            <li class="tile{{if .Missing}} tile-missing{{end}}{{if .IsAudio}} tile-audio{{end}}"
+                {{if .IsAudio}}data-audio="/assets/{{.ID}}/audio" data-asset-id="{{.ID}}" data-title="{{.Filename}}"{{end}}>
+              <label class="tilecheck"><input type="checkbox" name="id" value="{{.ID}}" aria-label="Select {{.Filename}}"></label>
               <a class="tilelink" href="/assets/{{.ID}}">
                 <span class="thumb{{if .IsPixelArt}} thumb-pixelated{{end}}">
                   {{if .HasPreview}}
@@ -109,14 +182,17 @@
              hx-select-oob="#more">Load more</a>
         </div>
       {{end}}
+      </form>
     {{else}}
       <div class="card">
         {{if .Search}}
           <p>Nothing matched “{{.Search}}”.</p>
           <p class="hint">
-            Search covers filenames and pack names. Words are matched as prefixes,
-            so <code>swo</code> finds <code>wooden_sword_01.glb</code>.
-            The full query language — tags, negation, numeric comparisons — arrives in M3.
+            Words match filenames, packs and tags as prefixes, so <code>swo</code> finds
+            <code>wooden_sword_01.glb</code>. You can also filter by
+            <code>type:model</code>, <code>theme:sci-fi</code>, negate with
+            <code>-style:realistic</code>, compare with <code>width:&gt;=64</code>, and
+            combine groups with <code>OR</code>.
           </p>
         {{else if .Stats}}
           {{if eq .Stats.Assets 0}}

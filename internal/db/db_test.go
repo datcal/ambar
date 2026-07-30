@@ -154,34 +154,21 @@ func TestMigrationsCreateOnlyShippedTables(t *testing.T) {
 		return n > 0
 	}
 
-	// M0 (0001_init), M1 (0002_library) and M2 (0003_derive).
+	// M0 (0001_init), M1 (0002_library), M2 (0003_derive) and M3 (0004_tags).
 	for _, name := range []string{
 		"schema_migrations", "users", "sessions", "audit_log",
 		"packs", "assets", "assets_fts",
 		"jobs", "asset_groups",
+		"tags", "tag_closure", "tag_aliases", "asset_tags", "pack_tags",
+		"saved_searches", "licenses", "api_tokens",
+		"projects", "project_uses",
 	} {
 		if !exists(name) {
 			t.Errorf("table %q is missing", name)
 		}
 	}
-
-	// Tables from §4 that belong to later milestones. If one appears here it was
-	// created ahead of the code that reads it.
-	for name, milestone := range map[string]string{
-		"licenses":       "M4",
-		"tags":           "M3",
-		"tag_aliases":    "M3",
-		"asset_tags":     "M3",
-		"pack_tags":      "M3",
-		"projects":       "M9",
-		"project_uses":   "M9",
-		"saved_searches": "M3",
-		"api_tokens":     "M8",
-	} {
-		if exists(name) {
-			t.Errorf("table %q exists but belongs to %s", name, milestone)
-		}
-	}
+	// Every §4 table now ships. New future-milestone tables, if any are sketched
+	// later, would be asserted absent here.
 }
 
 // TestForeignKeysEnforced proves foreign_keys=ON is doing something, since a

@@ -569,7 +569,10 @@ func TestGenerateUnsupportedFormats(t *testing.T) {
 	libRoot := t.TempDir()
 	dataRoot := t.TempDir()
 
-	for _, ext := range []string{"xcf", "tga", "hdr", "exr", "glb", "wav", "zzz"} {
+	// .wav/.mp3/.ogg/.flac (M5) and .glb/.gltf (M6) now derive; a *malformed* one
+	// is a failure, tested separately. These remain formats with no decoder at all.
+	// (.hdr/.exr are HDRI, still unsupported until their own path lands.)
+	for _, ext := range []string{"xcf", "tga", "hdr", "exr", "zzz"} {
 		path := filepath.Join(libRoot, "file."+ext)
 		if err := os.WriteFile(path, []byte("some bytes"), 0o644); err != nil {
 			t.Fatal(err)
@@ -780,5 +783,134 @@ func TestTransitionRatiosAreWellSeparated(t *testing.T) {
 			t.Errorf("%s scores %.3f, uncomfortably close to the %.2f threshold",
 				tc.name, a.SoftTransitionRatio, pixelArtMaxSoftRatio)
 		}
+	}
+}
+
+// TestGenerateAudioWAV proves the M5 audio path: a real WAV yields metadata and
+// a peaks.json rather than an image.
+func TestGenerateAudioWAV(t *testing.T) {
+	libRoot := t.TempDir()
+	dataRoot := t.TempDir()
+
+	// A minimal 16-bit mono WAV: 4410 samples (0.1 s) of a soft tone.
+	var pcm bytes.Buffer
+	for i := 0; i < 4410; i++ {
+		v := int16(8000 * math.Sin(2*3.141592653589793*440*float64(i)/44100))
+		pcm.WriteByte(byte(v))
+		pcm.WriteByte(byte(v >> 8))
+	}
+	body := pcm.Bytes()
+	var w bytes.Buffer
+	w.WriteString("RIFF")
+	writeU32(&w, uint32(36+len(body)))
+	w.WriteString("WAVEfmt ")
+	writeU32(&w, 16)
+	writeU16(&w, 1)
+	writeU16(&w, 1)
+	writeU32(&w, 44100)
+	writeU32(&w, 44100*2)
+	writeU16(&w, 2)
+	writeU16(&w, 16)
+	w.WriteString("data")
+	writeU32(&w, uint32(len(body)))
+	w.Write(body)
+
+	path := filepath.Join(libRoot, "beep.wav")
+	if err := os.WriteFile(path, w.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := ContentHash(w.Bytes())
+
+	res, err := Generate(GenerateOptions{AbsPath: path, Ext: "wav", SHA256: hash, DataRoot: dataRoot})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if res.Audio == nil {
+		t.Fatal("no audio metadata produced")
+	}
+	if res.Audio.SampleRate != 44100 || res.Audio.Channels != 1 || res.Audio.BitDepth != 16 {
+		t.Errorf("audio metadata wrong: %+v", res.Audio)
+	}
+	rel, _ := Dir(hash)
+	if _, err := os.Stat(filepath.Join(dataRoot, rel, FilePeaks)); err != nil {
+		t.Errorf("peaks.json not written: %v", err)
+	}
+}
+
+func writeU32(w *bytes.Buffer, v uint32) {
+	w.WriteByte(byte(v))
+	w.WriteByte(byte(v >> 8))
+	w.WriteByte(byte(v >> 16))
+	w.WriteByte(byte(v >> 24))
+}
+func writeU16(w *bytes.Buffer, v uint16) {
+	w.WriteByte(byte(v))
+	w.WriteByte(byte(v >> 8))
+}
+
+func TestGenerateFBXNeedsBlender(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mesh.fbx")
+	os.WriteFile(path, []byte("Kaydara FBX Binary"), 0o644)
+	_, err := Generate(GenerateOptions{
+		AbsPath: path, Ext: "fbx", SHA256: ContentHash([]byte("Kaydara FBX Binary")), DataRoot: dir,
+	})
+	if !isNeedsBlender(err) {
+		t.Errorf(".fbx returned %v, want ErrNeedsBlender", err)
+	}
+}
+
+func isNeedsBlender(err error) bool {
+	for err != nil {
+		if err == ErrNeedsBlender {
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}
+
+func TestGenerateSpritesheet(t *testing.T) {
+	libRoot := t.TempDir()
+	dataRoot := t.TempDir()
+
+	// A 4x3 grid of 20px cells with transparent seam lines — a clean sheet.
+	cols, rows, cell := 4, 3, 20
+	w, h := cols*cell, rows*cell
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if (x%cell == 0 && x > 0) || (y%cell == 0 && y > 0) {
+				img.Set(x, y, color.RGBA{})
+			} else {
+				img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 0x80, A: 0xff})
+			}
+		}
+	}
+	path := writePNG(t, libRoot, "hero_sheet.png", img)
+	data, _ := os.ReadFile(path)
+	hash := ContentHash(data)
+
+	res, err := Generate(GenerateOptions{AbsPath: path, Ext: "png", SHA256: hash, DataRoot: dataRoot})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if res.Sheet == nil {
+		t.Fatal("no spritesheet detected on a clean sheet")
+	}
+	if res.Sheet.Cols != cols || res.Sheet.Rows != rows {
+		t.Errorf("grid = %dx%d, want %dx%d", res.Sheet.Cols, res.Sheet.Rows, cols, rows)
+	}
+	if !res.Sheet.Confident {
+		t.Errorf("clean sheet not confident")
+	}
+	// A confident sheet gets an animated preview.
+	rel, _ := Dir(hash)
+	if _, err := os.Stat(filepath.Join(dataRoot, rel, FileSheet)); err != nil {
+		t.Errorf("sheet.gif not written: %v", err)
 	}
 }

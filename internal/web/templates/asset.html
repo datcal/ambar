@@ -29,9 +29,57 @@
     <p class="note">No preview is available: {{.DeriveError}}</p>
   {{else if eq .DeriveState "pending"}}
     <p class="note">A preview is still being generated. <a href="/jobs">Background work</a>.</p>
+  {{else if eq .DeriveState "needs_blender"}}
+    {{/* §6: FBX/.blend need the runtime-downloaded Blender, not yet installed. */}}
+    <p class="note note-warn">
+      This format needs Blender to preview, which is not installed yet. The asset is fully
+      usable and downloadable; a preview will appear once Blender is available.
+    </p>
   {{end}}
 
-  {{if .HasPreview}}
+  {{if and .IsModel .HasModelPreview}}
+    {{/* §8 3D viewer: three.js loads the normalised preview.glb. The vendored
+         library is loaded only here, so an all-2D library never ships 600 KB of
+         it. Scripts are deferred, so THREE is defined before the island runs. */}}
+    <div class="model" id="model-viewer" data-src="/assets/{{.ID}}/preview.glb">
+      <div class="viewer-toolbar">
+        <span class="viewer-group">
+          <button type="button" data-toggle="wire">Wireframe</button>
+          <button type="button" data-toggle="scale" title="1.8 m human-height reference">1.8 m ref</button>
+        </span>
+        <span class="viewer-status" data-role="status"></span>
+      </div>
+      <div class="model-stage" data-role="stage">
+        <canvas data-role="canvas"></canvas>
+      </div>
+      <p class="hint viewer-hint">Drag to orbit · scroll to zoom · right-drag to pan.</p>
+    </div>
+    <script src="/static/vendor/three/three.min.js" defer></script>
+    <script src="/static/vendor/three/GLTFLoader.js" defer></script>
+    <script src="/static/vendor/three/OrbitControls.js" defer></script>
+    <script src="/static/model-viewer.js" defer></script>
+  {{end}}
+
+  {{if .IsAudio}}
+    {{/* §8 audio viewer: a canvas waveform drawn from the stored peaks, click to
+         seek, space to play. Config travels in data- attributes so the CSP needs
+         no inline script. */}}
+    <div class="audio" id="audio-viewer"
+         data-peaks="/assets/{{.ID}}/peaks.json"
+         data-src="/assets/{{.ID}}/audio"
+         data-loopable="{{if .IsLoopable}}true{{else}}false{{end}}">
+      <canvas class="waveform" data-role="waveform" height="140" aria-label="Waveform"></canvas>
+      <div class="audio-controls">
+        <button type="button" data-role="play" aria-label="Play or pause">▶ Play</button>
+        <button type="button" data-role="loop"{{if .IsLoopable}} class="on"{{end}}>Loop</button>
+        <span class="audio-time"><span data-role="time">0:00</span> / {{.Duration}}</span>
+        <span class="hint">Space to play, click the waveform to seek.</span>
+      </div>
+      <audio data-role="player" preload="metadata" src="/assets/{{.ID}}/audio"></audio>
+    </div>
+  {{end}}
+
+  {{if and .HasPreview (not .IsAudio)}}
     {{/* The 2D viewer from §8: zoom, pan, background toggle.
          It loads preview.webp rather than the original — §11 forbids serving library
          content inline, and these bytes came from our own encoder. Configuration
@@ -72,6 +120,75 @@
         {{if .IsPixelArt}}Pixel art: rendered without smoothing above 100%.{{end}}
       </p>
     </div>
+  {{end}}
+
+  {{if .HasPalette}}
+    {{/* §8 palette panel: the working tool a pixel artist needs to match colours.
+         Swatch chips get their background from data-hex in JS, not an inline
+         style, so the CSP stays free of 'unsafe-inline'. Click copies; the format
+         is a user preference; a document.execCommand fallback keeps copy working
+         on plain-HTTP LAN where navigator.clipboard is unavailable. */}}
+    <div class="card palette" id="palette-panel"
+         data-approx="{{if .PaletteApprox}}true{{else}}false{{end}}">
+      <div class="palette-head">
+        <h2>Palette
+          {{if .PaletteApprox}}
+            <span class="badge badge-warn" title="a median-cut summary, not exact">approximate</span>
+          {{else}}
+            <span class="badge">exact · {{len .PaletteSwatches}} colours</span>
+          {{end}}
+        </h2>
+        <div class="palette-controls">
+          <label class="palette-copyfmt">Copy as
+            <select data-role="copy-format" aria-label="Copy format">
+              <option value="hex">#RRGGBB</option>
+              <option value="hexbare">RRGGBB</option>
+              <option value="rgb">rgb(r, g, b)</option>
+              <option value="rgbbare">r, g, b</option>
+              <option value="gd">Color(r, g, b)</option>
+            </select>
+          </label>
+          <span class="viewer-group" role="group" aria-label="Sort">
+            <button type="button" data-sort="frequency" class="on">Frequency</button>
+            <button type="button" data-sort="perceptual" title="Hue then lightness — reveals ramps">Perceptual</button>
+          </span>
+          <button type="button" data-toggle="greyscale" title="Check the value structure">Greyscale</button>
+        </div>
+      </div>
+
+      <ul class="swatches" data-role="swatches">
+        {{range .PaletteSwatches}}
+          <li>
+            <button type="button" class="swatch"
+                    data-hex="{{.Hex}}" data-r="{{.R}}" data-g="{{.G}}" data-b="{{.B}}"
+                    title="{{.Hex}} · {{.Count}} px · {{.Percent}}% of visible">
+              <span class="swatch-chip" aria-hidden="true"></span>
+              <span class="swatch-meta"><code>{{.Hex}}</code> <small>{{.Percent}}%</small></span>
+            </button>
+          </li>
+        {{end}}
+      </ul>
+
+      <p class="palette-status" data-role="status" role="status" aria-live="polite"></p>
+      <p class="hint">
+        Click a swatch to copy. Shift-click copies a range.
+        {{if .PaletteApprox}}
+          These swatches are a median-cut summary of a photographic image — approximate, not an exact colour list.
+        {{end}}
+      </p>
+
+      <p class="palette-export">
+        Export:
+        <a href="/assets/{{.ID}}/palette/gpl">.gpl</a> ·
+        <a href="/assets/{{.ID}}/palette/png">.png</a> ·
+        <a href="/assets/{{.ID}}/palette/txt">.txt</a> ·
+        <a href="/assets/{{.ID}}/palette/json">.json</a> ·
+        <a href="/assets/{{.ID}}/palette/css">.css</a> ·
+        <a href="/assets/{{.ID}}/palette/gd">.gd</a> ·
+        <a href="/assets/{{.ID}}/palette/tres">.tres</a>
+      </p>
+    </div>
+    <script src="/static/palette.js" defer></script>
   {{end}}
 
   {{if $.Group}}
@@ -122,6 +239,35 @@
     {{end}}
   {{end}}
 
+  {{if $.Flash}}<p class="note note-ok" role="status">{{$.Flash}}</p>{{end}}
+
+  {{if .IsSheet}}
+    {{/* §6 spritesheet: show the proposed grid as an overlay and let the user
+         confirm in one click or correct the columns/rows. A detected guess is
+         never trusted silently — the badge says so until it is confirmed. */}}
+    <div class="card sheet-panel">
+      <h2>Spritesheet
+        {{if .SheetConfirmed}}<span class="badge">{{.FrameSource}}</span>
+        {{else}}<span class="badge badge-warn">detected — please confirm</span>{{end}}
+      </h2>
+      <div class="sheet-overlay" style="--cols: {{.FrameCols}}; --rows: {{.FrameRows}};">
+        <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}">
+        <div class="sheet-grid"></div>
+      </div>
+      <p class="hint">
+        {{.FrameCols}} × {{.FrameRows}} = {{.FrameCount}} frames, {{.FrameW}}×{{.FrameH}} px each.
+      </p>
+      <form method="post" action="/assets/{{.ID}}/frames" class="sheet-form">
+        <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+        <label>Columns <input type="number" name="cols" value="{{.FrameCols}}" min="1" max="256"></label>
+        <label>Rows <input type="number" name="rows" value="{{.FrameRows}}" min="1" max="256"></label>
+        <button type="submit">{{if .SheetConfirmed}}Update grid{{else}}Confirm grid{{end}}</button>
+      </form>
+    </div>
+  {{end}}
+
+  {{template "asset-tags" $}}
+
   <div class="card">
     <h2>Details</h2>
     <dl class="facts">
@@ -154,6 +300,20 @@
         <dt>Animations</dt>
         <dd>{{range $i, $n := .AnimationNames}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}</dd>
       {{end}}
+      {{if .IsModel}}
+        {{if .TriCount}}<dt>Triangles</dt><dd>{{.TriCount}}</dd>{{end}}
+        {{if .VertCount}}<dt>Vertices</dt><dd>{{.VertCount}}</dd>{{end}}
+        {{with .BBoxMetres}}<dt>Bounding box</dt><dd>{{.}}</dd>{{end}}
+        {{if .MaterialCount}}<dt>Materials</dt><dd>{{.MaterialCount}}</dd>{{end}}
+      {{end}}
+      {{if .IsAudio}}
+        {{with .Duration}}<dt>Duration</dt><dd>{{.}}</dd>{{end}}
+        {{if .SampleRate}}<dt>Sample rate</dt><dd>{{.SampleRate}} Hz</dd>{{end}}
+        {{if .Channels}}<dt>Channels</dt><dd>{{if eq .Channels 1}}mono{{else if eq .Channels 2}}stereo{{else}}{{.Channels}}{{end}}</dd>{{end}}
+        {{if .BitDepth}}<dt>Bit depth</dt><dd>{{.BitDepth}}-bit</dd>{{end}}
+        {{with .PeakLevel}}<dt>Peak</dt><dd>{{.}}</dd>{{end}}
+        {{if .IsLoopable}}<dt>Loop</dt><dd><span class="badge">probably loopable</span></dd>{{end}}
+      {{end}}
       {{with .Ext}}<dt>Extension</dt><dd><code>.{{.}}</code></dd>{{end}}
       <dt>SHA-256</dt><dd><code class="hash">{{.SHA256}}</code></dd>
       <dt>Modified</dt><dd>{{.ModTime.Format "2006-01-02 15:04"}}</dd>
@@ -168,3 +328,50 @@
 </div>
 {{end}}
 {{end}}
+
+{{/* The tag panel (§7). Rendered inline on the detail page and returned on its
+     own by the htmx add/remove handlers, so it is defined as a swappable block
+     keyed on #tag-panel. The dot here is the whole page data, not the asset. */}}
+{{define "asset-tags"}}
+<div id="tag-panel" class="card">
+  <h2>Tags</h2>
+  {{if .TagError}}<p class="note note-warn">{{.TagError}}</p>{{end}}
+  {{if .AssetTags}}
+    <ul class="tags">
+      {{range .AssetTags}}
+        <li class="tag{{if .Inherited}} tag-inherited{{end}}">
+          <a href="/assets?q={{.Tag.Canonical}}">{{.Tag.Canonical}}</a>
+          {{if .Inherited}}
+            {{/* §7: pack tags shown greyed, not removable at the asset. */}}
+            <span class="tag-src" title="inherited from the pack">inherited</span>
+          {{else}}
+            {{if ne .Source "manual"}}<span class="tag-src" title="added automatically">{{.Source}}</span>{{end}}
+            <form class="tag-remove" hx-post="/assets/{{$.Asset.ID}}/tags/remove"
+                  hx-target="#tag-panel" hx-swap="outerHTML">
+              <input type="hidden" name="tag_id" value="{{.Tag.ID}}">
+              <button type="submit" aria-label="Remove {{.Tag.Canonical}}" title="Remove">×</button>
+            </form>
+          {{end}}
+        </li>
+      {{end}}
+    </ul>
+  {{else}}
+    <p class="hint">No tags yet.</p>
+  {{end}}
+
+  <form class="tag-add" hx-post="/assets/{{.Asset.ID}}/tags" hx-target="#tag-panel" hx-swap="outerHTML">
+    <input type="text" name="tag" placeholder="namespace:name" autocomplete="off"
+           list="tag-suggestions" aria-label="Add a tag"
+           hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
+           hx-target="#tag-suggestions" hx-swap="innerHTML" hx-params="*">
+    <datalist id="tag-suggestions">{{template "tag-options" .}}</datalist>
+    <button type="submit">Add</button>
+  </form>
+  <p class="hint">
+    Use <code>namespace:name</code> — e.g. <code>theme:sci-fi</code>, <code>license:cc0</code>.
+    Aliases and hierarchy work when searching.
+  </p>
+</div>
+{{end}}
+
+{{define "tag-options"}}{{range .Suggest}}<option value="{{.}}"></option>{{end}}{{end}}

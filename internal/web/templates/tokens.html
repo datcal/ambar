@@ -1,0 +1,80 @@
+{{define "title"}}API tokens — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>API tokens</h1>
+  <p class="hint">
+    For the Godot plugin and scripts. Each device should use its own token, so one can be
+    revoked without disrupting the other (§11). The token is shown once, here, and never again.
+  </p>
+
+  {{if .NewToken}}
+    <div class="card token-new">
+      <h2>New token — copy it now</h2>
+      <p class="hint">This is the only time it will be shown. Store it in your Godot editor
+        settings or your <code>.env</code>.</p>
+      <pre class="token-value"><code>{{.NewToken}}</code></pre>
+    </div>
+  {{end}}
+
+  {{if .TokenError}}<p class="note note-warn">{{.TokenError}}</p>{{end}}
+
+  <div class="card">
+    <h2>Create a token</h2>
+    <form method="post" action="/settings/tokens" class="stack">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><label>Name<br><input type="text" name="name" placeholder="laptop" required></label></p>
+      <p>
+        Scopes:
+        <label><input type="checkbox" name="scope" value="read" checked disabled> read</label>
+        <label><input type="checkbox" name="scope" value="write"> write</label>
+        <label><input type="checkbox" name="scope" value="admin"> admin</label>
+      </p>
+      <p><label>Expires (optional)<br><input type="date" name="expires"></label></p>
+      <p><button type="submit">Create token</button></p>
+    </form>
+  </div>
+
+  {{if .Tokens}}
+    <div class="tablewrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Scopes</th>
+            <th scope="col">Last used</th>
+            <th scope="col">Expires</th>
+            <th scope="col">Status</th>
+            <th scope="col"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Tokens}}
+            <tr{{if or .Revoked .Expired}} class="row-missing"{{end}}>
+              <td>{{.Name}}</td>
+              <td><code>{{range $i, $s := .Scopes}}{{if $i}},{{end}}{{$s}}{{end}}</code></td>
+              <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02"}}{{else}}<span class="hint">never</span>{{end}}</td>
+              <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02"}}{{else}}<span class="hint">—</span>{{end}}</td>
+              <td>
+                {{if .Revoked}}<span class="badge">revoked</span>
+                {{else if .Expired}}<span class="badge badge-warn">expired</span>
+                {{else}}<span class="badge">active</span>{{end}}
+              </td>
+              <td class="num">
+                {{if not .Revoked}}
+                  <form method="post" action="/settings/tokens/{{.ID}}/revoke" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+                    <button type="submit" class="linkish">revoke</button>
+                  </form>
+                {{end}}
+              </td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  {{else}}
+    <p class="hint">No tokens yet.</p>
+  {{end}}
+</div>
+{{end}}

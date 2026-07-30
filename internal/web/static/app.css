@@ -496,3 +496,312 @@ a { color: var(--accent); }
 }
 
 h2 { font-size: 1rem; margin: 0 0 0.6rem; }
+
+/* --- tags (§7) --- */
+.tags {
+  list-style: none;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 0.82rem;
+}
+.tag a { font-family: var(--mono); text-decoration: none; color: var(--accent); }
+.tag a:hover { text-decoration: underline; }
+/* §7: inherited pack tags shown greyed. */
+.tag-inherited { opacity: 0.7; }
+.tag-inherited a { color: var(--muted); }
+.tag-src {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tag-remove { display: inline; margin: 0; }
+.tag-remove button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+.tag-remove button:hover { color: var(--error); }
+.tag-add { display: flex; gap: 0.4rem; max-width: 28rem; }
+.tag-add input { flex: 1; }
+
+.facets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: -0.3rem 0 0.2rem;
+}
+.facets-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.facets .chip { font-family: var(--mono); font-size: 0.8rem; }
+.facet-n { color: var(--muted); }
+
+/* --- saved searches, bulk tagging (§7) --- */
+.note-ok { background: #2b5f3a2e; color: #86c99a; border-color: transparent; }
+.saved-chip { display: inline-flex; align-items: center; gap: 0.2rem; }
+.saved-chip a { text-decoration: none; color: var(--accent); }
+.save-search { display: flex; gap: 0.4rem; max-width: 30rem; margin: -0.2rem 0 0.2rem; }
+.save-search input[type=text] { flex: 1; }
+.bulkform { margin: 0; }
+.bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.7rem;
+  padding: 0.5rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.bulkbar input[type=text] { flex: 1; min-width: 12rem; }
+.tile { position: relative; }
+.tilecheck {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  z-index: 2;
+  background: var(--surface);
+  border-radius: 3px;
+  padding: 0.1rem;
+  line-height: 0;
+}
+
+/* --- audio viewer (§8) --- */
+.audio { margin-bottom: 1rem; }
+.waveform {
+  display: block;
+  width: 100%;
+  height: 140px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.audio-controls button {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.audio-controls button.on { border-color: var(--accent); color: var(--accent); }
+.audio-time { font-family: var(--mono); color: var(--muted); }
+
+/* --- keyboard audition (§8) --- */
+.audition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.audition button[data-role="toggle"] {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.audition button.on { border-color: var(--accent); color: var(--accent); }
+.audition-now { font-family: var(--mono); color: var(--accent); min-width: 8rem; }
+.audition-tag input { width: 12rem; }
+kbd {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.tile.auditioning { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tile.tagged { outline: 2px solid #86c99a; outline-offset: 2px; }
+.tile.tag-failed { outline: 2px solid var(--error); outline-offset: 2px; }
+
+/* --- 3D model viewer (§8) --- */
+.model { margin-bottom: 1rem; }
+.model-stage {
+  width: 100%;
+  height: 60vh;
+  max-height: 620px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg);
+}
+.model-stage canvas { display: block; width: 100%; height: 100%; }
+
+/* --- spritesheet grid overlay (§6) --- */
+.sheet-overlay { position: relative; display: inline-block; max-width: 100%; }
+.sheet-overlay img {
+  display: block;
+  max-width: 100%;
+  image-rendering: pixelated;
+  background: repeating-conic-gradient(#2c313a 0% 25%, #22262d 0% 50%) 50% / 20px 20px;
+}
+.sheet-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(to right, rgba(110,168,254,.6) 0 1px, transparent 1px calc(100% / var(--cols))),
+    repeating-linear-gradient(to bottom, rgba(110,168,254,.6) 0 1px, transparent 1px calc(100% / var(--rows)));
+}
+.sheet-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.sheet-form input[type=number] { width: 5rem; }
+
+/* --- API tokens (§11) --- */
+.token-new { border-color: var(--accent); }
+.token-value {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  overflow-x: auto;
+  user-select: all;
+}
+.token-value code { color: var(--accent); font-family: var(--mono); }
+
+/* Palette panel (§8). Swatch chip colours are set from data-hex in palette.js
+   through the CSSOM, not an inline style attribute, so the CSP stays free of
+   'unsafe-inline'. */
+.palette-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  justify-content: space-between;
+}
+.palette-head h2 { margin: 0; }
+
+.palette-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+.palette-copyfmt {
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.palette-copyfmt select {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.3rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.palette-controls .viewer-group button,
+.palette-controls > button {
+  margin: 0;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.palette-controls .viewer-group button:hover,
+.palette-controls > button:hover { color: var(--text); }
+.palette-controls .viewer-group button.on,
+.palette-controls > button.on { border-color: var(--accent); color: var(--accent); }
+
+.swatches {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: 0.4rem;
+}
+.swatches li { margin: 0; }
+
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.swatch:hover { border-color: var(--accent); }
+.swatch.copied { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+
+.swatch-chip {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 4px;
+  /* A subtle inset border so a white or near-background swatch is still visible
+     against the card, and a checker underlay is unnecessary since these colours
+     are always fully opaque. */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+}
+.swatch-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  overflow: hidden;
+}
+.swatch-meta code { font-family: var(--mono); font-size: 0.78rem; }
+.swatch-meta small { color: var(--muted); font-size: 0.7rem; }
+
+/* Greyscale check (§8): desaturate every chip to read the value structure. */
+.palette.greyscale .swatch-chip { filter: grayscale(1); }
+
+.palette-status {
+  margin: 0.6rem 0 0;
+  min-height: 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+.palette-export { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
+.palette-export a { margin: 0; }

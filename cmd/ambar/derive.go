@@ -65,6 +65,7 @@ func runDerive(args []string) error {
 		DataRoot:    cfg.DataRoot,
 		MaxPixels:   cfg.MaxImagePixels,
 		Log:         log,
+		BlenderBin:  cfg.BlenderBin,
 	}).Register(queue)
 
 	// A scan job could be sitting in the queue from the UI. Registering the handler

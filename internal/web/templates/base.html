@@ -3,12 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {{/* Read by JS islands that POST outside htmx (the audition quick-tag, §8). */}}
+  <meta name="csrf-token" content="{{.CSRF}}">
   <title>{{block "title" .}}Ambar{{end}}</title>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
   {{/* The §8 viewer, as an ES module island. It looks for .viewer and does nothing
        when the page has none, so loading it everywhere costs one cached request. */}}
   <script src="/static/viewer2d.js" type="module"></script>
+  {{/* §8 audio viewer island; a no-op on pages without #audio-viewer. */}}
+  <script src="/static/audio.js" defer></script>
+  {{/* §8 keyboard audition island; dormant until the grid has audio tiles. */}}
+  <script src="/static/audition.js" defer></script>
 </head>
 {{/*
   §11: configure hx-headers globally so every htmx request carries the CSRF
@@ -21,6 +27,11 @@
     <nav>
       {{if .User}}
         <a href="/assets">assets</a>
+        <a href="/ingest">ingest</a>
+        <a href="/provenance">provenance</a>
+        <a href="/jobs">jobs</a>
+        <a href="/junk">junk</a>
+        <a href="/settings/tokens">tokens</a>
         <span class="who">{{.User.Username}}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
