@@ -35,7 +35,7 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run check
+.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check
 
 all: check build
 
@@ -132,6 +132,16 @@ user-add: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
 	AMBAR_LIBRARY_ROOT=$(TESTDATA_LIBRARY) \
 	AMBAR_DATA_ROOT=$(TESTDATA_DATA) \
 	$(BIN) user add $(USERNAME)
+
+# Build, ship the image over SSH and restart the container on the NAS. Reads the
+# host and paths from .env (which stays local), so there is nothing environment-
+# specific in the repository. `make deploy-config` skips the image and only
+# re-copies docker-compose.yml and .env — the fast path while iterating.
+deploy:
+	./scripts/deploy.sh
+
+deploy-config:
+	./scripts/deploy.sh --config-only
 
 docker:
 	$(DOCKER) build \

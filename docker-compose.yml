@@ -3,9 +3,12 @@
 # DSM 7.2+ ships Container Manager, which imports this file directly as a
 # "project". Plain `docker compose up -d` over SSH works too.
 
+# Everything environment-specific is interpolated from .env, which stays local
+# (.gitignore). §17: "Never hardcode these — they are configuration", and the
+# repository carries no real paths, uids or hostnames.
 services:
   ambar:
-    image: ghcr.io/datcal/ambar:latest
+    image: ${AMBAR_IMAGE:-ghcr.io/datcal/ambar:latest}
     container_name: ambar
     restart: unless-stopped
 
@@ -17,19 +20,19 @@ services:
     # owned by root and cannot be edited or deleted over SMB afterwards. The
     # container fails to start if it cannot write to /data, which is how a wrong
     # value here surfaces immediately instead of days later.
-    user: "1026:100"
+    user: "${AMBAR_UID:-1026}:${AMBAR_GID:-100}"
 
     ports:
       # host:container. DSM occupies 5000/5001 and several Synology packages take
       # 8080, so pick something unlikely to collide. Check with
       # `sudo netstat -tlnp` before settling on a number.
-      - "8973:8080"
+      - "${AMBAR_HOST_PORT:-8973}:8080"
 
     volumes:
       # The existing library, left exactly as it is. Read-write is required:
       # sidecars are written beside originals and _inbox extracts into the tree.
       # Originals themselves are never modified.
-      - /volume2/game/assets:/library
+      - ${AMBAR_HOST_LIBRARY:-/volume2/game/assets}:/library
 
       # ambar.db, derivatives/, tools/, logs/, backups/.
       #
@@ -39,7 +42,7 @@ services:
       #
       # This must be a real local volume. WAL corrupts on a network filesystem,
       # so never point this at another machine's SMB/NFS share.
-      - /volume2/game/ambar:/data
+      - ${AMBAR_HOST_DATA:-/volume2/game/ambar}:/data
 
     env_file: .env
 
