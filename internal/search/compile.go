@@ -17,6 +17,21 @@ type TagResolver interface {
 	ResolveTag(ctx context.Context, token string) (ids []int64, found bool, err error)
 }
 
+// Swatch is one colour of a reference asset's palette, as PaletteNearTerm needs it.
+type Swatch struct {
+	R, G, B int
+	Ratio   float64
+}
+
+// SwatchResolver reads the palette of the asset a `palette-near:` term names.
+//
+// Separate from TagResolver so a caller that has no palette data (or does not want
+// the query) can supply one and not the other; a nil resolver makes the term match
+// nothing rather than erroring, the same as an unknown tag.
+type SwatchResolver interface {
+	SwatchesOf(ctx context.Context, assetID int64) (swatches []Swatch, found bool, err error)
+}
+
 // Compiled is a boolean SQL expression over an asset table alias, ready to AND
 // into a larger WHERE clause, plus its bound arguments. SQL is empty when the
 // query constrains nothing.
@@ -30,6 +45,12 @@ type Compiled struct {
 // supplies tag id sets. Free-text and tag-alias resolution is why this needs a
 // resolver and a context.
 func Compile(ctx context.Context, q Query, alias string, r TagResolver) (Compiled, error) {
+	return CompileWith(ctx, q, alias, r, nil)
+}
+
+// CompileWith is Compile plus the palette resolver `palette-near:` needs. Compile
+// stays for the many callers that have no colour terms.
+func CompileWith(ctx context.Context, q Query, alias string, r TagResolver, sr SwatchResolver) (Compiled, error) {
 	var (
 		groupSQL []string
 		args     []any
@@ -37,7 +58,7 @@ func Compile(ctx context.Context, q Query, alias string, r TagResolver) (Compile
 	for _, g := range q.Groups {
 		var termSQL []string
 		for _, t := range g.Terms {
-			sql, a, err := compileTerm(ctx, t, alias, r)
+			sql, a, err := compileTerm(ctx, t, alias, r, sr)
 			if err != nil {
 				return Compiled{}, err
 			}
@@ -58,7 +79,7 @@ func Compile(ctx context.Context, q Query, alias string, r TagResolver) (Compile
 	return Compiled{SQL: "(" + strings.Join(groupSQL, " OR ") + ")", Args: args}, nil
 }
 
-func compileTerm(ctx context.Context, t Term, alias string, r TagResolver) (string, []any, error) {
+func compileTerm(ctx context.Context, t Term, alias string, r TagResolver, sr SwatchResolver) (string, []any, error) {
 	switch term := t.(type) {
 	case WordTerm:
 		// A bare word is a tag when it is a known alias/tag, otherwise free text.
@@ -105,7 +126,21 @@ func compileTerm(ctx context.Context, t Term, alias string, r TagResolver) (stri
 		}
 		return negate(fmt.Sprintf("%s.%s %s ?", alias, col, term.Op), term.Neg), []any{val}, nil
 	case ColorTerm:
-		return "", nil, nil // M11.5
+		return colourBoxExpr(alias, term.R, term.G, term.B, term.Tolerance, term.Neg)
+	case PaletteNearTerm:
+		if sr == nil {
+			// No palette data available to compare against: match nothing rather than
+			// pretending, exactly as an unknown tag does.
+			return negate("0 = 1", term.Neg), nil, nil
+		}
+		swatches, found, err := sr.SwatchesOf(ctx, term.AssetID)
+		if err != nil {
+			return "", nil, err
+		}
+		if !found || len(swatches) == 0 {
+			return negate("0 = 1", term.Neg), nil, nil
+		}
+		return paletteNearExpr(alias, swatches, term.Tolerance, term.Neg)
 	default:
 		return "", nil, fmt.Errorf("search: unhandled term %T", t)
 	}
@@ -229,4 +264,101 @@ func negate(expr string, neg bool) string {
 		return "NOT (" + expr + ")"
 	}
 	return expr
+}
+
+// minSwatchRatio ignores swatches that are barely present. "Contains this colour"
+// should not be satisfied by three stray anti-aliased pixels, and a palette's tail
+// is exactly where those live. 0.5% of visible pixels is low enough to keep a small
+// but deliberate accent colour and high enough to drop noise.
+const minSwatchRatio = 0.005
+
+// colourBoxExpr matches assets with a swatch inside a per-channel box around the
+// requested colour (§7: "assets containing that colour, with a tolerance").
+//
+// A box rather than a Euclidean or perceptual distance: it is what the index can
+// answer as three range scans, and it matches what a person means when they paste a
+// hex out of the palette panel. Perceptual distance would be defensible for
+// palette-near, but there the comparison is between two palettes, and see below.
+func colourBoxExpr(alias string, r, g, b, tolerance int, neg bool) (string, []any, error) {
+	expr := fmt.Sprintf(
+		"%s.id IN (SELECT asset_id FROM asset_swatches WHERE "+
+			"r BETWEEN ? AND ? AND g BETWEEN ? AND ? AND b BETWEEN ? AND ? AND ratio >= ?)", alias)
+	args := append(channelRange(r, tolerance), channelRange(g, tolerance)...)
+	args = append(args, channelRange(b, tolerance)...)
+	args = append(args, minSwatchRatio)
+	return negate(expr, neg), args, nil
+}
+
+// paletteNearExpr matches assets whose palette covers most of a reference palette's
+// dominant colours (§7: "assets whose palette is close to a given asset's, by
+// earth-mover or nearest-neighbour distance over swatches").
+//
+// Nearest-neighbour, not earth-mover. §7 allows either, and EMD over swatch
+// distributions needs an optimisation pass per candidate — not something to run
+// inside a SQL filter over 20k assets. This asks a question with the same practical
+// answer: of the reference's dominant colours, how many does the candidate also
+// have? A majority means the two sit next to each other.
+func paletteNearExpr(alias string, swatches []Swatch, tolerance int, neg bool) (string, []any, error) {
+	// The dominant swatches only. A palette's tail is noise for this comparison, and
+	// every extra box costs a CASE arm in the SQL below.
+	const maxRefSwatches = 6
+
+	var (
+		boxes []string
+		args  []any
+	)
+	for _, s := range swatches {
+		if len(boxes) >= maxRefSwatches {
+			break
+		}
+		if s.Ratio < minSwatchRatio {
+			continue
+		}
+		boxes = append(boxes, "(r BETWEEN ? AND ? AND g BETWEEN ? AND ? AND b BETWEEN ? AND ?)")
+		args = append(args, channelRange(s.R, tolerance)...)
+		args = append(args, channelRange(s.G, tolerance)...)
+		args = append(args, channelRange(s.B, tolerance)...)
+	}
+	if len(boxes) == 0 {
+		// The reference has no swatch worth comparing — a nearly transparent image.
+		return negate("0 = 1", neg), nil, nil
+	}
+
+	// Counting distinct *reference* colours matched, not swatch rows: one candidate
+	// swatch sitting between two reference boxes must not count twice, and a candidate
+	// with twelve shades of one reference colour has still only matched one.
+	var arms strings.Builder
+	for i, box := range boxes {
+		fmt.Fprintf(&arms, " WHEN %s THEN %d", box, i)
+	}
+
+	// A majority of the reference's dominant colours. Half of six is the difference
+	// between "same art direction" and "happens to share a brown".
+	need := len(boxes)/2 + 1
+
+	expr := fmt.Sprintf(
+		"%s.id IN (SELECT asset_id FROM asset_swatches WHERE ratio >= ? AND (%s) "+
+			"GROUP BY asset_id HAVING count(DISTINCT CASE%s END) >= ?)",
+		alias, strings.Join(boxes, " OR "), arms.String())
+
+	// The argument order follows the SQL: the ratio floor, then the OR-ed boxes, then
+	// the same boxes again inside the CASE, then the threshold.
+	out := make([]any, 0, 1+len(args)*2+1)
+	out = append(out, minSwatchRatio)
+	out = append(out, args...)
+	out = append(out, args...)
+	out = append(out, need)
+	return negate(expr, neg), out, nil
+}
+
+// channelRange clamps a channel tolerance to 0–255 and returns the BETWEEN bounds.
+func channelRange(v, tolerance int) []any {
+	lo, hi := v-tolerance, v+tolerance
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > 255 {
+		hi = 255
+	}
+	return []any{lo, hi}
 }

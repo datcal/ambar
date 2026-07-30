@@ -167,6 +167,21 @@ function init(root) {
     });
   }
 
+  // The explicit copy icon (M15). The chip itself still copies — that is the panel's
+  // day-to-day action — but the icon makes it discoverable next to the search icon,
+  // and it copies in the currently selected format like everything else here.
+  for (const icon of root.querySelectorAll("[data-copy]")) {
+    icon.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const li = icon.closest("li");
+      const swatch = li ? li.querySelector(".swatch") : null;
+      const text = swatch ? formatColor(swatch, currentFormat()) : icon.dataset.copy;
+      if (swatch) flash(swatch);
+      const ok = await copyText(text);
+      say(ok ? `Copied ${text}` : "Copy failed — select and copy manually");
+    });
+  }
+
   // --- sort: frequency (original order) vs perceptual (hue then lightness) ---
   const sortButtons = root.querySelectorAll("[data-sort]");
   const frequencyOrder = items.slice();

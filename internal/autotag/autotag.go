@@ -76,29 +76,78 @@ type Report struct {
 	PathTags     int // auto_path applications
 	TypeTags     int // auto_type applications
 	DistinctTags int // distinct canonical tags ensured
+	Pruned       int // stale auto tags removed (a reclassified file, a renamed folder)
 }
 
-// Retag walks every asset and applies its auto tags. Tags are ensured once per
-// distinct canonical string and cached, so a 20k-asset library ensures each
-// `folder:rocks` or `type:image` a single time.
+// Retag walks every asset and reconciles its auto tags: what applies now is
+// applied, and what no longer applies is removed. Tags are ensured once per distinct
+// canonical string and cached, so a 20k-asset library ensures each `folder:rocks` or
+// `type:image` a single time.
 func (tg *Tagger) Retag(ctx context.Context) (Report, error) {
-	var rep Report
-
-	rows, err := tg.db.Reader.QueryContext(ctx, `
-		SELECT id, rel_path, kind, is_pixel_art, has_alpha, frame_count FROM assets`)
+	assets, err := tg.loadAssets(ctx, "", nil)
 	if err != nil {
-		return rep, fmt.Errorf("retag: load assets: %w", err)
+		return Report{}, err
+	}
+	return tg.apply(ctx, assets)
+}
+
+// RetagAssets reconciles the auto tags of specific assets. Used after a single
+// asset's analysis lands, where a full sweep would be absurd.
+func (tg *Tagger) RetagAssets(ctx context.Context, ids []int64) (Report, error) {
+	if len(ids) == 0 {
+		return Report{}, nil
+	}
+	args := make([]any, 0, len(ids))
+	ph := make([]byte, 0, len(ids)*3)
+	for i, id := range ids {
+		if i > 0 {
+			ph = append(ph, ',', ' ')
+		}
+		ph = append(ph, '?')
+		args = append(args, id)
+	}
+	assets, err := tg.loadAssets(ctx, "WHERE id IN ("+string(ph)+")", args)
+	if err != nil {
+		return Report{}, err
+	}
+	return tg.apply(ctx, assets)
+}
+
+// RetagContent reconciles every asset holding the given content hash.
+//
+// This is the hook derive uses: `style:pixel-art` and `has:alpha` come from image
+// analysis, so they cannot be right until that analysis exists, and analysis is keyed
+// on content — every asset with these bytes gets the same answer.
+func (tg *Tagger) RetagContent(ctx context.Context, sha256hex string) (Report, error) {
+	assets, err := tg.loadAssets(ctx, "WHERE sha256 = ? AND missing_since IS NULL", []any{sha256hex})
+	if err != nil {
+		return Report{}, err
+	}
+	return tg.apply(ctx, assets)
+}
+
+// assetRow is what tagging needs about an asset.
+type assetRow struct {
+	id       int64
+	relPath  string
+	kind     string
+	pixelArt bool
+	hasAlpha bool
+	frames   int
+}
+
+// loadAssets reads the tagging inputs, optionally filtered.
+func (tg *Tagger) loadAssets(ctx context.Context, where string, args []any) ([]assetRow, error) {
+	query := `SELECT id, rel_path, kind, is_pixel_art, has_alpha, frame_count FROM assets`
+	if where != "" {
+		query += " " + where
+	}
+	rows, err := tg.db.Reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("retag: load assets: %w", err)
 	}
 	defer rows.Close()
 
-	type assetRow struct {
-		id       int64
-		relPath  string
-		kind     string
-		pixelArt bool
-		hasAlpha bool
-		frames   int
-	}
 	var assets []assetRow
 	for rows.Next() {
 		var (
@@ -108,7 +157,7 @@ func (tg *Tagger) Retag(ctx context.Context) (Report, error) {
 			frameCount sql.NullInt64
 		)
 		if err := rows.Scan(&a.id, &a.relPath, &a.kind, &pixelArt, &hasAlpha, &frameCount); err != nil {
-			return rep, fmt.Errorf("retag: scan asset: %w", err)
+			return nil, fmt.Errorf("retag: scan asset: %w", err)
 		}
 		a.pixelArt = pixelArt.Valid && pixelArt.Int64 != 0
 		a.hasAlpha = hasAlpha.Valid && hasAlpha.Int64 != 0
@@ -116,8 +165,14 @@ func (tg *Tagger) Retag(ctx context.Context) (Report, error) {
 		assets = append(assets, a)
 	}
 	if err := rows.Err(); err != nil {
-		return rep, err
+		return nil, err
 	}
+	return assets, nil
+}
+
+// apply is the shared core: ensure, apply, prune.
+func (tg *Tagger) apply(ctx context.Context, assets []assetRow) (Report, error) {
+	var rep Report
 
 	// Reading is done; ensuring and applying take the writer. Cache ensured ids so
 	// each distinct tag is created at most once across the whole run.
@@ -154,15 +209,27 @@ func (tg *Tagger) Retag(ctx context.Context) (Report, error) {
 			}
 			items = append(items, tags.AssetTagItem{TagID: id, Source: tags.SourceAutoType})
 		}
-		if len(items) == 0 {
-			continue
+		if len(items) > 0 {
+			if err := tg.tags.ApplyAssetTags(ctx, a.id, items); err != nil {
+				return rep, fmt.Errorf("retag asset %d: %w", a.id, err)
+			}
+			rep.AssetsTagged++
+			rep.PathTags += len(pathTags)
+			rep.TypeTags += len(typeTags)
 		}
-		if err := tg.tags.ApplyAssetTags(ctx, a.id, items); err != nil {
-			return rep, fmt.Errorf("retag asset %d: %w", a.id, err)
+
+		// Reconcile: drop the auto tags this asset no longer earns. Manual and
+		// inherited tags are untouched — the keep list is only what this pass computed,
+		// and PruneAutoTags filters by source.
+		keep := make([]int64, 0, len(items))
+		for _, it := range items {
+			keep = append(keep, it.TagID)
 		}
-		rep.AssetsTagged++
-		rep.PathTags += len(pathTags)
-		rep.TypeTags += len(typeTags)
+		removed, err := tg.tags.PruneAutoTags(ctx, a.id, keep)
+		if err != nil {
+			return rep, fmt.Errorf("prune stale auto tags on asset %d: %w", a.id, err)
+		}
+		rep.Pruned += removed
 	}
 	rep.DistinctTags = len(ensured)
 	return rep, nil

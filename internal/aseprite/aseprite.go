@@ -161,7 +161,7 @@ type cel struct {
 	x, y       int
 	opacity    uint8
 	// img is nil for a linked cel, which borrows another frame's pixels.
-	img *image.RGBA
+	img *image.NRGBA
 	// linkedFrame is the frame a linked cel borrows from.
 	linkedFrame int
 	linked      bool
@@ -440,7 +440,14 @@ func Decode(data []byte, opts Options) (*File, error) {
 // frame", and pixel-art layers are overwhelmingly Normal. Other modes are treated as
 // Normal and recorded in Notes.
 func composite(f *File, cels []cel, allFrames [][]cel, frameIndex int) (image.Image, error) {
-	out := image.NewRGBA(image.Rect(0, 0, f.Width, f.Height))
+	// NRGBA, not RGBA. Aseprite stores straight (non-premultiplied) alpha, and so does
+	// the source-over blend below — but image.RGBA's documented contract is
+	// premultiplied, so keeping the result in one would tell every consumer that a
+	// shadow layer at 35% opacity is nearly three times brighter than it is. Verified
+	// against vendor-exported PNGs of the same artwork: with RGBA the semi-transparent
+	// pixels were wrong and the opaque ones were right, which is the signature of
+	// exactly this mistake.
+	out := image.NewNRGBA(image.Rect(0, 0, f.Width, f.Height))
 
 	for _, c := range cels {
 		if c.layerIndex < 0 || c.layerIndex >= len(f.Layers) {
@@ -469,15 +476,15 @@ func composite(f *File, cels []cel, allFrames [][]cel, frameIndex int) (image.Im
 			continue
 		}
 
-		// Layer opacity and cel opacity multiply.
-		alphaScale := float64(layer.Opacity) / 255 * float64(c.opacity) / 255
-		blendNormal(out, src, c.x, c.y, alphaScale)
+		// Layer opacity and cel opacity multiply, in Aseprite's own 8-bit arithmetic.
+		opacity := mulUN8(int(layer.Opacity), int(c.opacity))
+		blendNormal(out, src, c.x, c.y, opacity)
 	}
 	return out, nil
 }
 
 // resolveLinked finds the pixels a linked cel points at.
-func resolveLinked(c cel, allFrames [][]cel, frameIndex int) (*image.RGBA, error) {
+func resolveLinked(c cel, allFrames [][]cel, frameIndex int) (*image.NRGBA, error) {
 	if c.linkedFrame < 0 || c.linkedFrame >= len(allFrames) {
 		// Forward references are illegal: a linked cel may only point at an earlier
 		// frame, which by construction has already been parsed.
@@ -494,13 +501,20 @@ func resolveLinked(c cel, allFrames [][]cel, frameIndex int) (*image.RGBA, error
 	return nil, nil
 }
 
-// blendNormal draws src over dst at (offsetX, offsetY) with an extra alpha scale.
+// blendNormal draws src over dst at (offsetX, offsetY) with an extra 0..255 opacity.
 //
-// Written out rather than using image/draw because the alpha scale has to apply per
+// This is Aseprite's own `rgba_blender_normal` (doc/blend_funcs.cpp), integer for
+// integer, rather than the equivalent float formula. The two differ by one unit on
+// some channels, and matching the original exactly means a composited frame is
+// byte-identical to what Aseprite itself exports — which corpus_test.go asserts
+// against vendor-exported PNGs of the same artwork. An approximation would still look
+// right and would quietly hide any future change in this function.
+//
+// Written out rather than using image/draw because the opacity has to apply per
 // pixel, and because src may hang off the edge of the canvas: Aseprite cels are
 // allowed coordinates outside the frame.
-func blendNormal(dst *image.RGBA, src *image.RGBA, offsetX, offsetY int, alphaScale float64) {
-	if alphaScale <= 0 {
+func blendNormal(dst *image.NRGBA, src *image.NRGBA, offsetX, offsetY int, opacity int) {
+	if opacity <= 0 {
 		return
 	}
 	sb := src.Bounds()
@@ -517,29 +531,42 @@ func blendNormal(dst *image.RGBA, src *image.RGBA, offsetX, offsetY int, alphaSc
 			}
 
 			si := src.PixOffset(sx, sy)
-			sa := float64(src.Pix[si+3]) * alphaScale
-			if sa <= 0 {
+			sa := int(src.Pix[si+3])
+			if sa == 0 {
+				continue
+			}
+			sa = mulUN8(sa, opacity)
+			if sa == 0 {
 				continue
 			}
 
 			di := dst.PixOffset(dx, dy)
-			// Standard source-over, on non-premultiplied bytes scaled to 0..1.
-			srcA := sa / 255
-			dstA := float64(dst.Pix[di+3]) / 255
-			outA := srcA + dstA*(1-srcA)
-			if outA <= 0 {
-				dst.Pix[di], dst.Pix[di+1], dst.Pix[di+2], dst.Pix[di+3] = 0, 0, 0, 0
+			ba := int(dst.Pix[di+3])
+			if ba == 0 {
+				// Nothing underneath: take the source colour with the scaled alpha.
+				dst.Pix[di] = src.Pix[si]
+				dst.Pix[di+1] = src.Pix[si+1]
+				dst.Pix[di+2] = src.Pix[si+2]
+				dst.Pix[di+3] = uint8(sa)
 				continue
 			}
+
+			ra := ba + sa - mulUN8(ba, sa)
 			for ch := 0; ch < 3; ch++ {
-				s := float64(src.Pix[si+ch]) / 255
-				d := float64(dst.Pix[di+ch]) / 255
-				v := (s*srcA + d*dstA*(1-srcA)) / outA
-				dst.Pix[di+ch] = uint8(clamp01(v)*255 + 0.5)
+				b := int(dst.Pix[di+ch])
+				sv := int(src.Pix[si+ch])
+				// Integer division truncating toward zero, as in the original.
+				dst.Pix[di+ch] = uint8(b + (sv-b)*sa/ra)
 			}
-			dst.Pix[di+3] = uint8(clamp01(outA)*255 + 0.5)
+			dst.Pix[di+3] = uint8(ra)
 		}
 	}
+}
+
+// mulUN8 is Aseprite's MUL_UN8: (a*b)/255 rounded, in integers only.
+func mulUN8(a, b int) int {
+	t := a*b + 0x80
+	return ((t >> 8) + t) >> 8
 }
 
 func clamp01(v float64) float64 {
@@ -698,15 +725,15 @@ func inflate(compressed []byte, want int) ([]byte, error) {
 	return got[:want], nil
 }
 
-// pixelsToImage converts raw cel pixels into RGBA, per colour depth.
+// pixelsToImage converts raw cel pixels into straight-alpha RGBA, per colour depth.
 func pixelsToImage(pixels []byte, w, h, depth int, palette []color.RGBA,
-	transparentIndex uint8) (*image.RGBA, error) {
+	transparentIndex uint8) (*image.NRGBA, error) {
 
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
 
 	switch depth {
 	case 32:
-		// Straight (non-premultiplied) RGBA, which is what image.RGBA also holds.
+		// Straight (non-premultiplied) RGBA, which is exactly what image.NRGBA holds.
 		if len(pixels) < w*h*4 {
 			return nil, fmt.Errorf("%w: RGBA cel is short", ErrMalformed)
 		}

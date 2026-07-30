@@ -114,9 +114,13 @@ type ScanReport struct {
 	Groups             int
 	MultiVariantGroups int
 
-	IgnoredJunk     int
-	Buckets         []string
-	ReservedSkipped []string
+	IgnoredJunk int
+	// SkippedNonAssets counts files that exist but are not artwork — readmes,
+	// licences, archives, dotfiles. Reported so "why is my file not in the grid" has
+	// an answer in the scan summary rather than in the source.
+	SkippedNonAssets int
+	Buckets          []string
+	ReservedSkipped  []string
 
 	Hashed   int
 	Errors   []error
@@ -156,6 +160,7 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 	report.PacksFound = len(walked.Packs)
 	report.FilesSeen = len(walked.Files)
 	report.IgnoredJunk = walked.IgnoredCount
+	report.SkippedNonAssets = walked.SkippedNonAssets
 	report.Buckets = walked.Buckets
 	report.ReservedSkipped = walked.ReservedSkipped
 	report.Errors = append(report.Errors, walked.Errors...)

@@ -220,6 +220,48 @@ func TestResolveExisting(t *testing.T) {
 	}
 }
 
+func TestLstatUnder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX symlink semantics")
+	}
+	root := newLibrary(t)
+
+	// A plain file: the metadata is the file's own.
+	info, resolved, err := LstatUnder(root, "pack/sprite.png")
+	if err != nil {
+		t.Fatalf("an existing file was rejected: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("mode = %v, want a regular file", info.Mode())
+	}
+	if resolved != filepath.Join(root, "pack", "sprite.png") {
+		t.Errorf("resolved = %q", resolved)
+	}
+
+	// A symlink inside the root: accepted, because it resolves inside — but
+	// reported as a symlink rather than as its target, which is the whole reason
+	// this function exists. Removal refuses to move links (§9.1) and cannot tell
+	// without this.
+	info, resolved, err = LstatUnder(root, "link-inside")
+	if err != nil {
+		t.Fatalf("a link inside the root was rejected: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("mode = %v, want a symlink", info.Mode())
+	}
+	if resolved != filepath.Join(root, "pack", "sprite.png") {
+		t.Errorf("resolved = %q, want the link target inside the root", resolved)
+	}
+
+	// Everything Resolve refuses, this refuses too: containment is checked first,
+	// so no metadata leaks about a path outside the root.
+	for _, bad := range []string{"../outside-target.txt", "link-outside", "/etc/passwd", "pack/absent.png"} {
+		if _, _, err := LstatUnder(root, bad); err == nil {
+			t.Errorf("LstatUnder(%q) was accepted", bad)
+		}
+	}
+}
+
 func TestRelUnder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX symlink semantics")

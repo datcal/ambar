@@ -104,6 +104,16 @@ type Config struct {
 
 	AsepriteBin string // M2, optional external binary
 	BlenderBin  string // M6, optional external binary
+
+	// LocalLibraryPath is how the library is reachable from the *operator's* machine
+	// rather than from the container: an SMB URL, a UNC path, or a mount point (M14).
+	//
+	// It exists because a browser cannot launch Aseprite or Blender for you, and this
+	// server usually runs on a NAS where launching anything would open it on the wrong
+	// machine. What Ambar can do honestly is hand you the path, so "open in…" becomes
+	// one copy and a double-click in your own file manager. Empty hides the feature
+	// rather than showing a path that would not work.
+	LocalLibraryPath string
 }
 
 // DatabasePath is the SQLite file, deliberately outside the library tree (§4).
@@ -124,6 +134,7 @@ func Load() (*Config, error) {
 		BackupDir:              envStr("AMBAR_BACKUP_DIR", ""),
 		TrashDir:               envStr("AMBAR_TRASH_DIR", ""),
 		AsepriteBin:            strings.TrimSpace(os.Getenv("AMBAR_ASEPRITE_BIN")),
+		LocalLibraryPath:       strings.TrimSpace(os.Getenv("AMBAR_LOCAL_LIBRARY_PATH")),
 		BlenderBin:             strings.TrimSpace(os.Getenv("AMBAR_BLENDER_BIN")),
 		MaxUploadSize:          0,
 		MaxArchiveUncompressed: 0,
@@ -149,6 +160,26 @@ func Load() (*Config, error) {
 		c.TrashDir = filepath.Join(c.LibraryRoot, "_trash")
 	} else {
 		c.TrashDir = mustAbs(c.TrashDir, "AMBAR_TRASH_DIR", fail)
+		// A trash directory *inside* the library is fine — that is the default, and
+		// keeping it on the same volume is what makes a removal a rename rather than a
+		// copy. But the scanner only skips underscore-prefixed directories at the top
+		// level (§17, library.IsReserved), so a trash directory buried deeper would be
+		// walked: every file moved into it would be indexed again as a new asset, and
+		// the "duplicate" it was removed for would reappear. Refuse at startup rather
+		// than discover that after a sweep.
+		if trashRel, err := filepath.Rel(c.LibraryRoot, c.TrashDir); err == nil &&
+			!strings.HasPrefix(trashRel, "..") && trashRel != "." {
+			if strings.Contains(filepath.ToSlash(trashRel), "/") {
+				fail("AMBAR_TRASH_DIR %q is nested inside the library; it must be a single "+
+					"underscore-prefixed directory at the library root (e.g. %s) or a path outside "+
+					"the library, otherwise trashed files are re-indexed by the next scan",
+					c.TrashDir, filepath.Join(c.LibraryRoot, "_trash"))
+			} else if !strings.HasPrefix(trashRel, "_") {
+				fail("AMBAR_TRASH_DIR %q is inside the library but not underscore-prefixed, so the "+
+					"scanner would index everything moved into it; name it _trash or similar",
+					c.TrashDir)
+			}
+		}
 	}
 
 	var err error

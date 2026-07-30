@@ -11,9 +11,10 @@ import (
 	"github.com/datcal/ambar/internal/junk"
 )
 
-// runJunk reports removable clutter (§9.1, M12). It is reporting-only: it finds,
-// measures, and prints, and never removes anything. The removal path arrives with
-// M13, where the trash-staging and safety invariants ship alongside it.
+// runJunk reports removable clutter (§9.1). It is reporting-only: it finds,
+// measures, and prints, and never removes anything. Acting on a finding needs a
+// human selection and a confirmed preview, which is the /junk web flow (or the shell
+// script it exports) — never a command that sweeps.
 func runJunk(args []string) error {
 	fs := flag.NewFlagSet("ambar junk", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
@@ -58,7 +59,8 @@ func runJunk(args []string) error {
 	}
 
 	fmt.Println("\nThis is a report only — Ambar never removes anything on its own (invariant 3).")
-	fmt.Println("A deliberate, human-selected removal workflow with trash staging arrives in M13.")
+	fmt.Println("To act on any of it, tick the paths at /junk, confirm the preview, and they move to")
+	fmt.Println("the trash — or export the selection as a shell script and run it yourself.")
 	return nil
 }
 

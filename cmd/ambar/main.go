@@ -34,6 +34,8 @@ Usage:
   ambar verify                      re-hash files to detect bit rot (§12)
   ambar backup                      VACUUM INTO a timestamped copy (§12)
   ambar junk                        report removable clutter, reporting only (§9.1)
+  ambar dupes [-v]                  report duplicate content, reporting only (§9.1)
+  ambar trash list|restore|purge    inspect the trash, put files back, purge old batches
   ambar user add <username>         create a user (there is no self-registration)
   ambar user list                   list users
   ambar version                     print version information
@@ -81,6 +83,10 @@ func run(args []string) error {
 		return runBackup(args[1:])
 	case "junk":
 		return runJunk(args[1:])
+	case "dupes":
+		return runDupes(args[1:])
+	case "trash":
+		return runTrash(args[1:])
 	case "user":
 		return runUser(args[1:])
 	case "version", "--version", "-version":

@@ -74,6 +74,34 @@ func ResolveExisting(root, untrusted string) (string, error) {
 	return resolved, nil
 }
 
+// LstatUnder resolves an untrusted path under root and returns the metadata of
+// the path *itself*, without following a final symlink — together with the
+// resolved absolute path.
+//
+// Resolve deliberately follows symlinks, which is what makes it safe: a link
+// pointing outside the root is rejected rather than followed. But a caller that
+// must treat a symlink differently from its target — removal refuses to move
+// links (§9.1) — cannot see the difference through Resolve alone, and must not
+// join root and input itself to find out. So this function does the join, after
+// Resolve has already proven containment: every component up to the last is known
+// to stay inside root, and Lstat does not follow the last one.
+func LstatUnder(root, untrusted string) (os.FileInfo, string, error) {
+	resolved, err := Resolve(root, untrusted)
+	if err != nil {
+		return nil, "", err
+	}
+	cleanRoot, err := resolveRoot(root)
+	if err != nil {
+		return nil, "", err
+	}
+	literal := filepath.Join(cleanRoot, filepath.FromSlash(untrusted))
+	info, err := os.Lstat(literal)
+	if err != nil {
+		return nil, "", fmt.Errorf("lstat %q under %q: %w", untrusted, root, err)
+	}
+	return info, resolved, nil
+}
+
 // RelUnder is the reverse direction: given an absolute path known to be inside
 // root, return the slash-separated relative path to store in the database.
 //

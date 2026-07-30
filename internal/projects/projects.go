@@ -192,3 +192,49 @@ func RenderCredits(projectName string, lines []CreditLine) string {
 	}
 	return b.String()
 }
+
+// AssetUse is one project that uses an asset, for the asset page (M14). §10's plugin
+// pushes assets into a project; this is the library's side of that conversation —
+// "this file is already in these projects", which is also why removal refuses to
+// touch it (invariant 5).
+type AssetUse struct {
+	ProjectName string
+	ProjectUUID string
+	ResPath     string
+	AddedAt     time.Time
+	// Outdated is true when the content hash recorded at import time no longer
+	// matches the library's current one (§10's outdated badge).
+	Outdated bool
+}
+
+// UsesOfAsset lists the active project uses of one asset, newest first.
+func (s *Store) UsesOfAsset(ctx context.Context, assetID int64) ([]AssetUse, error) {
+	rows, err := s.db.Reader.QueryContext(ctx, `
+		SELECT CASE WHEN p.name != '' THEN p.name ELSE p.uuid END, p.uuid, u.res_path, u.added_at,
+		       CASE WHEN u.asset_sha256 != '' AND u.asset_sha256 != a.sha256 THEN 1 ELSE 0 END
+		FROM project_uses u
+		JOIN projects p ON p.id = u.project_id
+		JOIN assets a ON a.id = u.asset_id
+		WHERE u.asset_id = ? AND u.removed_at IS NULL
+		ORDER BY u.added_at DESC`, assetID)
+	if err != nil {
+		return nil, fmt.Errorf("list uses of asset %d: %w", assetID, err)
+	}
+	defer rows.Close()
+
+	var out []AssetUse
+	for rows.Next() {
+		var (
+			use      AssetUse
+			addedAt  int64
+			outdated int
+		)
+		if err := rows.Scan(&use.ProjectName, &use.ProjectUUID, &use.ResPath, &addedAt, &outdated); err != nil {
+			return nil, fmt.Errorf("scan asset use: %w", err)
+		}
+		use.AddedAt = time.Unix(addedAt, 0)
+		use.Outdated = outdated == 1
+		out = append(out, use)
+	}
+	return out, rows.Err()
+}

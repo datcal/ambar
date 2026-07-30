@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/datcal/ambar/internal/search"
@@ -33,7 +34,36 @@ func (ix *Indexer) compileQuery(ctx context.Context, query, alias string) (searc
 	if err != nil {
 		return search.Compiled{}, err
 	}
-	return search.Compile(ctx, q, alias, tagResolver{tags.NewStore(ix.db)})
+	return search.CompileWith(ctx, q, alias, tagResolver{tags.NewStore(ix.db)}, swatchResolver{ix})
+}
+
+// swatchResolver adapts the indexed swatch table to search.SwatchResolver, which is
+// what `palette-near:<asset_id>` compares against (§7).
+type swatchResolver struct{ ix *Indexer }
+
+func (r swatchResolver) SwatchesOf(ctx context.Context, assetID int64) ([]search.Swatch, bool, error) {
+	rows, err := r.ix.db.Reader.QueryContext(ctx, `
+		SELECT r, g, b, ratio FROM asset_swatches WHERE asset_id = ? ORDER BY rank`, assetID)
+	if err != nil {
+		return nil, false, fmt.Errorf("load swatches for asset %d: %w", assetID, err)
+	}
+	defer rows.Close()
+
+	var out []search.Swatch
+	for rows.Next() {
+		var s search.Swatch
+		if err := rows.Scan(&s.R, &s.G, &s.B, &s.Ratio); err != nil {
+			return nil, false, fmt.Errorf("scan swatch: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("load swatches for asset %d: %w", assetID, err)
+	}
+	// found is false when the asset has no palette — not analysed, or fully
+	// transparent. The compiler turns that into "matches nothing", which is honest:
+	// nothing is near a palette that does not exist.
+	return out, len(out) > 0, nil
 }
 
 // assetWhere builds the full WHERE for asset-level listing over the `a` alias:

@@ -110,7 +110,9 @@ func TestCompileOrGroups(t *testing.T) {
 }
 
 func TestCompileEmpty(t *testing.T) {
-	c := compile(t, "color:#fff tris:<10", fakeResolver{})
+	// Both terms name columns that do not exist yet (§7 fields from later
+	// milestones), so the whole query constrains nothing.
+	c := compile(t, "tris:<10 duration:>5", fakeResolver{})
 	if c.SQL != "" {
 		t.Errorf("all-no-op query should compile to empty, got %q", c.SQL)
 	}

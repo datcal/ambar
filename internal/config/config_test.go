@@ -159,6 +159,43 @@ func TestLoadRejectsBadValues(t *testing.T) {
 	}
 }
 
+// TestTrashDirMustNotBeIndexable guards the failure mode that would undo a
+// removal: a trash directory the scanner walks re-indexes everything moved into
+// it, so the "duplicate" comes straight back (§9.1, §17).
+func TestTrashDirMustNotBeIndexable(t *testing.T) {
+	libraryRoot, _ := setMinimalEnv(t)
+
+	// Accepted: the default, an underscore-prefixed directory at the library root,
+	// and anywhere outside the library entirely.
+	for _, dir := range []string{
+		filepath.Join(libraryRoot, "_trash"),
+		filepath.Join(libraryRoot, "_deleted"),
+		filepath.Join(t.TempDir(), "trash"),
+	} {
+		t.Setenv("AMBAR_TRASH_DIR", dir)
+		if _, err := Load(); err != nil {
+			t.Errorf("AMBAR_TRASH_DIR=%q was rejected: %v", dir, err)
+		}
+	}
+
+	// Refused: nested inside the library, where the scanner would find it, and a
+	// top-level name the scanner does not treat as reserved.
+	for _, dir := range []string{
+		filepath.Join(libraryRoot, "2d", "_trash"),
+		filepath.Join(libraryRoot, "trash"),
+	} {
+		t.Setenv("AMBAR_TRASH_DIR", dir)
+		_, err := Load()
+		if err == nil {
+			t.Errorf("AMBAR_TRASH_DIR=%q was accepted; trashed files would be re-indexed", dir)
+			continue
+		}
+		if !strings.Contains(err.Error(), "AMBAR_TRASH_DIR") {
+			t.Errorf("error %q does not name the variable", err)
+		}
+	}
+}
+
 // TestLoadReportsEveryProblemAtOnce: fixing a .env one error per restart is
 // miserable, so errors are collected.
 func TestLoadReportsEveryProblemAtOnce(t *testing.T) {

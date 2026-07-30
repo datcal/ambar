@@ -14,13 +14,16 @@ import (
 	"github.com/datcal/ambar/internal/safepath"
 )
 
-// handleAssets renders the grid (§8, M1: filenames and metadata, no thumbnails).
+// handleAssets renders the library: the three-pane workspace with navigation on the
+// left and the thumbnail grid in the middle (§8). It serves both "/" and "/assets",
+// because the library is the front door.
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	opts := index.ListOptions{
 		Query:          strings.TrimSpace(q.Get("q")),
 		Kind:           q.Get("kind"),
+		Dir:            q.Get("dir"),
 		Cursor:         q.Get("cursor"),
 		IncludeMissing: q.Get("missing") == "1",
 	}
@@ -51,12 +54,21 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := s.newPageData(r)
+	data.Workspace = true
 	data.Page = page
 	data.Stats = &stats
 	data.Search = opts.Query
 	data.Kind = opts.Kind
 	data.IncludeMissing = opts.IncludeMissing
 	data.NextURL = nextPageURL(r, page.NextCursor)
+	// Does this page hold a model with no thumbnail? If so the browser is asked to
+	// render one (M15), and only then is three.js worth loading here.
+	for _, g := range page.Groups {
+		if g.Primary.NeedsBrowserThumb() {
+			data.NeedsModelThumbs = true
+			break
+		}
+	}
 	data.Flash = q.Get("msg")
 
 	// §7 faceted sidebar: the tags present in this result set. A failure here is
@@ -66,6 +78,24 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data.Facets = facets
 	}
+
+	// M15: the library's dominant colours, so colour search is clickable. Not fatal.
+	if colours, err := s.index.LibraryColours(r.Context(), 18); err != nil {
+		s.log.ErrorContext(r.Context(), "loading library colours failed", "error", err)
+	} else {
+		data.Colours = colours
+	}
+
+	// M14 folder tree. Depth-limited: a vendor pack can nest ten levels of format
+	// folders, and a sidebar that renders all of them is a scrollbar rather than
+	// navigation. A failure is not fatal — the grid works without the tree.
+	if tree, err := s.index.Tree(r.Context(), index.DefaultTreeDepth); err != nil {
+		s.log.ErrorContext(r.Context(), "building the folder tree failed", "error", err)
+	} else {
+		data.Tree = index.Flatten(tree, opts.Dir)
+		data.TreeTotal = tree.Assets
+	}
+	data.Dir = opts.Dir
 
 	// §7 saved searches, shown as pinnable shortcuts.
 	if searches, err := s.saved.List(r.Context()); err != nil {
@@ -88,8 +118,26 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := s.newPageData(r)
+	data.Workspace = true
 	data.Asset = &asset
 	data.Flash = r.URL.Query().Get("msg")
+
+	// M14 "open in…": the path as the operator's own machine sees it, when they have
+	// told us how the library is mounted there.
+	if local, ok := localPathFor(s.cfg.LocalLibraryPath, asset.LibraryPath()); ok {
+		data.Local = &local
+		// The launch links only exist once there is a local path to launch with: the
+		// helper takes the path from the URL, so a link without one would do nothing.
+		data.OpenApps = openAppsFor(asset.Ext, local.Path)
+	}
+	data.OpenWith = openWithApps(asset.Ext)
+	// The projects already using this asset, which is the Godot integration's real
+	// answer to "open in Godot" (§10: the plugin pushes, the page reports).
+	if uses, err := s.projects.UsesOfAsset(r.Context(), asset.ID); err != nil {
+		s.log.ErrorContext(r.Context(), "loading project uses failed", "error", err)
+	} else {
+		data.ProjectUses = uses
+	}
 
 	// A missing group is not fatal — an asset indexed but not yet grouped still has a
 	// usable detail page.

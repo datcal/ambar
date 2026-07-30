@@ -1,0 +1,265 @@
+{{define "title"}}Duplicates — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Duplicates</h1>
+
+  {{/* §9.1: Ambar detects and explains, then waits. Nothing on this page is
+       pre-selected — no checkbox carries a checked attribute, and every path
+       submitted here goes through a preview that lists it before anything moves.
+       The keep hints are labels; they select nothing. */}}
+  <p class="note">
+    Nothing here is selected for you, and nothing moves without a preview you confirm.
+    Removed files go to the trash with a record of where they came from, so a mistake is
+    recoverable. Anything a Godot project uses is refused outright.
+  </p>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  <div class="actions-row">
+    <form method="post" action="/dupes/scan" class="inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit"{{if .DupesRunning}} disabled{{end}}>
+        {{if .Dupes}}Rescan{{else}}Scan for duplicates{{end}}
+      </button>
+    </form>
+    <a href="/trash">trash</a>
+    {{if .DupesRunning}}
+      <span class="hint">A scan is running — watch <a href="/jobs">background work</a>, then reload.</span>
+    {{end}}
+  </div>
+
+  <p class="hint">
+    Linking is
+    {{if eq .LinkMode "off"}}disabled (<code>AMBAR_DEDUPE_LINK_MODE=off</code>), so duplicates
+      can only be moved to the trash.
+    {{else if .LinkSupport.OK}}available in <code>{{.LinkMode}}</code> mode — {{.LinkSupport.Detail}}.
+      It reclaims the same space as removal while every path keeps working, so prefer it.
+    {{else}}configured as <code>{{.LinkMode}}</code> but not usable here: {{.LinkSupport.Detail}}
+    {{end}}
+  </p>
+
+  {{if not .Dupes}}
+    <div class="card">
+      <p>No scan has run yet.</p>
+      <p class="hint">
+        Press “Scan for duplicates” to compare content hashes across the library in the
+        background, or run <code>ambar dupes</code> from the command line.
+      </p>
+    </div>
+  {{else}}
+    {{with .Dupes}}
+      <p class="resultcount">
+        Last scanned {{.ScannedTime.Format "2006-01-02 15:04"}}.
+        {{if .Report.Empty}}
+          Nothing to report — no duplicate content and no overlapping packs.
+        {{else}}
+          {{.Report.Stats.PackFindings}} pack finding(s), {{.Report.Stats.ExactFindings}} exact
+          duplicate(s), {{.Report.Stats.NearClusters}} near-duplicate cluster(s);
+          up to {{bytes .Report.Stats.ReclaimableBytes}} reclaimable
+          ({{bytes .Report.Stats.PackReclaimableBytes}} by acting on whole packs,
+          {{bytes .Report.Stats.ExactReclaimableBytes}} file by file — the same bytes, counted
+          two ways, so they do not add up).
+        {{end}}
+      </p>
+
+      {{range .Report.Notes}}
+        <p class="note">{{.}}</p>
+      {{end}}
+
+      {{/* ---- packs first (§9.1: file-level lists are the wrong granularity) ---- */}}
+      {{range .Report.Packs}}
+        <div class="card">
+          <div class="palette-head">
+            <h2>{{.Kind.Title}}</h2>
+            <span class="badge">
+              {{.SimilarityPercent}}% similar{{if .Kind.Actionable}} · {{bytes .Bytes}} reclaimable{{end}}
+            </span>
+          </div>
+          <p class="hint">{{.Kind.Explanation}}</p>
+
+          <div class="tablewrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th scope="col">Pack</th>
+                  <th scope="col" class="num">Files</th>
+                  <th scope="col" class="num">Size</th>
+                  <th scope="col">Provenance</th>
+                  <th scope="col">Tags</th>
+                  <th scope="col">In use by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{$candidate := .Candidate}}
+                {{$container := .Container}}
+                {{/* An overlapping pair has no candidate and no keeper — neither
+                     contains the other, so labelling one of them would be a nudge
+                     towards a decision §9.1 says has no clean answer. */}}
+                {{$actionable := .Kind.Actionable}}
+                <tr>
+                  <td><code>{{$candidate.Path}}</code>
+                    <span class="hint">{{if $actionable}}candidate{{else}}pack A{{end}}</span></td>
+                  <td class="num">{{$candidate.Assets}}</td>
+                  <td class="num">{{bytes $candidate.Bytes}}</td>
+                  <td>{{if $candidate.ProvenanceComplete}}complete{{else}}incomplete{{end}}</td>
+                  <td class="num">{{$candidate.PackTags}} pack / {{$candidate.ManualAssetTags}} manual</td>
+                  <td>{{if $candidate.Blocked}}<strong>{{range $candidate.ProjectUses}}{{.}} {{end}}</strong>{{else}}—{{end}}</td>
+                </tr>
+                <tr>
+                  <td><code>{{$container.Path}}</code>
+                    <span class="hint">{{if $actionable}}kept{{else}}pack B{{end}}</span></td>
+                  <td class="num">{{$container.Assets}}</td>
+                  <td class="num">{{bytes $container.Bytes}}</td>
+                  <td>{{if $container.ProvenanceComplete}}complete{{else}}incomplete{{end}}</td>
+                  <td class="num">{{$container.PackTags}} pack / {{$container.ManualAssetTags}} manual</td>
+                  <td>{{if $container.Blocked}}<strong>{{range $container.ProjectUses}}{{.}} {{end}}</strong>{{else}}—{{end}}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="hint">
+            {{.SharedHashes}} file(s) in common; {{.OnlyInCandidate}} only in the first,
+            {{.OnlyInContainer}} only in the second.
+          </p>
+
+          {{if .Kind.Actionable}}
+            {{if .Transfers}}
+              <p class="note">
+                Removing <code>{{.Candidate.Path}}</code> transfers its curation onto
+                <code>{{.Container.Path}}</code> first:
+                {{range $i, $t := .Transfers}}{{if $i}}, {{end}}{{$t}}{{end}}.
+              </p>
+            {{end}}
+            <form method="post" action="/removals/plan" class="removal-form">
+              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+              <input type="hidden" name="root" value="library">
+              <input type="hidden" name="finding" value="{{.ID}}">
+              <input type="hidden" name="reason" value="{{.Kind.Title}}: {{.Candidate.Path}} contained in {{.Container.Path}}">
+              <input type="hidden" name="transfer_from" value="{{.Candidate.PackID}}">
+              <input type="hidden" name="transfer_to" value="{{.Container.PackID}}">
+              <input type="hidden" name="transfer_what" value="{{range $i, $t := .Transfers}}{{if $i}}, {{end}}{{$t}}{{end}}">
+              <label class="checkline">
+                <input type="checkbox" name="path" value="{{.Candidate.Path}}">
+                Remove the whole <code>{{.Candidate.Path}}</code> directory
+              </label>
+              <div class="actions-row">
+                <button type="submit" name="action" value="trash">Review removal…</button>
+                <button type="submit" name="action" value="trash" formaction="/removals/script" class="linkish">
+                  Export as a shell script
+                </button>
+              </div>
+            </form>
+          {{end}}
+        </div>
+      {{end}}
+
+      {{/* ---- exact duplicates ---- */}}
+      {{range .Report.Exact}}
+        <div class="card">
+          <div class="palette-head">
+            <h2>Exact duplicate · {{.Count}} copies</h2>
+            <span class="badge">{{bytes .Bytes}} reclaimable · {{bytes .Size}} each</span>
+          </div>
+          <p class="hint">{{.Kind.Explanation}}</p>
+
+          <form method="post" action="/removals/plan" class="removal-form">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="root" value="library">
+            <input type="hidden" name="finding" value="{{.ID}}">
+            <input type="hidden" name="reason" value="Exact duplicate of content {{.Sha}}">
+            <div class="tablewrap">
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th scope="col">Act on</th>
+                    <th scope="col">Keep</th>
+                    <th scope="col">Path</th>
+                    <th scope="col">Pack</th>
+                    <th scope="col">Facts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Copies}}
+                    <tr{{if .Favoured}} class="favoured"{{end}}>
+                      <td>
+                        {{if .Blocked}}
+                          <span class="hint" title="in use by {{.BlockedBy}}">blocked</span>
+                        {{else}}
+                          <input type="checkbox" name="path" value="{{.Path}}"
+                                 aria-label="select {{.Path}}">
+                        {{end}}
+                      </td>
+                      <td>
+                        <input type="radio" name="keep" value="{{.Path}}"
+                               aria-label="keep {{.Path}}">
+                      </td>
+                      <td><code>{{.Path}}</code></td>
+                      <td>{{.PackName}}</td>
+                      <td class="dir">
+                        {{if .Blocked}}<strong>in use by {{.BlockedBy}}</strong> —
+                          assets imported into a project are never removed.{{end}}
+                        {{if .Favoured}}<strong>keep hint:</strong> {{.FavouredWhy}}.{{end}}
+                        depth {{.Depth}}{{if .InRaw}}, under raw/{{end}}{{if .ProvenanceComplete}}, provenance complete{{end}}{{if and .IsGroupPrimary (gt .VariantCount 1)}}, {{.VariantCount}} format variants{{end}}
+                      </td>
+                    </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            <div class="actions-row">
+              <button type="submit" name="action" value="trash">Review removal…</button>
+              {{if ne $.LinkMode "off"}}
+                <button type="submit" name="action" value="link">Review linking…</button>
+              {{end}}
+              <button type="submit" name="action" value="trash" formaction="/removals/script" class="linkish">
+                Export as a shell script
+              </button>
+            </div>
+            <p class="hint">
+              Ticking a row selects it for the chosen action. Linking also needs a “Keep” choice:
+              the ticked copies are replaced by links to it, and every path keeps working.
+            </p>
+          </form>
+        </div>
+      {{end}}
+
+      {{/* ---- near duplicates: review only (§9.1 rule 3) ---- */}}
+      {{range .Report.Near}}
+        <div class="card">
+          <div class="palette-head">
+            <h2>Near-duplicate images · {{.Count}}</h2>
+            <span class="badge">distance {{.MaxDistance}} · {{bytes .Bytes}} if redundant</span>
+          </div>
+          <p class="hint">{{.Kind.Explanation}}</p>
+          <div class="tablewrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th scope="col">Path</th>
+                  <th scope="col">Pack</th>
+                  <th scope="col" class="num">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .Copies}}
+                  <tr>
+                    <td><a href="/assets/{{.AssetID}}"><code>{{.Path}}</code></a></td>
+                    <td>{{.PackName}}</td>
+                    <td class="num">{{bytes .Bytes}}</td>
+                  </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          <p class="hint">
+            Visually similar with different bytes — often deliberate. There is no removal control
+            here on purpose: check them, and act from the asset page if one really is redundant.
+          </p>
+        </div>
+      {{end}}
+    {{end}}
+  {{end}}
+</div>
+{{end}}

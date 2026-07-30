@@ -360,3 +360,13 @@ func isHashDir(name string) bool {
 	}
 	return true
 }
+
+// Root names which configured root this kind's item paths are relative to. Junk
+// lives in the library; an orphaned derivative lives under the data root, and
+// resolving one against the other would be a bug with a filesystem behind it.
+func (k Kind) Root() string {
+	if k == KindOrphanDerivative {
+		return "data"
+	}
+	return "library"
+}

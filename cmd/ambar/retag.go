@@ -16,12 +16,17 @@ import (
 const retagUsage = `Usage:
   ambar retag
 
-Applies the automatic tags of §7 to every indexed asset: a folder: tag per
+Reconciles the automatic tags of §7 across every indexed asset: a folder: tag per
 meaningful path segment, and type:/style:/has: tags from the classified kind and
 image analysis.
 
-Safe to re-run: it only adds tags, never removes them, and a manual tag is never
-demoted by an automatic one. Run it after a scan and derive pass.
+Safe to re-run. Manual tags are never touched — not demoted by an automatic one and
+not removed by this pass. Automatic tags that no longer apply (a reclassified file, a
+renamed folder) are removed, which is what makes this a reconcile rather than an
+append.
+
+The server already does this after every scan and after each asset is analysed, so
+this command is for a one-off pass or after changing the tagging rules.
 `
 
 func runRetag(args []string) error {
@@ -60,5 +65,6 @@ func runRetag(args []string) error {
 	fmt.Printf("  auto_path applied   %d\n", rep.PathTags)
 	fmt.Printf("  auto_type applied   %d\n", rep.TypeTags)
 	fmt.Printf("  distinct tags       %d\n", rep.DistinctTags)
+	fmt.Printf("  stale tags pruned   %d\n", rep.Pruned)
 	return nil
 }

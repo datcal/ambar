@@ -1,7 +1,14 @@
-// §8 3D viewer: load the normalised preview.glb into three.js with orbit
-// controls, grid and axis helpers, a wireframe toggle and a 1.8 m human-height
-// scale reference. Uses the vendored global THREE (r128) — no CDN, so the §11
-// CSP is satisfied. A no-op on pages without #model-viewer.
+// §8 3D viewer: load a model into three.js with orbit controls, grid and axis
+// helpers, a wireframe toggle and a 1.8 m human-height scale reference. Uses the
+// vendored global THREE (r128) — no CDN, so the §11 CSP is satisfied. A no-op on
+// pages without #model-viewer.
+//
+// M14: the format decides the loader. glTF/GLB load through GLTFLoader as before
+// (a derived preview.glb when there is one), and .obj and .fbx now load *directly*
+// from the library through /assets/{id}/file/, which is what removed the "this needs
+// Blender to preview" dead end from every OBJ and FBX in the library. Companion
+// files — an .obj's .mtl, an .mtl's textures, a .gltf's .bin — resolve relative to
+// that URL without the viewer rewriting anything.
 
 (function () {
   const root = document.getElementById("model-viewer");
@@ -91,20 +98,78 @@
     e.currentTarget.classList.toggle("on", scaleRef.visible);
   });
 
-  new THREE.GLTFLoader().load(
-    src,
-    function (gltf) {
-      model = gltf.scene;
-      scene.add(model);
-      frame(model);
-    },
-    undefined,
-    function (err) {
-      const status = root.querySelector('[data-role="status"]');
-      if (status) status.textContent = "Could not load the model.";
-      console.error(err);
+  const status = root.querySelector('[data-role="status"]');
+
+  function fail(what, err) {
+    if (status) status.textContent = what;
+    console.error(err);
+  }
+
+  function show(object) {
+    model = object;
+    scene.add(model);
+    frame(model);
+    if (status) status.textContent = "";
+  }
+
+  // The format, as the page worked it out. Defaults to glTF so an older page that
+  // only knows about preview.glb keeps working.
+  const format = (root.dataset.format || "gltf").toLowerCase();
+
+  if (status) status.textContent = "Loading…";
+
+  switch (format) {
+    case "obj": {
+      // An .obj names its material library; MTLLoader resolves the textures the .mtl
+      // names. Both are fetched from the same directory as the model, and a missing
+      // .mtl is not fatal — untextured geometry still answers "what is this".
+      const mtlName = root.dataset.mtl;
+      const base = src.slice(0, src.lastIndexOf("/") + 1);
+      const loadObj = function (materials) {
+        const loader = new THREE.OBJLoader();
+        if (materials) loader.setMaterials(materials);
+        loader.load(src, show, undefined, function (err) {
+          fail("Could not read this .obj file.", err);
+        });
+      };
+      if (mtlName) {
+        new THREE.MTLLoader()
+          .setPath(base)
+          .load(mtlName, function (materials) {
+            materials.preload();
+            loadObj(materials);
+          }, undefined, function () {
+            // No usable .mtl: carry on without materials rather than showing nothing.
+            loadObj(null);
+          });
+      } else {
+        loadObj(null);
+      }
+      break;
     }
-  );
+
+    case "fbx":
+      if (typeof THREE.FBXLoader === "undefined") {
+        fail("The FBX loader did not load.", null);
+        break;
+      }
+      new THREE.FBXLoader().load(src, show, undefined, function (err) {
+        fail("Could not read this .fbx file.", err);
+      });
+      break;
+
+    default:
+      new THREE.GLTFLoader().load(
+        src,
+        function (gltf) {
+          show(gltf.scene);
+        },
+        undefined,
+        function (err) {
+          fail("Could not load the model.", err);
+        }
+      );
+  }
 
   function animate() {
     requestAnimationFrame(animate);

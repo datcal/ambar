@@ -978,9 +978,425 @@ Two design choices worth recording:
   trash especially must not be surfaced as clutter to clean up. A zero-byte `.ambar.json` is
   never proposed either — it is a pack's provenance anchor, not junk.
 
+### M13 duplicates and removal: two packages, and the safety rules live in code
+
+The milestone that finally touches user data destructively is split so that the
+destructive half is small enough to read in one sitting:
+
+- **`internal/dupes` detects and explains.** It contains no code that can move or
+  delete a file — the same discipline `internal/junk` follows. It answers §9.1's four
+  relationships separately (exact hash, moved file, near-duplicate, format variant),
+  resolves packs before files, and annotates each copy with the keep-policy *facts*
+  plus one labelled hint. Unlike `internal/junk` it is not SQL-free: duplicate
+  detection is inherently a query over the whole index, and threading twenty thousand
+  rows through a callback would have bought nothing.
+- **`internal/removal` acts.** A `Planner` that only ever refuses or permits, and an
+  `Executor` that performs a `Plan` and owns the trash. The Executor has no policy of
+  its own: if the Planner did not produce an `Op`, the Executor never sees it.
+
+Decisions worth recording:
+
+- **The last-copy rule is arithmetic over the whole selection, not per row.** Selecting
+  every copy of a hash removes all but one; the refused copy is the first in sorted
+  order, which is arbitrary but deterministic and named in the preview. Refusing *all*
+  of them would have been the other defensible answer, but it makes "select all in this
+  finding" useless on a finding where every copy was selected. Honoured literally, this
+  also means one zero-byte file survives a junk sweep that selects two hundred of them —
+  they share the empty-string hash. That is invariant 4 as written, and carving an
+  exception into it silently is exactly what the invariant exists to prevent.
+- **Exact-hash findings are not suppressed within an asset group.** Invariant 7 is about
+  *format variants*, and a PNG and its PSD cannot share a sha256. Two byte-identical
+  files are the same file stored twice whatever folders they sit in. The group model is
+  consumed where it actually matters: the near-duplicate pass never pairs two variants of
+  one group (they have the same perceptual hash by construction), and "N source variants
+  depend on this copy" is one of the keep annotations.
+- **Linking is allowed for a project-used asset; removal is not.** §9.1's hard block is
+  on *removal*. A reflink or hardlink keeps the path working and the bytes identical, so
+  an imported asset is not endangered by one. Surfaced here because it is the one place
+  the invariant-5 block is deliberately narrower than "never touch this file".
+- **The bytes are re-hashed immediately before a link replaces a file.** The Planner
+  already checked that the index says the two are identical, but the index can be stale,
+  and this is the only operation in Ambar that writes over an existing library path. If
+  the bytes diverged since the last scan, the entry fails rather than replacing one
+  file's content with another's.
+- **The plan is re-derived at every step, three times.** `/removals/plan` builds it,
+  `/removals/apply` builds it again from the same submitted paths, and the worker builds
+  it a third time from the job payload. Nothing is carried in a token or a session, so a
+  stale page, an edited payload, or a library that changed in between can only ever
+  *narrow* what happens. The alternative — trusting the payload — would have made the
+  job queue a way to bypass every safety rule in the package.
+- **`safepath.LstatUnder` was added rather than joining paths locally.** `Resolve`
+  follows symlinks, which is what makes it safe, and therefore cannot tell a link from
+  its target — but §9.1's removal must refuse links. Putting the join inside `safepath`
+  keeps the rule that no other package joins a root with untrusted input.
+- **Trash layout: `<trash>/<batch-id>/<root>/<original relative path>`,** with an
+  `ambar-trash.json` manifest per batch. The batch directory is what makes retention
+  purging a directory-level decision and stops two removals of the same path from
+  colliding. The manifest is written **before** the first file moves, so an interrupted
+  batch leaves a readable record of intent; restoring treats it as untrusted input, since
+  it is a file a person can edit.
+- **`AMBAR_TRASH_DIR` is now validated.** The scanner only skips underscore-prefixed
+  directories at the *library root*, so a trash directory nested deeper (or named
+  `trash`) would be walked and every removed file re-indexed as a new asset — the
+  duplicate would come straight back. Config refuses that at startup instead.
+- **Curation transfer is injected, not imported.** `internal/removal` knows nothing about
+  tags or provenance; the job runner takes a `TransferFunc`, and `cmd/ambar/serve.go`
+  passes `dupes.TransferCuration`. It runs **before** any file moves and aborts the whole
+  batch on failure, which is the only ordering that satisfies "transfer its tags and
+  provenance onto the superset first". A plan that asks for a transfer with no function
+  wired is refused rather than quietly losing the curation. The transfer fills gaps only,
+  matches asset tags by content hash rather than path, and reports manually tagged files
+  that have no counterpart in the superset instead of dropping them silently.
+- **The shell-script export is a first-class path, not a fallback** (§9.1 says to expect
+  it to be the primary one). It mirrors the in-app behaviour exactly — `mv` into a trash
+  batch, never `rm` — quotes every path with POSIX single-quote escaping (the library
+  really does contain `PNG_Parts&Spriter_Animation`), guards each link with `cmp -s`, and
+  includes the refusals as comments so the script is a record of the decision rather than
+  only of its outcome. It says plainly that it cannot transfer curation, because that
+  lives in the database.
+- **Purging is the only irreversible operation, and it is the only one that asks twice.**
+  Never scheduled, never triggered by disk pressure, refused outright when no retention
+  window is configured, and a dry run by default on the CLI (`--yes` to mean it). `Purge`
+  with a zero cutoff is an error, because "no retention configured" must never be able to
+  read as "delete everything".
+- **M12's deferred selection landed here, as promised.** The junk view now has checkboxes
+  and a "select all in this finding" control — §9.1 explicitly permits the latter — and
+  both feed the same preview-then-confirm flow as the duplicate view. `data-select-all` is
+  a small external JS island so the CSP stays `default-src 'self'`; without JavaScript the
+  header checkbox is inert and the rows still work.
+- **Reflink uses the `FICLONE` ioctl through `golang.org/x/sys/unix`,** which is pure Go,
+  so invariant 6 holds. It is probed at startup and reported in the health endpoint as
+  `dedupe_link_mode`; a library that cannot reflink is a fact about the volume, not an
+  unhealthy service, so it never turns the endpoint red. `reflink_other.go` keeps the
+  package building on non-Linux developer machines, where hardlink and trash still work.
+
+### The `.aseprite` decoder, measured against real files — and what that found
+
+The M2 write-up recorded that the decoder "has never seen a file Aseprite actually
+wrote", and that dropping one real file into the tests was the most valuable
+contribution available. There are 72 in the target library, so that gap is now closed —
+but not by vendoring one: the packs are CraftPix free-licence artwork, which does not
+permit redistribution. `internal/aseprite/corpus_test.go` instead walks a directory
+named by `AMBAR_ASEPRITE_CORPUS` and skips when it is unset, so the check is repeatable
+locally and the repository stays clean.
+
+It found a real bug within minutes, which is the entire argument for the exercise:
+
+- **The compositor produced straight (non-premultiplied) alpha and returned it in an
+  `*image.RGBA`,** whose documented contract is premultiplied. Every fully opaque pixel
+  was correct, so all 30-odd builder-fixture tests passed for two milestones, while a
+  shadow layer at 35% opacity came out nearly three times too bright in every thumbnail,
+  animated preview and extracted palette derived from an `.aseprite`. The fix is
+  `*image.NRGBA` throughout — straight alpha is exactly what that type holds, so the
+  existing blend arithmetic became correct by contract rather than by accident.
+
+Because the packs ship the *same artwork twice* — `.aseprite` sources and a PNG
+spritesheet Aseprite itself exported — the test does not stop at "it decodes". It finds
+the sheet row matching each file and compares pixel by pixel. That is a far sharper
+instrument than a fixture, and it prompted a second change:
+
+- **`blendNormal` now reproduces Aseprite's own integer arithmetic** (`rgba_blender_normal`
+  from `doc/blend_funcs.cpp`, including `MUL_UN8` and C truncating division) instead of
+  the equivalent float formula. The two differ by one unit per channel on some pixels,
+  and matching the original makes 70 of the 72 files byte-identical to the vendor's
+  export.
+
+Two deliberate tolerances, both narrow and both explained in the test:
+
+- **±1 per channel with identical alpha is accepted**, because this corpus proves
+  Aseprite's arithmetic changed: within one pack, Plant1's export matches the current
+  integer formula exactly while Plant2's and Plant3's match the older rounded one. No
+  implementation can match both, so the code follows the current source.
+- **Up to 0.1% of pixels may differ by more**, because a vendor sheet is not always a
+  clean export — two files here have a stray pixel or a shadow blended twice in the sheet
+  that is not in the source. Anything beyond that fails, and the counts are always
+  logged. For scale, the premultiplied-alpha bug showed up as ~3% of pixels off by up to
+  94, in every affected file.
+
+A builder-fixture regression test covers the same ground without a corpus
+(`TestSemiTransparentCompositeIsStraightAlpha`): the earlier fixtures all used opaque
+colours, which is precisely why they never caught this.
+
+### Licence: MIT (§17)
+
+Settled: MIT, for maximum reuse. The alternative considered was AGPL-3.0, which would
+have made a hosted commercial fork share its changes — but this is a self-hosted tool for
+one person's asset library, the value is in the operator running it rather than in
+controlling redistribution, and MIT is the lower-friction choice for anyone who wants to
+lift a piece of it (the `.aseprite` decoder and the archive extractor are both useful on
+their own). `LICENSE` carries the standard text.
+
+### Colour search, the pack palette view, and auto-tag reconciliation
+
+The three deferrals §7 was still carrying, delivered together because they share the
+data they read.
+
+**`color:` and `palette-near:` (the slice M11.5 deferred).** M11.5 stored the palette as
+JSON on the asset, which is right for the panel and wrong for a query: matching "assets
+containing this colour within a tolerance" against a JSON blob means parsing every row.
+So 0013 adds `asset_swatches` (one row per swatch, channels as separate indexed
+columns), written by derive alongside `palette_json` and backfilled in the migration
+from what M11.5 already stored — via `json_each`, so colour search works on an existing
+library immediately rather than only after a full re-derive. `TestJSON1IsAvailable`
+asserts the JSON1 extension is compiled into `modernc.org/sqlite`, because a migration is
+the wrong place to find out otherwise.
+
+Decisions inside that:
+
+- **`color:` is a box in RGB, not a perceptual distance.** The query is "this hex, give or
+  take", which is what someone pasting a colour out of the palette panel means, and a box
+  is three indexed range scans. The default tolerance is a tight ±12 per channel: pixel
+  artists reuse exact palette entries, so a wide default would return every brownish
+  asset in the library. `color:#8b3a3a~40` widens it, `~0` demands an exact match.
+- **A swatch below 0.5% of an asset's visible pixels does not count as "containing" a
+  colour.** Three stray anti-aliased pixels are not an art-direction match, and the tail
+  of a palette is exactly where they live.
+- **`palette-near:` is nearest-neighbour over swatches, not earth-mover.** §7 allows
+  either; EMD needs an optimisation pass per candidate, which is not something to run
+  inside a SQL filter over 20k assets. The question asked instead — of the reference's
+  dominant colours, does the candidate have a majority of them? — has the same practical
+  answer and compiles to one grouped subquery with a `count(DISTINCT CASE …)` over the
+  reference boxes. Counting distinct *reference* colours matters: a candidate with twelve
+  shades of one reference colour has still matched one colour.
+- The compiler learned a second resolver (`SwatchResolver`) rather than a database
+  handle, keeping `internal/search` free of SQL exactly as `TagResolver` does.
+
+**The pack palette consistency view (§7's last unbuilt sentence).** `/palettes` aggregates
+each pack's swatches into a coarse colour grid weighted by how much of the pack each
+colour covers, and compares two packs by how much of each one's weight has a near-enough
+colour in the other. Two numbers rather than one score, because they answer different
+questions: a small character set can sit entirely inside a large tileset's palette while
+the tileset keeps colours the characters never use. The verdict is a sentence, not a
+number — this is a hint for a human deciding whether two packs will look right together.
+Measured against the real library it agrees with the eye: the bright saturated spaceship
+pack scores 0% against everything, while the undead tileset and the crystals pack score
+83%/90% and do belong in the same scene.
+
+**Auto-tagging is now wired in, and reconciles.** M3 recorded that `ambar retag` was
+manual and that stale auto tags were never pruned. Both are fixed: `tags.PruneAutoTags`
+removes `auto_path`/`auto_type` rows the current pass did not produce (manual and
+inherited rows are never touched, so a person's `type:image` survives a pass that would
+not apply it), and the tagger gained `RetagAssets`/`RetagContent` so a scan retags the
+index for path tags while derive retags just-analysed content for `style:pixel-art` and
+`has:alpha`. Derive learned an `AfterAnalyse` callback rather than importing the tagger —
+the same shape that keeps `internal/index` unaware of `internal/derive`. A failing hook is
+logged and swallowed: a missing tag is recomputable, a lost thumbnail is not worth it.
+
+### Pack detection collapsed the whole library when a loose file sorted first
+
+Found by pointing the scanner at the real library rather than at `testdata`: it reported
+**one** pack holding 1,562 assets instead of nine.
+
+`filepath.WalkDir` visits entries in lexical order. A loose asset file at the library root
+registered the root in `packOf` — the map meaning "this directory is inside a real pack" —
+and every pack directory visited *after* it was then treated as part of that synthetic
+standalone pack. So whether the library split into packs depended on whether the loose
+file's name sorted before the pack directories: `TileSet_V2.png` (uppercase, sorts first)
+broke it; the same file named `zz.png` did not. The target library has exactly such a file
+at its root.
+
+The fix is one map: standalone ownership lives in `standaloneOf`, consulted only when
+resolving a file's owner, so the synthetic pack owns the loose files and nothing else.
+Both spellings are now covered by a table test, and the real library reports nine packs
+with the two loose root files in their own standalone pack.
+
+Worth recording as a lesson rather than only a fix: every pack-level feature — provenance,
+inherited tags, pack similarity (§9.1), the palette view above — reads pack membership,
+and all of them had been quietly degraded to "one pack" on the only library that matters.
+A fixture tree with tidy names never showed it.
+
+### M14: the interface, rebuilt around the library (and four bugs it uncovered)
+
+Not a spec milestone. It came from using the thing: the grid was four tiles wide in a
+60rem column, there was no folder navigation anywhere, `.gdignore` and `.gitkeep` sat
+in the grid as assets, 20×21 tiles were specks, dragging an image picked it up instead
+of panning, every `.obj` and `.fbx` said "this needs Blender", and the spritesheet
+panel never said what detection was for. Modelibr and Eagle were read for shape;
+what follows is what was taken and what was deliberately not.
+
+**The library is the application, so it gets the window.** `/` is the grid now, and the
+old dashboard moved to `/status`. Library pages render a three-pane shell — navigation
+left, content centre, inspector right, three independent scroll areas under one
+toolbar — while forms and reports stay centred documents, because a 60rem measure is a
+feature there rather than a cage. One flag on the page data picks the layout; there is
+no second template tree.
+
+Taken from Eagle: search in the toolbar rather than inside a page, a **thumbnail size
+slider** (with ⌘/Ctrl +/− because muscle memory deserves respect), folders and tags
+permanently visible on the left, and the inspector on the right. Taken from Modelibr:
+its `cardWidthStore` habit of remembering the tile size per view, and — the important
+one — how it answers "open in an external app" (below). Not taken: tabbed dual panels
+and URL-encoded workspace layouts. They are the right answer for an app you live in
+all day; here they would be a second navigation model competing with the browser's.
+
+**The folder tree is derived, never stored.** `index.Tree` groups live assets by
+directory in SQL, builds the tree in Go, rolls counts up, and `Flatten` emits the top
+level plus the open branch. A `dir=` filter on the grid compares against the assembled
+library path with a prefix test rather than LIKE, so `%` and `_` in real filenames need
+no escaping. Depth is capped at four (bucket/pack/format-folder/subject, the shape §5.1
+describes); deeper directories stay reachable through search. Indentation comes from a
+`data-depth` attribute, so the CSP stays free of `unsafe-inline`.
+
+**Small images were unreadable for a one-line reason.** `.thumb img` used
+`max-width: 100%`, which never scales *up*, so a 20×21 tile from a tileset rendered at
+20×21 in an 11rem tile. `object-fit: contain` with `image-rendering: pixelated` for
+pixel art fixes it without re-deriving anything, and the slider does the rest.
+
+**Panning fought the browser.** The 2D viewer's `pointerdown` did not `preventDefault`,
+so the browser started its own native image drag as soon as the pointer moved over the
+`<img>` — which is why panning only worked from the empty space around the image. The
+fix is `preventDefault` plus `draggable="false"`, a `dragstart` guard, and
+`user-select`/`-webkit-user-drag` off. The viewer also grew to 72vh, since the centre
+column is the point of the page.
+
+**3D no longer waits for Blender, because it never had to.** §8's viewer loaded a
+derived, normalised `preview.glb`, so a format derive could not normalise had no viewer
+at all — three.js has read OBJ and FBX natively for years. The viewer now picks a
+loader from the extension and loads the *original* file; `needs_blender` applies only to
+`.blend`, which is Blender's own project format and genuinely nothing else can open it.
+Even there the message is now accurate: what is missing is a grid *thumbnail*, not the
+ability to look at the model.
+
+That needed one new route. `GET /assets/{id}/file/{name...}` serves a file from the
+model's own directory by name, because an `.obj` names its `.mtl`, an `.mtl` names its
+textures, and a `.gltf` names its `.bin`. Keeping the model's basename in the URL means
+relative resolution inside the loaders just works. It is deliberately narrow: an
+allow-list of extensions a model may reference, `path.Clean` before any filesystem
+call, `safepath` after it (invariant 9), and §11's `attachment` + `nosniff` on the way
+out — which three.js does not mind, because its loaders fetch bytes rather than
+navigate. The traversal tests assert on file *contents* rather than on words from the
+path, because net/http's path-cleaning redirect echoes the URL and made the first
+version of that test pass for the wrong reason.
+
+**"Open in Aseprite" cannot be a button, so it is a path.** A browser cannot launch an
+application on the machine you are sitting at, and this server runs on the NAS — a
+server-side "open" would launch Aseprite *there*, headless. Modelibr solves this by
+deriving the native SMB/UNC path and offering copy-to-clipboard and reveal-in-file-
+manager, and that is what Ambar does now: `AMBAR_LOCAL_LIBRARY_PATH` says how the
+library is mounted where the operator works, the rail shows the composed path with a
+copy button and the applications worth suggesting for that extension, and it says
+plainly why it cannot do more. The separator style comes from the template's own shape
+(`\\nas\share` and `Z:\` get backslashes) rather than from sniffing the user agent,
+which lies. Unset, the section explains how to enable itself instead of showing a path
+that would not resolve. Godot keeps its real integration — the editor plugin pushes,
+and the rail now reports which projects already use the asset, which is also why
+removal refuses to touch it.
+
+**Spritesheet detection says what it is for.** The panel now explains that confirming
+the grid is what makes the animated preview correct, what `frames:` searches find, and
+what the Godot import turns into an `AnimatedSprite2D` — and that nothing is written to
+the file. The player became a player: pause, frame stepping, a frame counter, an fps
+control and a grid overlay toggle. Stepping needs no new derivative — it moves a window
+over the sheet using the detected columns and rows — while playing keeps using the
+derived GIF, whose timing is baked in and which is therefore honest about ignoring the
+fps control.
+
+**Two more bugs the real library exposed, both in indexing rather than in the UI:**
+
+- **Non-assets were indexed.** `IsAssetFile` existed from M1 but was only consulted when
+  *confirming* a pack, never when indexing a file — so readmes, licences, coupons,
+  `.url` shortcuts and dotfiles all became grid tiles. It now gates indexing, and it
+  additionally excludes downloaded archives and model companion files (`.mtl`, `.bin`).
+  One real 3D pack contributed 484 companion tiles before that rule existed. On the
+  target library the scan now skips 540 files and says so in its summary, because "why
+  is my file not in the grid" deserves an answer in the report rather than in the
+  source. Nothing is deleted: rows for files that are no longer considered assets are
+  marked missing by the next scan, which the grid already hides.
+- **Pack detection collapsed the whole library when a loose file sorted first** — written
+  up in its own entry above, found by pointing the scanner at the real library instead
+  of at `testdata`.
+
+### M15: the second pass over the interface
+
+M14 rebuilt the shell; this is what using it for an evening turned up. Each item was a
+specific complaint, so each one gets a specific answer.
+
+**The sidebar leads with what the work is about.** Order is now: re-scan (an action that
+was previously at the bottom of a page nobody scrolls), kinds, **colours**, tags,
+filters, then folders — and folders are a `<details>` element that starts *closed*. The
+operator's own words: "whole library should always be there, and I go into a folder when
+I want to; I will work with kinds, tags and colours." A native `<details>` keeps that
+state in the browser, so nothing is remembered server-side and nothing needs JavaScript.
+
+**Colour search became clickable.** `index.LibraryColours` aggregates the whole library's
+swatches into the same coarse buckets the pack view uses, and the sidebar renders them as
+a row of chips that link to `color:<hex>~24`. On the asset page each swatch now carries
+two explicit icons — ⌕ searches for that colour, ⧉ copies it — because the previous
+arrangement (whole chip copies, a small "find" word underneath) hid the feature §7 calls
+the real daily problem. Chips are painted from `data-hex` through the CSSOM, never an
+inline style, so the CSP stays `default-src 'self'`.
+
+**The centre column is only the work.** The keyboard-audition strip moved into the panel's
+Tools section, and the bulk-tag box became one toolbar line. The spritesheet panel — added
+in M14 with a player — was removed from the detail page entirely at the operator's request:
+the animation already plays in the viewer above it, so what remains is one line of facts,
+a link to what confirming the grid is *for*, and the control. The space it freed now holds
+the palette and the tags, which are tools rather than reference.
+
+**"Fit" scales up.** The 2D viewer's `fitScale` carried the comment "never scale up to
+fit", which meant a 20×21 tile opened at 20×21 in a 46rem stage and you had to click 800%
+to see it — the same mistake the grid's tiles made with `max-width`. Fit now upscales, and
+for pixel art it snaps to a whole factor so edges stay hard.
+
+**Three kinds that had no preview now have one.**
+
+- **Audio**: a waveform tile drawn from the peaks the analysis already computes, so it
+  costs no extra decode. A grid of two hundred `.wav` files was previously two hundred
+  identical chips.
+- **Fonts**: §4 has had a `font` kind since M1 and nothing ever rendered one. A specimen
+  is drawn server-side with `sfnt` + `opentype` (pure Go, invariant 6) for the tile, and
+  the detail page registers the real face through the FontFace API so you can **type your
+  own text** — the only question a font list has to answer. `.woff/.woff2` are recorded as
+  unsupported with a reason rather than guessed at; sfnt cannot read the compressed
+  wrappers.
+- **3D in the grid**: the server has no renderer and Blender is optional (§6) — but the
+  browser has one and is already loading these models. So a model tile with no thumbnail
+  carries `data-model`, and an island renders it once off-screen, snapshots the canvas and
+  POSTs the PNG. The route decodes it, bounds-checks it, **re-encodes it as WebP with our
+  own encoder** (never storing client bytes), refuses to replace an existing derivative,
+  and records `derive_state=ok` for that content hash. Rendering is capped per page load
+  and driven by an IntersectionObserver, so browsing 900 models does not turn the tab into
+  a render farm. three.js is loaded on the grid *only* when the page actually holds such a
+  tile.
+
+**"Open in Aseprite" is a real button now.** The M14 version handed over a path to copy,
+which is honest but is not what a button should do. The operator was right about the
+mechanism: `tel:` works because a scheme is registered with the OS. Aseprite, Blender and
+Godot ship no scheme of their own — so Ambar registers `ambar://` and generates the
+one-time helper that answers it (a `.desktop` + `xdg-mime` on Linux, an app bundle's
+`Info.plist` on macOS, `HKCU\Software\Classes` on Windows). The link carries the app key
+and the local path, so the helper needs no credentials, no network and no knowledge of
+Ambar. Two details worth recording: `html/template` rewrites an unknown scheme in an
+`href` to `#ZgotmplZ`, so the URL is typed `template.URL` (safe — it is assembled from
+escaped parts); and every helper refuses an `smb://` path with an explanation, because no
+application can open a URL — the operator has to point `AMBAR_LOCAL_LIBRARY_PATH` at a
+*mounted* location. The copyable path stays, because a feature that needs a one-time
+install must degrade to something that works immediately.
+
+**Adding a user is possible from the UI.** §11 forbids self-registration and gives the two
+users equal rights, which had meant `ambar user add` on the server was the only way. Any
+signed-in user can now create another from Settings, audited with who did it. Deleting a
+user and changing someone else's password are deliberately absent: sessions, audit rows and
+manual tags all reference a user, and "two equal users" gives nobody the authority to lock
+the other out.
+
+**More non-assets stopped being indexed**: `.import` (Godot writes one beside every
+imported file) and `.meta` (Unity). With M14's rules that is 623 files skipped on the
+target library — and the operator was still seeing `.import` tiles because rows from an
+earlier scan persist until a rescan marks them missing.
+
+**Renames**: `ingest` is `upload` in the navigation (the route stays, plus a `/upload`
+alias), and `palettes` left the top bar for the sidebar's Tools section — it is a view you
+visit occasionally, not a primary destination.
+
 ## Still open
 
-- **Licence (§17).** MIT for maximum reuse, or AGPL-3.0 if hosted commercial forks
-  are unwelcome. No `LICENSE` file exists yet. Worth settling before the
-  repository is made public, since it is awkward to change once others have
-  cloned it.
+Every milestone in §14 is delivered, and so is every deferral recorded above. What
+remains is two documented non-goals:
+
+- **`.tga` and `.xcf` have no pure-Go decoder** and are recorded as
+  `derive_state=unsupported` with a reason. Deliberate: §6 keeps external converters
+  optional rather than baking them into the image.
+- **Blend modes other than Normal are approximated** as Normal when compositing Aseprite
+  layers, and say so in the job log. No file in the 72-file corpus uses one, so there is
+  no evidence to implement against yet.

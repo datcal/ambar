@@ -39,9 +39,14 @@ func TestJunkPageEmptyBeforeScan(t *testing.T) {
 	if !strings.Contains(body, "No scan has run yet") {
 		t.Error("a first visit should say no scan has run yet")
 	}
-	// Reporting-only: there must be no removal action on the page in M12.
-	if strings.Contains(body, "/junk/remove") || strings.Contains(strings.ToLower(body), ">delete<") {
-		t.Error("the junk page must not offer a removal action in M12")
+	// M13 added the human-selected removal flow, but nothing may be pre-selected and
+	// nothing may act directly: every path goes through the /removals/plan preview
+	// (§9.1, invariant 3).
+	if strings.Contains(body, "checked") {
+		t.Error("no checkbox on the junk page may be pre-selected")
+	}
+	if strings.Contains(body, "/removals/apply") {
+		t.Error("the junk page must not post straight to apply; the preview is not skippable")
 	}
 }
 

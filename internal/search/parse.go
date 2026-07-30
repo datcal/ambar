@@ -14,7 +14,8 @@
 //	  - has:alpha|animation  a boolean analysis column
 //	  - style:pixel-art      the pixel-art column (other style:* are tags)
 //	  - field:<op><value>    numeric/date comparison on an indexed column
-//	  - color: / palette-near: parsed but a no-op until M11.5 (see decisions.md)
+//	  - color:#8b3a3a[~t]    assets containing that colour, within a tolerance
+//	  - palette-near:<id>[~t] assets whose palette is close to that asset's
 //
 // Parsing never touches the database. Tag and alias resolution, which does,
 // happens in the compiler.
@@ -31,8 +32,8 @@ import (
 type Query struct {
 	Groups []Group
 	// Warnings records syntactically valid but unactionable parts — a field whose
-	// column does not exist yet, a colour filter before M11.5 — so the UI can tell
-	// the user their filter was ignored rather than silently dropping it.
+	// column does not exist yet, a malformed colour — so the UI can tell the user
+	// their filter was ignored rather than silently dropping it.
 	Warnings []string
 }
 
@@ -107,11 +108,44 @@ type FieldTerm struct {
 	Date   int64 // unix seconds, when IsDate
 }
 
-// ColorTerm is color: or palette-near:, parsed but not matched until M11.5.
+// ColorTerm is `color:#8b3a3a` — assets containing that colour (§7).
+//
+// The match is a box in RGB rather than a perceptual distance: the query is "this
+// exact colour, give or take", which is what a person picking a hex out of the
+// palette panel means, and a box is what an index can answer. Tolerance is
+// per-channel and comes from an optional `~N` suffix.
 type ColorTerm struct {
 	base
+	R, G, B int
+	// Tolerance is the permitted per-channel difference, 0–255.
+	Tolerance int
+	// Raw is the token as typed, for error messages and for round-tripping a query
+	// back into the search box.
 	Raw string
 }
+
+// DefaultColorTolerance is the per-channel slack when a query does not say.
+//
+// 12 of 255 is deliberately tight: pixel artists reuse exact palette entries, so
+// `color:` is normally an exact-match question, and a wide box would return every
+// brownish asset in the library. `color:#8b3a3a~40` is there for the other case.
+const DefaultColorTolerance = 12
+
+// PaletteNearTerm is `palette-near:<asset_id>` — assets whose palette is close to
+// the given asset's (§7). Resolved by the compiler, which needs the database to read
+// the reference asset's swatches.
+type PaletteNearTerm struct {
+	base
+	AssetID int64
+	// Tolerance is the per-channel slack when deciding whether two swatches are the
+	// same colour. Looser than ColorTerm's by default: the question is "does this sit
+	// next to that", not "does it contain exactly this".
+	Tolerance int
+	Raw       string
+}
+
+// DefaultPaletteNearTolerance is the per-channel slack for palette-near.
+const DefaultPaletteNearTolerance = 24
 
 // numericFields maps a query field to its asset column. Only columns that exist
 // after M2 are here; the rest are futureFields.
@@ -284,8 +318,10 @@ func classify(tk token, q *Query) (Term, string) {
 			return StyleTerm{base{neg}, "pixel-art"}, ""
 		}
 		return TagTerm{base{neg}, strings.ToLower(text)}, ""
-	case "color", "palette-near":
-		return nil, fmt.Sprintf("ignored %s (colour search arrives in a later milestone)", key)
+	case "color", "colour":
+		return parseColor(neg, text, value)
+	case "palette-near":
+		return parsePaletteNear(neg, text, value)
 	}
 
 	if _, ok := numericFields[key]; ok {
@@ -342,4 +378,80 @@ func parseDate(s string) (int64, error) {
 		}
 	}
 	return 0, fmt.Errorf("unrecognised date %q", s)
+}
+
+// parseColor reads `color:#8b3a3a`, `color:8b3a3a`, the three-digit short form, and
+// an optional `~N` tolerance suffix.
+func parseColor(neg bool, text, value string) (Term, string) {
+	body, tolerance, warn := splitTolerance(text, value, DefaultColorTolerance)
+	if warn != "" {
+		return nil, warn
+	}
+	r, g, b, ok := parseHexColour(body)
+	if !ok {
+		return nil, fmt.Sprintf("ignored %s (not a hex colour like #8b3a3a)", text)
+	}
+	return ColorTerm{
+		base: base{neg}, R: r, G: g, B: b, Tolerance: tolerance, Raw: text,
+	}, ""
+}
+
+// parsePaletteNear reads `palette-near:1234` with an optional `~N` tolerance.
+func parsePaletteNear(neg bool, text, value string) (Term, string) {
+	body, tolerance, warn := splitTolerance(text, value, DefaultPaletteNearTolerance)
+	if warn != "" {
+		return nil, warn
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(body), 10, 64)
+	if err != nil || id <= 0 {
+		return nil, fmt.Sprintf("ignored %s (palette-near takes an asset id)", text)
+	}
+	return PaletteNearTerm{base: base{neg}, AssetID: id, Tolerance: tolerance, Raw: text}, ""
+}
+
+// splitTolerance peels an optional `~N` suffix off a value, clamping it to a
+// per-channel 0–255. Returns the remaining body and the tolerance to use.
+func splitTolerance(text, value string, fallback int) (body string, tolerance int, warn string) {
+	body, suffix, found := strings.Cut(value, "~")
+	if !found {
+		return body, fallback, ""
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(suffix))
+	if err != nil {
+		return body, 0, fmt.Sprintf("ignored %s (tolerance after ~ must be a number)", text)
+	}
+	switch {
+	case n < 0:
+		return body, 0, fmt.Sprintf("ignored %s (tolerance cannot be negative)", text)
+	case n > 255:
+		// Not an error: a tolerance of 255 already matches everything, so clamping is
+		// the same answer the user asked for.
+		n = 255
+	}
+	return body, n, ""
+}
+
+// parseHexColour accepts #rgb, #rrggbb and the same without the hash.
+func parseHexColour(s string) (r, g, b int, ok bool) {
+	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "#"))
+	switch len(s) {
+	case 3:
+		// #abc means #aabbcc, as everywhere else on the web.
+		v, err := strconv.ParseUint(s, 16, 32)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		r = int((v>>8)&0xf) * 0x11
+		g = int((v>>4)&0xf) * 0x11
+		b = int(v&0xf) * 0x11
+		return r, g, b, true
+	case 6:
+		v, err := strconv.ParseUint(s, 16, 32)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		return int(v >> 16 & 0xff), int(v >> 8 & 0xff), int(v & 0xff), true
+	default:
+		return 0, 0, 0, false
+	}
 }

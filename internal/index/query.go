@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -107,12 +109,84 @@ func (a Asset) IsModel() bool { return a.Kind == "model" }
 // HasModelPreview reports whether a normalised preview.glb was produced.
 func (a Asset) HasModelPreview() bool { return a.IsModel() && a.DeriveState == "ok" }
 
+// ViewerFormat says which three.js loader can show this model in the browser, or ""
+// when none can (M14).
+//
+// The point of this method is that it does not depend on derive at all. §8's viewer
+// used to require a normalised preview.glb, so every .obj and .fbx in the library
+// showed "this format needs Blender to preview" and nothing else — while three.js
+// has read both formats natively for years. Only `.blend` genuinely needs Blender,
+// because it is an application file rather than an interchange format.
+func (a Asset) ViewerFormat() string {
+	if !a.IsModel() {
+		return ""
+	}
+	switch strings.ToLower(a.Ext) {
+	case "glb", "gltf":
+		return "gltf"
+	case "obj":
+		return "obj"
+	case "fbx":
+		return "fbx"
+	default:
+		// .blend, and anything else a future scan classifies as a model.
+		return ""
+	}
+}
+
+// NeedsBrowserThumb reports whether the grid should ask the browser to render a
+// thumbnail for this model (M15): a format three.js can read, with no derivative yet.
+//
+// Blender would produce a better one — a lit turntable rather than a flat snapshot —
+// but Blender is optional (§6) and a grid full of extension chips is worse than a
+// snapshot.
+func (a Asset) NeedsBrowserThumb() bool {
+	return a.ViewerFormat() != "" && !a.HasPreview() && !a.Missing()
+}
+
+// ViewerSrc is the URL the 3D viewer should load: the derived, normalised preview
+// when there is one, otherwise the original file through the companion-file route so
+// its .mtl, .bin and textures resolve beside it.
+func (a Asset) ViewerSrc() string {
+	id := strconv.FormatInt(a.ID, 10)
+	if a.HasModelPreview() {
+		return "/assets/" + id + "/preview.glb"
+	}
+	return "/assets/" + id + "/file/" + url.PathEscape(a.Filename)
+}
+
+// MTLName is the material library an .obj conventionally sits beside: the same
+// basename with a .mtl extension. A guess, and a cheap one — the viewer carries on
+// without materials when it is wrong.
+func (a Asset) MTLName() string {
+	if strings.ToLower(a.Ext) != "obj" {
+		return ""
+	}
+	return strings.TrimSuffix(a.Filename, filepath.Ext(a.Filename)) + ".mtl"
+}
+
 // BBoxMetres renders the bounding box as "x × y × z m", or "" when unknown.
 func (a Asset) BBoxMetres() string {
 	if a.BBoxX == 0 && a.BBoxY == 0 && a.BBoxZ == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%.2f × %.2f × %.2f m", a.BBoxX, a.BBoxY, a.BBoxZ)
+}
+
+// IsFont reports whether this asset is a typeface, which gets a live specimen rather
+// than a static preview (M15).
+func (a Asset) IsFont() bool { return a.Kind == "font" }
+
+// FontFamily is the family name recorded by the specimen renderer, taken from the
+// derive notes ("family: Inter"). Empty when unknown.
+func (a Asset) FontFamily() string {
+	const prefix = "family: "
+	for _, note := range strings.Split(a.DeriveError, "; ") {
+		if strings.HasPrefix(note, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(note, prefix))
+		}
+	}
+	return ""
 }
 
 // IsAudio reports whether this asset is a sound file (§6, §8 audio viewer).
@@ -147,6 +221,16 @@ func (a Asset) HasPalette() bool {
 // exact enumeration, which the UI must surface as approximate (§8).
 func (a Asset) PaletteApprox() bool { return a.PaletteKind == palette.KindQuantized }
 
+// PaletteFirstHex is the dominant swatch's hex, for the example in the panel's help
+// line. Empty when there is no palette.
+func (a Asset) PaletteFirstHex() string {
+	swatches := a.PaletteSwatches()
+	if len(swatches) == 0 {
+		return ""
+	}
+	return swatches[0].Hex
+}
+
 // AssetSwatch is one palette colour prepared for the detail page.
 type AssetSwatch struct {
 	palette.Swatch
@@ -154,6 +238,11 @@ type AssetSwatch struct {
 
 // Percent renders the swatch's share of visible pixels for display (§8).
 func (s AssetSwatch) Percent() string { return fmt.Sprintf("%.1f", s.Ratio*100) }
+
+// HexQuery is the hex without the leading '#', for building a `color:` query in a
+// URL. The hash would have to be percent-encoded, and a bare hex is accepted by the
+// §7 parser precisely so this reads cleanly.
+func (s AssetSwatch) HexQuery() string { return strings.TrimPrefix(s.Hex, "#") }
 
 // PaletteSwatches parses the stored palette for rendering, most-used first. A parse
 // failure yields no swatches rather than an error: a broken palette must not blank
@@ -202,6 +291,10 @@ type ListOptions struct {
 	Kind string
 	// PackID filters to one pack. Zero means all packs.
 	PackID int64
+	// Dir restricts the results to a library directory and everything beneath it —
+	// the folder tree's filter (M14). Slash-separated and library-relative; empty
+	// browses the whole library.
+	Dir string
 	// IncludeMissing shows assets whose file was absent at the last scan. Off by
 	// default: they are not there, so they would be noise in a browse. §12 keeps
 	// the rows forever regardless.
@@ -322,6 +415,10 @@ func listFilters(opts ListOptions) ([]string, []any, error) {
 	if opts.PackID != 0 {
 		where = append(where, "a.pack_id = ?")
 		args = append(args, opts.PackID)
+	}
+	if dir := cleanDir(opts.Dir); dir != "" {
+		where = append(where, dirExpr("a"))
+		args = append(args, dir, dir+"/", dir+"/")
 	}
 	// The free-text and structured parts of opts.Query are compiled separately by
 	// the caller through the §7 parser; listFilters covers only the sidebar facets.
@@ -564,4 +661,33 @@ func (d deriveColumns) apply(a *Asset) {
 			a.AnimationNames = names
 		}
 	}
+}
+
+// cleanDir normalises a directory filter from a URL: slashes only, no leading or
+// trailing separator, no traversal. It is not a filesystem path — nothing is opened
+// from it — but a "../.." in a LIKE prefix would still be a confusing filter, and
+// rejecting it here keeps the SQL honest.
+func cleanDir(dir string) string {
+	dir = strings.Trim(strings.TrimSpace(strings.ReplaceAll(dir, "\\", "/")), "/")
+	if dir == "" || dir == "." {
+		return ""
+	}
+	for _, seg := range strings.Split(dir, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return ""
+		}
+	}
+	return dir
+}
+
+// dirExpr matches assets at or below a directory, comparing against the library path
+// assembled from the pack and the asset. Three bound arguments, in order: the
+// directory, its prefix (for the length), and the prefix again.
+//
+// A prefix comparison rather than LIKE: no escaping of % or _ in real filenames, and
+// SQLite can still use the index on the underlying columns for the pack half.
+func dirExpr(alias string) string {
+	libPath := fmt.Sprintf(`(CASE WHEN p.library_rel_path IN ('', '.') THEN %[1]s.rel_path
+	                              ELSE p.library_rel_path || '/' || %[1]s.rel_path END)`, alias)
+	return fmt.Sprintf("(%[1]s = ? OR substr(%[1]s, 1, length(?)) = ?)", libPath)
 }

@@ -27,6 +27,17 @@ const (
 	ActionUserCreated    = "user.created"
 )
 
+// Actions recorded in M13, the destructive ones (§9.1: "every removal goes in the
+// audit log with the reason and the finding that motivated it"). One entry per
+// path, not per batch: a batch of two hundred junk files should be searchable by
+// the path that went missing, which is what someone asks about six months later.
+const (
+	ActionRemovalTrashed = "removal.trashed"
+	ActionRemovalLinked  = "removal.linked"
+	ActionTrashRestored  = "trash.restored"
+	ActionTrashPurged    = "trash.purged"
+)
+
 // Entry is one audit record. UserID is nil when the actor is unknown, which is
 // the normal case for a failed login against a username that does not exist.
 type Entry struct {

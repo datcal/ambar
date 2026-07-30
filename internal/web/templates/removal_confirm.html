@@ -1,0 +1,173 @@
+{{define "title"}}Confirm removal — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Confirm</h1>
+
+  {{/* §9.1: "Always preview. Show the complete list of affected paths and the total
+       bytes before anything moves. No one-click 'clean up everything'." This page is
+       that preview, and it is not skippable: /removals/apply re-plans from the same
+       selection, and so does the worker. */}}
+
+  {{if .Flash}}<p class="note note-warn" role="alert">{{.Flash}}</p>{{end}}
+
+  {{with .Plan}}
+    {{if .Ops}}
+      <div class="card">
+        <div class="palette-head">
+          <h2>
+            {{if .LinkOps}}{{if .TrashOps}}Remove and link{{else}}Replace with links{{end}}
+            {{else}}Move to the trash{{end}}
+          </h2>
+          <span class="badge">
+            {{len .Ops}} item(s) · {{.TotalFiles}} file(s) · {{bytes .TotalBytes}}
+          </span>
+        </div>
+        {{if .Reason}}<p class="hint">Reason recorded in the audit log: {{.Reason}}</p>{{end}}
+
+        {{if .TrashOps}}
+          <p>
+            These are <strong>moved</strong> into
+            <code>{{$.TrashDir}}</code>, keeping their relative paths, with a JSON record of where
+            each came from. Nothing is deleted, and the trash is never purged on its own.
+          </p>
+          <div class="tablewrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th scope="col">Path</th>
+                  <th scope="col">Root</th>
+                  <th scope="col" class="num">Files</th>
+                  <th scope="col" class="num">Size</th>
+                  <th scope="col">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .TrashOps}}
+                  <tr>
+                    <td><code>{{.Path}}</code>{{if .IsDir}} <span class="hint">directory</span>{{end}}</td>
+                    <td>{{.Root}}</td>
+                    <td class="num">{{.Files}}</td>
+                    <td class="num">{{bytes .Bytes}}</td>
+                    <td class="dir">{{if .Note}}{{.Note}}{{else}}—{{end}}</td>
+                  </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        {{end}}
+
+        {{if .LinkOps}}
+          <p>
+            These keep their paths. Each is replaced by a
+            {{if eq $.LinkMode "hardlink"}}<strong>hardlink</strong> to the kept copy — the two
+              paths become one inode, which is safe here only because originals are never edited
+            {{else}}<strong>copy-on-write reflink</strong> to the kept copy — the space is shared,
+              and editing one copy silently diverges it from the other
+            {{end}}.
+            The bytes are re-hashed immediately before the write, so a file that changed since the
+            last scan is refused rather than overwritten.
+          </p>
+          <div class="tablewrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th scope="col">Redundant copy</th>
+                  <th scope="col">Linked to</th>
+                  <th scope="col" class="num">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .LinkOps}}
+                  <tr>
+                    <td><code>{{.Path}}</code></td>
+                    <td><code>{{.KeepPath}}</code></td>
+                    <td class="num">{{bytes .Bytes}}</td>
+                  </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        {{end}}
+
+        {{if .Transfers}}
+          <p class="note">
+            Curation is transferred first, before anything moves:
+            {{range .Transfers}}{{if .What}}{{.What}}{{else}}tags and provenance{{end}}
+              (pack {{.FromPackID}} → pack {{.ToPackID}}){{end}}.
+            If that step fails, nothing is removed.
+          </p>
+        {{end}}
+      </div>
+    {{end}}
+
+    {{if .Blocked}}
+      <div class="card">
+        <h2>Refused — {{len .Blocked}}</h2>
+        <p class="hint">
+          These were selected but will not happen. The reason is the rule that refused them, not a
+          suggestion to try again.
+        </p>
+        <div class="tablewrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th scope="col">Path</th>
+                <th scope="col">Why not</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Blocked}}
+                <tr>
+                  <td><code>{{.Path}}</code></td>
+                  <td class="dir">{{.Reason}}</td>
+                </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {{end}}
+
+    {{if .Ops}}
+      {{/* The same selection, resubmitted. Nothing is carried in a token: apply
+           re-plans from these fields, so a stale page cannot widen the outcome. */}}
+      <form method="post" action="/removals/apply" class="stack">
+        <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+        <input type="hidden" name="root" value="{{$.PlanForm.Root}}">
+        <input type="hidden" name="action" value="{{$.PlanForm.Action}}">
+        <input type="hidden" name="finding" value="{{$.PlanForm.Finding}}">
+        <input type="hidden" name="reason" value="{{$.PlanForm.Reason}}">
+        {{if $.PlanForm.KeepPath}}<input type="hidden" name="keep" value="{{$.PlanForm.KeepPath}}">{{end}}
+        {{with $.PlanForm.Transfer}}
+          <input type="hidden" name="transfer_from" value="{{.FromPackID}}">
+          <input type="hidden" name="transfer_to" value="{{.ToPackID}}">
+          <input type="hidden" name="transfer_what" value="{{.What}}">
+        {{end}}
+        {{range .Ops}}<input type="hidden" name="path" value="{{.Path}}">{{end}}
+
+        <div class="actions-row">
+          <button type="submit">
+            {{if .LinkOps}}Link {{len .LinkOps}} file(s){{else}}Move {{len .TrashOps}} item(s) to the trash{{end}}
+          </button>
+          <button type="submit" formaction="/removals/script" class="linkish">
+            Download as a shell script instead
+          </button>
+          <a href="/dupes">cancel</a>
+        </div>
+        <p class="hint">
+          Runs as a background job; the <a href="/trash">trash</a> page shows the result and can
+          put anything back.
+        </p>
+      </form>
+    {{else}}
+      <div class="card">
+        <p>Nothing in that selection can be acted on.</p>
+        <p class="hint">
+          <a href="/dupes">back to duplicates</a> · <a href="/junk">back to junk</a>
+        </p>
+      </div>
+    {{end}}
+  {{end}}
+</div>
+{{end}}

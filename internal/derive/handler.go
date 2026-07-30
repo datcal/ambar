@@ -36,12 +36,13 @@ type Payload struct {
 
 // Deriver runs derivative jobs against the index.
 type Deriver struct {
-	db          *db.DB
-	libraryRoot string
-	dataRoot    string
-	blenderBin  string
-	maxPixels   int64
-	log         *slog.Logger
+	db           *db.DB
+	libraryRoot  string
+	dataRoot     string
+	blenderBin   string
+	maxPixels    int64
+	afterAnalyse func(ctx context.Context, sha256hex string) error
+	log          *slog.Logger
 }
 
 // Options configures a Deriver.
@@ -52,7 +53,17 @@ type Options struct {
 	MaxPixels int64
 	// BlenderBin is AMBAR_BLENDER_BIN, the optional external Blender CLI (§6).
 	BlenderBin string
-	Log        *slog.Logger
+	// AfterAnalyse runs once a content hash's analysis has been recorded, with that
+	// hash. It exists so §7's derive-dependent auto tags (`style:pixel-art`,
+	// `has:alpha`) can be applied the moment the analysis they read exists, without
+	// this package knowing what a tag is — the same callback shape index uses to stay
+	// unaware of derive.
+	//
+	// Called on the worker goroutine, so it must be quick. An error is logged and
+	// swallowed: a missing tag is not worth failing a derived thumbnail over, and the
+	// next `ambar retag` fixes it.
+	AfterAnalyse func(ctx context.Context, sha256hex string) error
+	Log          *slog.Logger
 }
 
 func New(database *db.DB, opts Options) *Deriver {
@@ -65,12 +76,13 @@ func New(database *db.DB, opts Options) *Deriver {
 		maxPixels = DefaultMaxPixels
 	}
 	return &Deriver{
-		db:          database,
-		libraryRoot: opts.LibraryRoot,
-		dataRoot:    opts.DataRoot,
-		blenderBin:  opts.BlenderBin,
-		maxPixels:   maxPixels,
-		log:         log,
+		db:           database,
+		libraryRoot:  opts.LibraryRoot,
+		dataRoot:     opts.DataRoot,
+		blenderBin:   opts.BlenderBin,
+		maxPixels:    maxPixels,
+		afterAnalyse: opts.AfterAnalyse,
+		log:          log,
 	}
 }
 
@@ -423,6 +435,50 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		sha256hex,
 	); err != nil {
 		return fmt.Errorf("record derive result for content %s: %w", sha256hex[:8], err)
+	}
+
+	// §7 colour search reads swatches from an indexed table rather than parsing the
+	// JSON above per query. Written here because this is the one place that knows the
+	// palette, and keyed by content hash for the same reason as everything else in
+	// this statement: every asset with these bytes has this palette.
+	if err := d.recordSwatches(ctx, sha256hex, result.Palette.Swatches); err != nil {
+		return err
+	}
+
+	// §7's derive-dependent auto tags, now that the analysis they read exists.
+	if d.afterAnalyse != nil {
+		if err := d.afterAnalyse(ctx, sha256hex); err != nil {
+			d.log.WarnContext(ctx, "post-analysis hook failed",
+				"content", sha256hex[:8], "error", err)
+		}
+	}
+	return nil
+}
+
+// recordSwatches replaces the indexed swatch rows for every asset with this content.
+//
+// Delete-then-insert rather than upsert: a re-derive can produce fewer swatches than
+// before (a quantized palette after an exact one), and leftover high-rank rows would
+// make a colour search match a colour the asset no longer has.
+func (d *Deriver) recordSwatches(ctx context.Context, sha256hex string, swatches []palette.Swatch) error {
+	if _, err := d.db.Writer.ExecContext(ctx, `
+		DELETE FROM asset_swatches
+		WHERE asset_id IN (SELECT id FROM assets WHERE sha256 = ?)`, sha256hex); err != nil {
+		return fmt.Errorf("clear swatches for content %s: %w", sha256hex[:8], err)
+	}
+	if len(swatches) == 0 {
+		return nil
+	}
+
+	for i, s := range swatches {
+		if _, err := d.db.Writer.ExecContext(ctx, `
+			INSERT INTO asset_swatches (asset_id, rank, r, g, b, ratio)
+			SELECT id, ?, ?, ?, ?, ? FROM assets WHERE sha256 = ?
+			ON CONFLICT(asset_id, rank) DO UPDATE SET
+			    r = excluded.r, g = excluded.g, b = excluded.b, ratio = excluded.ratio`,
+			i, s.R, s.G, s.B, s.Ratio, sha256hex); err != nil {
+			return fmt.Errorf("record swatch %d for content %s: %w", i, sha256hex[:8], err)
+		}
 	}
 	return nil
 }

@@ -488,23 +488,54 @@ func TestAssetDownloadFilenameHeaderIsSafe(t *testing.T) {
 	}
 }
 
-// --- home page --------------------------------------------------------------
+// --- the landing page -------------------------------------------------------
 
-func TestIndexPageShowsIndexStats(t *testing.T) {
+// TestRootIsTheLibrary: M14 made the library the front door. "The whole point is
+// the assets", so / is the grid, not a dashboard of counts.
+func TestRootIsTheLibrary(t *testing.T) {
 	ts := newTestServer(t)
 	ts.createUser(t, testUsername, testPassword)
 	ts.login(t, testUsername, testPassword)
 
-	// Empty index first.
+	// Empty index first: the grid's empty state is where a new user is told what to do.
 	if body := ts.body(t, ts.get(t, "/")); !strings.Contains(body, "ambar scan") {
-		t.Error("the home page does not tell a new user to run ambar scan")
+		t.Error("the empty library does not tell a new user to run ambar scan")
 	}
 
 	ts.seedLibrary(t, map[string]string{"pack/a.png": "a", "pack/b.png": "bb"})
 
 	body := ts.body(t, ts.get(t, "/"))
+	for _, want := range []string{"thumbgrid", "a.png", "b.png"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/ should render the grid; %q is missing", want)
+		}
+	}
+	// The three-pane shell, with navigation permanently on the left.
+	for _, want := range []string{`class="app"`, "panel-left", "Kinds", "tilesize"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/ should render the workspace shell; %q is missing", want)
+		}
+	}
+	// And it is the same page as /assets, so old links keep working.
+	if alt := ts.body(t, ts.get(t, "/assets")); !strings.Contains(alt, "thumbgrid") {
+		t.Error("/assets should still render the grid")
+	}
+}
+
+// TestStatusPageShowsIndexStats: the old dashboard, now one page along.
+func TestStatusPageShowsIndexStats(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{"pack/a.png": "a", "pack/b.png": "bb"})
+
+	body := ts.body(t, ts.get(t, "/status"))
 	if !strings.Contains(body, "Browse assets") {
-		t.Error("the home page has no link to the grid once assets exist")
+		t.Error("the status page has no link to the library")
+	}
+	// A document page, not the workspace shell.
+	if strings.Contains(body, "panel-left") {
+		t.Error("the status page should stay a centred document")
 	}
 }
 
@@ -554,4 +585,55 @@ func truncateForLog(s string) string {
 		return s[:40] + "..."
 	}
 	return s
+}
+
+// TestFolderTreeNavigation covers M14's sidebar: the tree with counts, and the
+// click-through that filters the grid to one directory.
+func TestFolderTreeNavigation(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"2d/pack-a/PNG/hero.png": "a",
+		"2d/pack-a/PNG/tree.png": "b",
+		"2d/pack-b/sprite.png":   "c",
+		"audio/hit.wav":          "d",
+	})
+
+	body := ts.body(t, ts.get(t, "/"))
+	if !strings.Contains(body, "Folders") {
+		t.Fatal("the sidebar has no folder tree")
+	}
+	// The href percent-encodes the separator (html/template does this in a query
+	// context), so the readable assertion is on the title attribute.
+	for _, want := range []string{`title="2d"`, `title="audio"`, "whole library"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the tree is missing %q", want)
+		}
+	}
+	// Collapsed by default: pack-a's children are not rendered until it is opened.
+	if strings.Contains(body, `title="2d/pack-a/PNG"`) {
+		t.Error("deep branches should stay collapsed until browsed")
+	}
+
+	// Browsing a directory filters the grid and opens that branch.
+	body = ts.body(t, ts.get(t, "/?dir=2d/pack-a"))
+	if !strings.Contains(body, "hero.png") || !strings.Contains(body, "tree.png") {
+		t.Error("browsing 2d/pack-a should show its assets")
+	}
+	if strings.Contains(body, "sprite.png") || strings.Contains(body, "hit.wav") {
+		t.Error("browsing a directory must exclude everything outside it")
+	}
+	if !strings.Contains(body, `title="2d/pack-a/PNG"`) {
+		t.Error("the browsed branch should be expanded")
+	}
+	if !strings.Contains(body, `class="on"`) {
+		t.Error("the browsed node should be marked as current")
+	}
+
+	// A traversal in the parameter browses the whole library rather than erroring.
+	body = ts.body(t, ts.get(t, "/?dir=../../etc"))
+	if !strings.Contains(body, "hero.png") || !strings.Contains(body, "hit.wav") {
+		t.Errorf("a bad dir should fall back to the whole library:\n%s", body[:200])
+	}
 }
