@@ -65,6 +65,11 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 		SessionSecret: []byte("a-test-secret-for-csrf-hmac-signing"),
 		CookieSecure:  false,
 		Workers:       1,
+		// The same defaults config.Load applies, so the M13 removal routes behave
+		// here as they do in a real deployment. hardlink rather than reflink because
+		// a temp dir is rarely on btrfs.
+		TrashDir:       filepath.Join(libraryRoot, "_trash"),
+		DedupeLinkMode: "hardlink",
 	}
 	if adjust != nil {
 		adjust(cfg)
@@ -289,10 +294,11 @@ func TestDetailedHealthReport(t *testing.T) {
 
 	// Every check must be present and passing on a healthy instance.
 	// derivatives_dir and job_queue arrived in M2, replacing three
-	// not_yet_implemented entries.
+	// not_yet_implemented entries; dedupe_link_mode arrived in M13, replacing the
+	// last of them but the Blender probe.
 	want := map[string]bool{
 		"database": false, "library_root": false, "data_root": false,
-		"derivatives_dir": false, "job_queue": false,
+		"derivatives_dir": false, "job_queue": false, "dedupe_link_mode": false,
 	}
 	for _, c := range report.Checks {
 		if _, expected := want[c.Name]; !expected {

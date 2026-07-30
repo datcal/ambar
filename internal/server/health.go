@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/datcal/ambar/internal/derive"
+	"github.com/datcal/ambar/internal/removal"
 )
 
 // handleLiveness is the container HEALTHCHECK and nothing more.
@@ -59,6 +60,10 @@ type healthReport struct {
 	FailedJobs  int           `json:"failed_job_count"`
 	Derivatives *derive.Stats `json:"derivatives,omitempty"`
 
+	// DedupeLink is AMBAR_DEDUPE_LINK_MODE and whether the library filesystem
+	// supports it (§9.1).
+	DedupeLink *removal.LinkSupport `json:"dedupe_link,omitempty"`
+
 	// NotYetImplemented names the §12 checks this milestone does not perform.
 	//
 	// A health endpoint that silently omits checks reads as "everything is
@@ -80,7 +85,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds: int64(time.Since(s.startedAt).Seconds()),
 		NotYetImplemented: []string{
 			"blender_available (M6)",
-			"reflink_support (M13)",
 		},
 	}
 
@@ -100,6 +104,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// or read-only volume shows up here first.
 		checkDirectory("derivatives_dir", filepath.Join(s.cfg.DataRoot, "derivatives"), true),
 	)
+
+	// §9.1 asks for the dedupe link mode to be probed and reported here, so the UI
+	// can recommend linking over removal only when the filesystem can actually do it.
+	// A library that cannot reflink is not an unhealthy service — it is a fact about
+	// the volume — so this never turns the endpoint red.
+	linkSupport := s.linkSupport()
+	report.Checks = append(report.Checks, healthCheck{
+		Name: "dedupe_link_mode", OK: true,
+		Detail: fmt.Sprintf("%s: %s", linkSupport.Mode, linkSupport.Detail),
+	})
+	report.DedupeLink = &linkSupport
 
 	// §12: job queue depth and failed job count.
 	if jobStats, err := s.jobs.Stats(ctx); err != nil {

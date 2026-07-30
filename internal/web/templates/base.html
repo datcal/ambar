@@ -15,23 +15,53 @@
   <script src="/static/audio.js" defer></script>
   {{/* §8 keyboard audition island; dormant until the grid has audio tiles. */}}
   <script src="/static/audition.js" defer></script>
+  {{/* §9.1 select-all-in-a-finding island; does nothing on pages with no findings. */}}
+  <script src="/static/removal.js" defer></script>
+  {{/* The workspace shell: thumbnail size, panel state. A no-op on document pages. */}}
+  <script src="/static/workspace.js" defer></script>
+  {{/* §14 "open in…" path copying; dormant without the panel. */}}
+  <script src="/static/openwith.js" defer></script>
+  {{/* Paints colour chips from data-hex (sidebar filter, pack strips, palette). */}}
+  <script src="/static/palette-strip.js" defer></script>
 </head>
 {{/*
   §11: configure hx-headers globally so every htmx request carries the CSRF
   token without each control having to remember to. Plain <form> posts use the
   hidden field instead.
+
+  Two layouts, chosen per page by pageData.Workspace:
+
+    - A *workspace* page is the library itself: full-height, full-width, three
+      panes — navigation left, content centre, inspector right — each scrolling
+      independently. This is what the tool is for, so it gets the whole window.
+    - Everything else (forms, reports, settings) stays a centred document, where a
+      60rem measure is a feature rather than a cage.
 */}}
-<body hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'>
+<body class="{{if .Workspace}}app{{end}}" hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'>
   <header class="topbar">
     <a class="brand" href="/">ambar</a>
-    <nav>
+
+    {{if .User}}
+      {{/* Search belongs in the toolbar, not inside one page: it is how the library
+           is used, so it sits in the same place on every screen. */}}
+      <form method="get" action="/" class="topsearch" role="search">
+        <input type="search" name="q" value="{{.Search}}"
+               placeholder="Search — wooden sword · type:model · theme:sci-fi · color:#8b3a3a · -style:realistic"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               aria-label="Search the library">
+        {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+        {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+      </form>
+    {{end}}
+
+    <nav class="topnav">
       {{if .User}}
-        <a href="/assets">assets</a>
-        <a href="/ingest">ingest</a>
-        <a href="/provenance">provenance</a>
-        <a href="/jobs">jobs</a>
+        <a href="/">library</a>
+        <a href="/upload">upload</a>
+        <a href="/dupes">duplicates</a>
         <a href="/junk">junk</a>
-        <a href="/settings/tokens">tokens</a>
+        <a href="/settings">settings</a>
+        <a href="/status">status</a>
         <span class="who">{{.User.Username}}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -41,12 +71,21 @@
     </nav>
   </header>
 
-  <main>
-    {{block "content" .}}{{end}}
-  </main>
+  {{if .Workspace}}
+    <div class="workspace">
+      <aside class="panel panel-left" aria-label="Library navigation">
+        {{block "sidebar" .}}{{end}}
+      </aside>
+      <main class="workmain">{{block "content" .}}{{end}}</main>
+      {{/* The rail renders its own <aside>, so a page without one leaves no gap. */}}
+      {{block "rail" .}}{{end}}
+    </div>
+  {{else}}
+    <main>{{block "content" .}}{{end}}</main>
 
-  <footer class="footer">
-    <span>ambar {{.Version}}</span>
-  </footer>
+    <footer class="footer">
+      <span>ambar {{.Version}}</span>
+    </footer>
+  {{end}}
 </body>
 </html>

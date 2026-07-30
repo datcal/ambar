@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
+	"image"
 	"image/color"
 	"testing"
 	"time"
@@ -12,12 +13,15 @@ import (
 
 // --- a builder for real files of the format ---------------------------------
 //
-// No Aseprite-authored file is available here, so the fixtures are constructed to the
-// documented layout. That tests the decoder against the spec rather than against real
-// output — an important limitation, and the reason the decoder degrades to
-// ErrUnsupportedFeature rather than guessing, and why §6 keeps AMBAR_ASEPRITE_BIN as
-// an escape hatch. Dropping one real .aseprite into testdata/fixtures/ is the single
-// most valuable addition to this file.
+// The fixtures here are constructed to the documented layout, which tests the decoder
+// against the spec. That is necessary but was not sufficient: every fixture used opaque
+// colours, so a compositing bug that only affected semi-transparent pixels passed
+// everything in this file for two milestones.
+//
+// corpus_test.go closes that: it decodes real Aseprite-authored files and compares them
+// pixel for pixel against the vendor's own PNG export of the same artwork. Nothing is
+// vendored (the corpus is non-redistributable), so it is env-gated — but a fixture built
+// here should still cover any behaviour worth relying on, semi-transparency included.
 
 type builder struct {
 	width, height    int
@@ -892,6 +896,65 @@ func TestFuzzyGarbageDoesNotPanic(t *testing.T) {
 
 // assertPixel checks one pixel of one frame, allowing a small rounding tolerance from
 // the alpha compositing arithmetic.
+// TestSemiTransparentCompositeIsStraightAlpha is the regression test for a bug the
+// builder fixtures could not see: the compositor produced straight
+// (non-premultiplied) alpha but returned it in an *image.RGBA, whose contract is
+// premultiplied. Every opaque pixel was right, so every test here passed, while a
+// shadow layer at 35% opacity came out nearly three times too bright in every
+// thumbnail, palette and animated preview derived from it.
+//
+// Real vendor-exported PNGs of the same artwork are what caught it (see
+// corpus_test.go); this test reproduces it from a two-pixel fixture so it stays
+// caught without a corpus.
+func TestSemiTransparentCompositeIsStraightAlpha(t *testing.T) {
+	// One layer at 89/255 opacity — the value a real CraftPix shadow layer uses.
+	const opacity = 89
+	colour := color.RGBA{R: 40, G: 40, B: 63, A: 0xff}
+
+	data := newBuilder(2, 2, 32).
+		frame(100,
+			layerChunk("shadow", true, opacity, blendModeNormal, layerTypeNormal),
+			celChunk(0, 0, 0, 255, 2, 2, rgbaPixels(2, 2, colour)),
+		).bytes()
+
+	f, err := Decode(data, Options{})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// The frame must be a straight-alpha image, because that is what it holds.
+	img, ok := f.Frames[0].Image.(*image.NRGBA)
+	if !ok {
+		t.Fatalf("frame image is %T, want *image.NRGBA: Aseprite pixels are "+
+			"non-premultiplied, and image.RGBA would misrepresent every semi-transparent pixel",
+			f.Frames[0].Image)
+	}
+
+	// Straight values: the layer opacity lands in alpha, the colour is untouched.
+	if got := img.NRGBAAt(0, 0); got.R != colour.R || got.G != colour.G ||
+		got.B != colour.B || got.A != opacity {
+		t.Errorf("straight pixel = %+v, want {40 40 63 89}", got)
+	}
+
+	// And what every consumer actually reads — the premultiplied form — must be the
+	// colour scaled by that alpha, not the colour itself.
+	r, g, b, a := f.Frames[0].Image.At(0, 0).RGBA()
+	wantR := uint32(colour.R) * opacity / 255
+	wantB := uint32(colour.B) * opacity / 255
+	if abs32(r>>8, wantR) > 1 || abs32(g>>8, uint32(colour.G)*opacity/255) > 1 ||
+		abs32(b>>8, wantB) > 1 || a>>8 != opacity {
+		t.Errorf("premultiplied pixel = %d,%d,%d,%d; want about %d,%d,%d,%d",
+			r>>8, g>>8, b>>8, a>>8, wantR, uint32(colour.G)*opacity/255, wantB, opacity)
+	}
+}
+
+func abs32(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
 func assertPixel(t *testing.T, f *File, frame, x, y int, want color.RGBA) {
 	t.Helper()
 

@@ -46,7 +46,10 @@ type SheetInfo struct {
 // v3 (M6): glTF/GLB models derive preview.glb and metadata.
 // v4 (M7): still images are checked for a spritesheet grid.
 // v5 (M11.5): still images extract a colour palette (palette_json, palette_kind).
-const Version = 5
+// Version 6 (M15): audio gained a waveform tile and fonts gained a specimen, both of
+// which are thumbnails that did not exist before — so everything derived under
+// version 5 needs one more pass to get them.
+const Version = 6
 
 // Thumbnail sizes. 512 is what §3's layout specifies; @2x covers a high-DPI display.
 const (
@@ -155,6 +158,12 @@ func Generate(opts GenerateOptions) (*Result, error) {
 	}
 	if isModelExt(opts.Ext) {
 		return deriveModel(opts)
+	}
+	// A font's preview is the font itself (M15): §4 has had a `font` kind since M1 and
+	// nothing ever rendered one, so a library of typefaces was a wall of extension
+	// chips answering nothing about how they look.
+	if isFontExt(opts.Ext) {
+		return deriveFont(opts)
 	}
 
 	src, err := Decode(opts.AbsPath, opts.Ext, DecodeOptions{MaxPixels: opts.MaxPixels})

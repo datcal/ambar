@@ -46,9 +46,25 @@ func deriveAudio(opts GenerateOptions) (*Result, error) {
 		return nil, fmt.Errorf("write peaks: %w", err)
 	}
 
+	// A grid tile (M15). Audio used to show as a bare extension chip, which makes two
+	// hundred .wav files indistinguishable; the waveform is the shape §8 already draws
+	// on the detail page, rendered once here from the peaks this pass just computed —
+	// so it costs no extra decode.
+	files := []string{FilePeaks}
+	if err := writeWaveformThumb(filepath.Join(outDir, FileThumb), res.Peaks); err != nil {
+		// Not fatal: the sound is analysed and playable, and a missing tile is a
+		// cosmetic loss. Recorded as a note so it is visible rather than silent.
+		return &Result{
+			Audio: &res.Info,
+			Files: files,
+			Notes: []string{"waveform tile could not be written: " + err.Error()},
+		}, nil
+	}
+	files = append(files, FileThumb)
+
 	info := res.Info
 	return &Result{
 		Audio: &info,
-		Files: []string{FilePeaks},
+		Files: files,
 	}, nil
 }

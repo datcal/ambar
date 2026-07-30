@@ -42,7 +42,7 @@ func TestSpritesheetConfirmFlow(t *testing.T) {
 
 	// The detail page shows the grid as detected, awaiting confirmation.
 	detail := readBody(t, ts.get(t, itoa("/assets/%d", id)))
-	for _, want := range []string{"sheet-panel", "please confirm", "sheet-grid", "4 × 3 = 12 frames"} {
+	for _, want := range []string{"sheet-line", "please confirm", "4 × 3 = 12 frames"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("sheet panel missing %q", want)
 		}
@@ -68,5 +68,38 @@ func TestSpritesheetConfirmFlow(t *testing.T) {
 	}
 	if !strings.Contains(detail, ">manual<") {
 		t.Errorf("manual source badge missing")
+	}
+}
+
+// TestSpritesheetLineStatesWhatItIsFor: M14 gave the panel an explanation and a
+// player; M15 removed the panel from the detail page — the animation already plays in
+// the viewer above, and the space belongs to the palette and the tags. What must
+// survive is the one thing a person cannot guess: what confirming the grid is *for*.
+func TestSpritesheetLineStatesWhatItIsFor(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	id := ts.insertSheetAsset(t, "walk.png")
+
+	body := readBody(t, ts.get(t, itoa("/assets/%d", id)))
+
+	// The facts, and why they matter.
+	for _, want := range []string{
+		"sheet-line",
+		"frames",
+		"animated preview",
+		"AnimatedSprite2D",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the spritesheet line is missing %q", want)
+		}
+	}
+	// The control is still one click.
+	if !strings.Contains(body, itoa("/assets/%d/frames", id)) {
+		t.Error("the confirm control is missing")
+	}
+	// And the page no longer carries a second player: the viewer above plays it.
+	if strings.Contains(body, "sheet-player") || strings.Contains(body, "/static/sheet.js") {
+		t.Error("the detail page should not carry a second animation player")
 	}
 }

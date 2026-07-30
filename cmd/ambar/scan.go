@@ -158,6 +158,7 @@ func printScanReport(r *index.ScanReport, verbose bool) {
 	line("hashed", r.Hashed)
 	if r.IgnoredJunk > 0 {
 		line("ignored as junk", r.IgnoredJunk)
+		line("skipped, not assets", r.SkippedNonAssets)
 	}
 	w.Flush()
 

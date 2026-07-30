@@ -4,14 +4,14 @@
 <div class="stack">
   <h1>Junk &amp; clutter</h1>
 
-  {{/* §9.1: Ambar is "a detector and a reporter, not a cleaner". This page finds
-       and measures; it never removes. Invariant 3 forbids acting on a computed set,
-       so there is deliberately no delete control here — the human-selected removal
-       workflow, with trash staging and the safety invariants, is M13. */}}
+  {{/* §9.1: Ambar is "a detector and a reporter, not a cleaner". It finds and
+       measures; the human selects. Invariant 3 forbids acting on a computed set, so
+       nothing here is pre-ticked, "select all" is a deliberate act, and every
+       selection goes through a preview that lists each path before anything moves. */}}
   <p class="note">
-    This is a report only. Ambar never removes anything on its own — it finds candidates and
-    shows what each would reclaim. A deliberate, human-selected removal workflow arrives in a
-    later milestone.
+    Ambar never removes anything on its own. Nothing below is selected for you; what you tick
+    is shown again in full before it moves, and it moves to the
+    <a href="/trash">trash</a> rather than being deleted.
   </p>
 
   {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
@@ -23,6 +23,8 @@
         {{if .Junk}}Rescan{{else}}Scan for junk{{end}}
       </button>
     </form>
+    <a href="/dupes">duplicates</a>
+    <a href="/trash">trash</a>
     {{if .JunkRunning}}
       <span class="hint">A scan is running — watch <a href="/jobs">background work</a>, then reload.</span>
     {{end}}
@@ -54,31 +56,54 @@
             <span class="badge">{{.Count}} item(s) · {{bytes .TotalBytes}}</span>
           </div>
           <p class="hint">{{.Kind.Explanation}}</p>
-          <div class="tablewrap junk-list">
-            <table class="grid">
-              <thead>
-                <tr>
-                  <th scope="col">Path</th>
-                  <th scope="col">Detail</th>
-                  <th scope="col" class="num">Size</th>
-                </tr>
-              </thead>
-              <tbody>
-                {{range $i, $it := .Items}}
-                  {{if lt $i 500}}
-                    <tr>
-                      <td><code>{{$it.Path}}</code></td>
-                      <td class="dir">{{if $it.Detail}}{{$it.Detail}}{{else}}—{{end}}</td>
-                      <td class="num">{{if $it.Bytes}}{{bytes $it.Bytes}}{{else}}0 B{{end}}</td>
-                    </tr>
+
+          <form method="post" action="/removals/plan" class="removal-form">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="root" value="{{.Kind.Root}}">
+            <input type="hidden" name="action" value="trash">
+            <input type="hidden" name="finding" value="junk:{{.Kind}}">
+            <input type="hidden" name="reason" value="Junk sweep: {{.Kind.Title}}">
+            <div class="tablewrap junk-list">
+              <table class="grid" data-select-all-scope>
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      {{/* §9.1 allows a "select all in this finding" control — choosing two
+                           hundred things one at a time is its own hazard — as long as it is a
+                           deliberate act and the preview still lists everything. It is a
+                           checkbox rather than a link so it works without JavaScript too. */}}
+                      <input type="checkbox" data-select-all aria-label="select every item in this finding">
+                    </th>
+                    <th scope="col">Path</th>
+                    <th scope="col">Detail</th>
+                    <th scope="col" class="num">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range $i, $it := .Items}}
+                    {{if lt $i 500}}
+                      <tr>
+                        <td><input type="checkbox" name="path" value="{{$it.Path}}" aria-label="select {{$it.Path}}"></td>
+                        <td><code>{{$it.Path}}</code></td>
+                        <td class="dir">{{if $it.Detail}}{{$it.Detail}}{{else}}—{{end}}</td>
+                        <td class="num">{{if $it.Bytes}}{{bytes $it.Bytes}}{{else}}0 B{{end}}</td>
+                      </tr>
+                    {{end}}
                   {{end}}
-                {{end}}
-              </tbody>
-            </table>
-          </div>
-          {{if gt .Count 500}}
-            <p class="hint">Showing the first 500 of {{.Count}} — the rest are the same kind and are counted in the total above.</p>
-          {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{if gt .Count 500}}
+              <p class="hint">
+                Showing the first 500 of {{.Count}} — the rest are the same kind and are counted in
+                the total above. Removing these and rescanning brings the next 500 into view.
+              </p>
+            {{end}}
+            <div class="actions-row">
+              <button type="submit">Review removal…</button>
+              <button type="submit" formaction="/removals/script" class="linkish">Export as a shell script</button>
+            </div>
+          </form>
         </div>
       {{end}}
     {{end}}

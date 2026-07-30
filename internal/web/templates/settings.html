@@ -1,0 +1,100 @@
+{{define "title"}}Settings — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Settings</h1>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  <div class="card">
+    <h2>Users</h2>
+    {{/* §11: "two equal users", and no self-registration — so accounts are created
+         here by someone already signed in, and every creation is audited. */}}
+    <p class="hint">
+      Everyone who signs in has the same rights. There is no self-registration: accounts
+      are created here or with <code>ambar user add</code>.
+    </p>
+
+    <div class="tablewrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th scope="col">Username</th>
+            <th scope="col">Created</th>
+            <th scope="col">Last signed in</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Users}}
+            <tr>
+              <td>
+                <strong>{{.Username}}</strong>
+                {{if $.User}}{{if eq .ID $.User.ID}}<span class="badge">you</span>{{end}}{{end}}
+              </td>
+              <td>{{.CreatedAt.Format "2006-01-02"}}</td>
+              <td>{{if .LastLoginAt}}{{.LastLoginAt.Format "2006-01-02 15:04"}}{{else}}<span class="hint">never</span>{{end}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Add a user</h3>
+    {{if .UserError}}<p class="error" role="alert">{{.UserError}}</p>{{end}}
+    <form method="post" action="/settings/users" class="stack userform">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <label>Username
+        <input type="text" name="username" required autocomplete="off"
+               autocapitalize="none" spellcheck="false">
+      </label>
+      <label>Password
+        <input type="password" name="password" required autocomplete="new-password"
+               minlength="{{.MinPasswordLength}}">
+      </label>
+      <label>Repeat the password
+        <input type="password" name="password_confirm" required autocomplete="new-password">
+      </label>
+      <p class="hint">At least {{.MinPasswordLength}} characters. Removing an account stays a
+        deliberate command-line action — nobody here can lock anybody else out.</p>
+      <p><button type="submit">Create user</button></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Opening files in your own applications</h2>
+    {{/* M15: a browser cannot launch Aseprite, and this server runs on the NAS — so
+         "Open in…" is a URL scheme, the same mechanism as tel: or vscode://, handled by
+         a small script on your machine. Generated rather than vendored so you can read
+         the whole thing before registering it. */}}
+    <p class="hint">
+      Ambar's “Open in Aseprite / Blender / Godot” buttons use an <code>ambar://</code>
+      link. Nothing handles that scheme until you install a small helper on the machine
+      you work at — it reads the path out of the link and launches the application.
+      Read it before you register it; it is a dozen lines.
+    </p>
+    <p class="actions">
+      <a class="button button-quiet" href="/settings/open-helper?platform=linux">Linux helper</a>
+      <a class="button button-quiet" href="/settings/open-helper?platform=macos">macOS helper</a>
+      <a class="button button-quiet" href="/settings/open-helper?platform=windows">Windows helper</a>
+    </p>
+    <p class="hint">
+      The links carry the path as your machine sees it, which comes from
+      <code>AMBAR_LOCAL_LIBRARY_PATH</code>. Point that at a
+      <em>mounted</em> location (a mount point, a mapped drive, a UNC path) rather than
+      an <code>smb://</code> URL — an application cannot open a URL, only a path.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Elsewhere</h2>
+    <ul class="panel-list">
+      <li><a href="/settings/tokens"><span>API tokens</span></a></li>
+      <li><a href="/status"><span>Status and counts</span></a></li>
+      <li><a href="/jobs"><span>Background work</span></a></li>
+      <li><a href="/trash"><span>Trash</span></a></li>
+      <li><a href="/provenance"><span>Provenance to fill in</span></a></li>
+      <li><a href="/palettes"><span>Pack palettes</span></a></li>
+    </ul>
+  </div>
+</div>
+{{end}}

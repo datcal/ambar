@@ -17,6 +17,13 @@
   --error-bg: #3a1f22;
   --radius: 6px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* The workspace shell (M14). Panel widths and the grid tile size are set here so
+     workspace.js can change them at runtime through the CSSOM — never through an
+     inline style attribute, which the CSP forbids. */
+  --panel-left: 15rem;
+  --panel-right: 21rem;
+  --tile: 11rem;
 }
 
 * { box-sizing: border-box; }
@@ -51,7 +58,7 @@ body {
   text-decoration: none;
 }
 
-.topbar nav {
+.topbar nav, .topnav {
   display: flex;
   align-items: center;
   gap: 0.9rem;
@@ -350,8 +357,13 @@ a { color: var(--accent); }
 }
 
 .thumb img {
-  max-width: 100%;
-  max-height: 100%;
+  /* Fill the tile rather than sit in the middle of it at native size. A 20x21 tile
+     from a tileset is otherwise a speck you cannot identify without opening it —
+     max-width alone never scales *up*. object-fit keeps the aspect ratio, and
+     .thumb-pixelated below keeps pixel art crisp while it grows. */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   display: block;
 }
 
@@ -429,7 +441,10 @@ a { color: var(--accent); }
 
 .viewer-stage {
   position: relative;
-  height: min(60vh, 32rem);
+  /* Taller inside the workspace: the centre column is the whole point of the page,
+     and a sprite viewer that occupies a third of the window is a preview, not a
+     working surface. */
+  height: min(72vh, 46rem);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -442,6 +457,11 @@ a { color: var(--accent); }
 .viewer-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .viewer-stage img {
+  /* Dragging pans; it never picks the image up. viewer2d.js preventDefaults the
+     pointer and drag events, and these two stop the selection/ghost-drag the browser
+     would otherwise start on its own. */
+  user-select: none;
+  -webkit-user-drag: none;
   transform-origin: 0 0;
   /* The transform is set by viewer2d.js; without a base position the origin maths
      would be relative to a moving box. */
@@ -805,3 +825,451 @@ kbd {
 }
 .palette-export { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
 .palette-export a { margin: 0; }
+
+/* --- the removal flow (§9.1, M13) ------------------------------------------- */
+
+/* A finding's selection form. The gap keeps the action row clear of the table, so
+   "Review removal…" is never a mis-click away from a checkbox. */
+.removal-form { display: flex; flex-direction: column; gap: 0.8rem; }
+.removal-form .actions-row { margin-top: 0.2rem; }
+
+.checkline { display: flex; align-items: center; gap: 0.5rem; }
+
+/* The keep hint (§9.1: a label, never a selection). Deliberately understated: it
+   marks a row as worth keeping without looking like it has been chosen. */
+tr.favoured { background: #2b5f3a1f; }
+tr.favoured code { font-weight: 600; }
+
+/* --- colour search from the palette panel (§7) ------------------------------- */
+
+/* Two icons under each swatch: search this colour, copy this colour. Quiet until the
+   swatch is hovered or focused, so the palette still reads as a palette. */
+.swatches li { position: relative; }
+.swatch-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.15rem;
+    opacity: 0.45;
+}
+.swatches li:hover .swatch-actions,
+.swatch-actions:focus-within { opacity: 1; }
+.swatch-icon {
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--muted);
+    text-decoration: none;
+    cursor: pointer;
+}
+.swatch-icon:hover { color: var(--text); border-color: var(--border); background: #ffffff0f; }
+
+/* --- pack palette consistency view (§7) -------------------------------------- */
+
+.palette-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.strip-chip {
+    display: block;
+    text-decoration: none;
+    text-align: center;
+    min-width: 2.6rem;
+}
+.strip-swatch {
+    display: block;
+    height: 1.6rem;
+    border-radius: 3px;
+    border: 1px solid #0006;
+}
+.strip-label { font-size: 0.68rem; opacity: 0.7; }
+.strip-chip:hover .strip-label { opacity: 1; }
+
+/* Three columns where there is room, stacked on a narrow screen. */
+.palette-compare {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 1rem;
+    margin-top: 0.8rem;
+}
+.palette-compare h3 { font-size: 0.9rem; margin: 0 0 0.4rem; }
+
+.palette-pick { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: end; }
+
+/* The one-line answer, which is the point of the page. */
+.verdict { font-size: 1.05rem; margin: 0.2rem 0 0.6rem; }
+
+
+/* --- the workspace shell (M14) ----------------------------------------------
+
+   The library is the application, so on library pages it gets the whole window:
+   navigation left, content centre, inspector right, three independent scroll
+   areas under one fixed toolbar. Document pages (forms, reports) keep the centred
+   60rem measure defined above — a wide form is worse, not better.                */
+
+body.app {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.topsearch { flex: 1 1 22rem; min-width: 0; margin: 0; }
+.topsearch input {
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+}
+.topsearch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.topnav { flex: 0 0 auto; font-size: 0.9rem; }
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* The rail is `auto`, so a page that renders no <aside> loses the column
+     entirely instead of leaving a gap. */
+  grid-template-columns: var(--panel-left) minmax(0, 1fr) auto;
+}
+
+.panel {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1rem 0.9rem 3rem;
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+.panel-left { border-right: 1px solid var(--border); }
+.panel-right {
+  width: var(--panel-right);
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 0.9rem 3rem;
+}
+
+.workmain {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.2rem 4rem;
+  /* No max-width here: this is the point of the exercise. */
+  max-width: none;
+  margin: 0;
+}
+
+/* Panel sections: a heading, a list of links with counts. */
+.panel-section { margin: 0 0 1.3rem; }
+.panel-section > h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.panel-list { list-style: none; margin: 0; padding: 0; }
+.panel-list li { margin: 0; }
+.panel-list a {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.22rem 0.4rem;
+  border-radius: 4px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-list a:hover { background: #ffffff0f; }
+.panel-list a.on { background: #ffffff17; font-weight: 600; }
+.panel-list .n { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+
+/* The grid toolbar: result count on the left, tile-size slider on the right. */
+.gridbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.8rem;
+}
+.gridbar .resultcount { margin: 0; }
+.gridbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; }
+.tilesize { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; color: var(--muted); }
+.tilesize input[type="range"] { width: 9rem; }
+
+/* Tiles follow --tile, which the slider drives. */
+body.app .thumbgrid {
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+}
+
+/* The asset page inside the workspace: the viewer takes the height it can get. */
+.workmain > .stack { max-width: none; }
+.rail-section { margin: 0 0 1.4rem; }
+.rail-section > h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+/* Cards in the rail are already inside a panel; drop the double frame. */
+.panel-right .card {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* Narrow windows: the panels stack above the content rather than squeezing it. */
+@media (max-width: 60rem) {
+  body.app { height: auto; overflow: visible; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .panel-left, .panel-right { width: auto; border: 0; border-bottom: 1px solid var(--border); }
+  .topsearch { order: 3; flex-basis: 100%; }
+}
+
+/* The rail's own header: the asset's identity, since the centre column is now
+   viewer only and no longer carries the filename. */
+.rail-head { margin: 0 0 1.2rem; }
+.rail-title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  line-height: 1.3;
+  word-break: break-word;
+}
+.rail-head .actions { margin: 0.6rem 0 0; }
+
+/* Saved searches in the sidebar: name on the left, delete on the right. */
+.saved-row { display: flex; align-items: center; gap: 0.2rem; }
+.saved-row a { flex: 1; min-width: 0; }
+.saved-row form { flex: 0 0 auto; }
+
+/* The viewer fills the centre column instead of sitting in a 60rem box. */
+body.app .viewer, body.app .model { margin-bottom: 1rem; }
+body.app .viewer-stage, body.app .model-stage { min-height: 24rem; }
+
+/* Visually hidden but present for assistive technology. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The folder tree. Depth comes from a data attribute so the indent is styling
+   rather than markup, and no inline style is needed (§11 CSP). */
+.tree a { padding-left: 0.4rem; }
+.tree li[data-depth="2"] a { padding-left: 1.2rem; }
+.tree li[data-depth="3"] a { padding-left: 2rem; }
+.tree li[data-depth="4"] a { padding-left: 2.8rem; }
+.tree li[data-depth="5"] a { padding-left: 3.6rem; }
+
+/* "Open in…" (M14): the local path, copyable. */
+.localpath { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; }
+.localpath code { word-break: break-all; flex: 1; }
+.uses { list-style: none; margin: 0.3rem 0 0; padding: 0; font-size: 0.85rem; }
+.uses li { margin: 0 0 0.6rem; }
+.uses code { word-break: break-all; }
+
+/* The clipboard fallback's scratch element, kept out of sight without display:none
+   (a hidden textarea cannot be selected). */
+.offscreen-copy { position: fixed; left: -9999px; top: 0; opacity: 0; }
+
+/* --- the spritesheet player (M14) -------------------------------------------- */
+
+.sheet-views {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 1.2rem;
+    margin: 0.8rem 0;
+}
+.sheet-view h3 { margin: 0 0 0.4rem; font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+.sheet-overlay.grid-hidden .sheet-grid { display: none; }
+
+/* The frame window: the sheet scaled so one frame fills the box, shifted by whole
+   frames. sheet.js sets the four percentages; nothing here needs to know the grid. */
+.sheet-player { background: #0000004d; border-radius: var(--radius); padding: 0.5rem; }
+.sheet-player > img { display: block; max-width: 100%; margin: 0 auto; image-rendering: pixelated; }
+.sheet-window {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: 1;
+    max-width: 16rem;
+    margin: 0 auto;
+}
+.sheet-window img {
+    position: absolute;
+    image-rendering: pixelated;
+}
+.sheet-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin: 0.5rem 0 0.2rem;
+}
+.sheet-counter { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); min-width: 5rem; text-align: center; }
+.sheet-fps { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; }
+.sheet-fps input { width: 4rem; }
+
+/* --- sidebar refinements (M15) ----------------------------------------------- */
+
+/* The scan action, at the top where it is reachable rather than at the bottom of a
+   page nobody scrolls. */
+.panel-action { margin: 0 0 0.4rem; }
+.panel-action button { width: 100%; }
+
+/* Folders are closed by default: "whole library" is the normal view, and the tree is
+   for when you deliberately want to go somewhere. <details> handles the state, so
+   there is nothing to remember server-side. */
+.folders summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.folders summary::-webkit-details-marker { display: none; }
+.folders summary::before { content: "▸"; color: var(--muted); font-size: 0.7rem; }
+.folders[open] summary::before { content: "▾"; }
+.folders summary h2 { display: inline; margin: 0; }
+
+/* The library's dominant colours, as a filter. Swatches are painted from data-hex by
+   palette-strip.js, never an inline style (§11 CSP). */
+.colour-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    list-style: none;
+    margin: 0 0 0.4rem;
+    padding: 0;
+}
+.colour-chip { display: block; text-decoration: none; }
+.colour-swatch {
+    display: block;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 4px;
+    border: 1px solid #0006;
+}
+.colour-chip:hover .colour-swatch,
+.colour-chip:focus-visible .colour-swatch { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The audition tool, now living in the panel: stack its controls instead of laying
+   them out across a page width it no longer has. */
+.panel .audition { display: flex; flex-direction: column; gap: 0.4rem; margin: 0 0 0.6rem; }
+.panel .audition-tag { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; }
+.panel .audition-tag input { width: 100%; }
+
+
+/* The asset page's working area: palette and tags side by side under the viewer,
+   in the space the spritesheet panel used to occupy (M15). */
+.asset-work {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+.asset-work-col > .card { margin: 0; }
+
+/* The spritesheet summary, one line instead of a panel. */
+.sheet-line {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+.sheet-line .sheet-form { margin-left: auto; }
+.sheet-line label { font-size: 0.85rem; color: var(--muted); }
+.sheet-line input[type=number] { width: 4rem; }
+
+/* Two icons under each swatch (M15): search this colour, copy this colour. Quiet
+   until the swatch is hovered or focused, so the palette still reads as a palette. */
+.swatches li { position: relative; }
+.swatch-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.15rem;
+    opacity: 0.45;
+}
+.swatches li:hover .swatch-actions,
+.swatch-actions:focus-within { opacity: 1; }
+.swatch-icon {
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0.05rem 0.3rem;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--muted);
+    text-decoration: none;
+    cursor: pointer;
+    font-family: inherit;
+}
+.swatch-icon:hover { color: var(--text); border-color: var(--border); background: #ffffff0f; }
+
+/* --- the live font specimen (M15) -------------------------------------------- */
+
+.specimen-input input {
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font: inherit;
+}
+.specimen-sizes { margin: 0.8rem 0 0.4rem; }
+.specimen-line {
+    margin: 0 0 0.5rem;
+    line-height: 1.25;
+    /* The face is applied by specimen.js through the CSSOM; until it loads these are
+       the page font at the same sizes, which is still informative. */
+    overflow-wrap: anywhere;
+}
+
+/* Launch buttons for the ambar:// helper (M15): present but quiet, because they only
+   work once the helper is installed. */
+.open-apps { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.2rem 0 0.4rem; }
+.button-quiet {
+    font-size: 0.85rem;
+    padding: 0.3rem 0.6rem;
+    background: transparent;
+    border: 1px solid var(--border);
+}
+.button-quiet:hover { background: #ffffff0f; }
+
+
+/* The bulk-tag row (M15): a toolbar line, not a box. */
+body.app .bulkbar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin: 0 0 0.7rem;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+body.app .bulkbar input[type="text"] { flex: 0 1 18rem; }

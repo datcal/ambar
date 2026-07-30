@@ -458,6 +458,62 @@ func upsertAssetTagTx(ctx context.Context, tx *sql.Tx, assetID, tagID int64, sou
 // tagging, both "tag the selected tiles" and "tag everything matching this
 // search". The tag is ensured once; each asset's source precedence and FTS row
 // are handled exactly as TagAsset does. It returns the number of assets touched.
+// placeholders is "?, ?, ?" for n arguments.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
+}
+
+// PruneAutoTags removes the machine-applied tags an asset should no longer carry:
+// every auto_path/auto_type row whose tag is not in keep. Manual and inherited rows
+// are never touched, whatever the automatic pass now thinks (§7: "a manual tag is
+// never demoted by an automatic one" — nor deleted by one).
+//
+// This is what makes a re-tag a reconciliation rather than an append. Without it a
+// reclassified file keeps `type:image` forever after becoming a spritesheet, and a
+// renamed folder leaves its old `folder:` tag behind for good.
+func (s *Store) PruneAutoTags(ctx context.Context, assetID int64, keep []int64) (int, error) {
+	tx, err := s.db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("prune auto tags: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	query := fmt.Sprintf(`
+		DELETE FROM asset_tags
+		WHERE asset_id = ? AND source IN ('%s', '%s')`, SourceAutoPath, SourceAutoType)
+	args := []any{assetID}
+	if len(keep) > 0 {
+		query += " AND tag_id NOT IN (" + placeholders(len(keep)) + ")"
+		for _, id := range keep {
+			args = append(args, id)
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune auto tags for asset %d: %w", assetID, err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if removed == 0 {
+		// Nothing changed, so the FTS row is still correct and the transaction has
+		// nothing to commit that matters.
+		return 0, tx.Commit()
+	}
+	if err := reindexAssetFTS(ctx, tx, assetID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("prune auto tags: commit: %w", err)
+	}
+	return int(removed), nil
+}
+
 func (s *Store) TagAssets(ctx context.Context, assetIDs []int64, canonical, source string, createdBy *int64) (int, error) {
 	if sourceRank(source) == 0 {
 		return 0, fmt.Errorf("tag assets: unknown source %q", source)

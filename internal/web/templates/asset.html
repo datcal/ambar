@@ -1,12 +1,37 @@
 {{define "title"}}{{.Asset.Filename}} — Ambar{{end}}
 
+{{define "sidebar"}}
+  <section class="panel-section">
+    <h2>Browsing</h2>
+    <ul class="panel-list">
+      <li><a href="/"><span>← back to the library</span></a></li>
+      {{with .Asset}}
+        <li><a href="/assets?pack={{.PackID}}"><span>{{.PackName}}</span></a></li>
+        <li><a href="/?q=type%3A{{.Kind}}"><span>everything of kind {{.Kind}}</span></a></li>
+        {{if .HasPalette}}
+          <li><a href="/?q=palette-near%3A{{.ID}}"><span>similar palette</span></a></li>
+        {{end}}
+      {{end}}
+    </ul>
+  </section>
+
+  <section class="panel-section">
+    <h2>Library</h2>
+    <ul class="panel-list">
+      <li><a href="/palettes"><span>pack palettes</span></a></li>
+      <li><a href="/dupes"><span>duplicates</span></a></li>
+      <li><a href="/junk"><span>junk</span></a></li>
+      <li><a href="/trash"><span>trash</span></a></li>
+      <li><a href="/jobs"><span>background work</span></a></li>
+    </ul>
+  </section>
+{{end}}
+
 {{define "content"}}
 {{with .Asset}}
 <div class="stack">
-  <p class="breadcrumb"><a href="/assets">assets</a> / <a href="/assets?pack={{.PackID}}">{{.PackName}}</a></p>
-
-  <h1>{{.Filename}}</h1>
-
+  {{/* No heading here on purpose: the rail carries the filename, the pack and the
+       download, so the centre column is the thing you came to look at. */}}
   {{if .Missing}}
     <p class="note note-warn">
       This file was not present at the last scan. Its index entry is kept — §12 never
@@ -30,18 +55,33 @@
   {{else if eq .DeriveState "pending"}}
     <p class="note">A preview is still being generated. <a href="/jobs">Background work</a>.</p>
   {{else if eq .DeriveState "needs_blender"}}
-    {{/* §6: FBX/.blend need the runtime-downloaded Blender, not yet installed. */}}
-    <p class="note note-warn">
-      This format needs Blender to preview, which is not installed yet. The asset is fully
-      usable and downloadable; a preview will appear once Blender is available.
-    </p>
+    {{if .ViewerFormat}}
+      {{/* The model is viewable here regardless: three.js reads it directly. Blender
+           would only add a *thumbnail* for the grid (§6), so that is all this says. */}}
+      <p class="note">
+        No grid thumbnail yet: rendering one needs Blender, which is not configured
+        (<code>AMBAR_BLENDER_BIN</code>). The model itself is below.
+      </p>
+    {{else}}
+      <p class="note note-warn">
+        A <code>.blend</code> file is Blender's own project format, so only Blender can
+        open it — set <code>AMBAR_BLENDER_BIN</code> to get a preview and a thumbnail.
+        The file is fully usable and downloadable meanwhile.
+      </p>
+    {{end}}
   {{end}}
 
-  {{if and .IsModel .HasModelPreview}}
-    {{/* §8 3D viewer: three.js loads the normalised preview.glb. The vendored
-         library is loaded only here, so an all-2D library never ships 600 KB of
-         it. Scripts are deferred, so THREE is defined before the island runs. */}}
-    <div class="model" id="model-viewer" data-src="/assets/{{.ID}}/preview.glb">
+  {{if .ViewerFormat}}
+    {{/* §8 3D viewer. The vendored three.js is loaded only here, so an all-2D
+         library never ships 600 KB of it. Scripts are deferred, so THREE is defined
+         before the island runs.
+         M14: the source is the derived preview.glb when one exists, otherwise the
+         original file — .obj and .fbx are read directly by three.js, which is why
+         they no longer wait for Blender. */}}
+    <div class="model" id="model-viewer"
+         data-src="{{.ViewerSrc}}"
+         data-format="{{.ViewerFormat}}"
+         {{with .MTLName}}data-mtl="{{.}}"{{end}}>
       <div class="viewer-toolbar">
         <span class="viewer-group">
           <button type="button" data-toggle="wire">Wireframe</button>
@@ -55,8 +95,17 @@
       <p class="hint viewer-hint">Drag to orbit · scroll to zoom · right-drag to pan.</p>
     </div>
     <script src="/static/vendor/three/three.min.js" defer></script>
-    <script src="/static/vendor/three/GLTFLoader.js" defer></script>
     <script src="/static/vendor/three/OrbitControls.js" defer></script>
+    {{if eq .ViewerFormat "gltf"}}
+      <script src="/static/vendor/three/GLTFLoader.js" defer></script>
+    {{else if eq .ViewerFormat "obj"}}
+      <script src="/static/vendor/three/OBJLoader.js" defer></script>
+      <script src="/static/vendor/three/MTLLoader.js" defer></script>
+    {{else if eq .ViewerFormat "fbx"}}
+      {{/* FBX is a zipped binary format; the loader needs fflate to inflate it. */}}
+      <script src="/static/vendor/three/fflate.min.js" defer></script>
+      <script src="/static/vendor/three/FBXLoader.js" defer></script>
+    {{end}}
     <script src="/static/model-viewer.js" defer></script>
   {{end}}
 
@@ -122,75 +171,6 @@
     </div>
   {{end}}
 
-  {{if .HasPalette}}
-    {{/* §8 palette panel: the working tool a pixel artist needs to match colours.
-         Swatch chips get their background from data-hex in JS, not an inline
-         style, so the CSP stays free of 'unsafe-inline'. Click copies; the format
-         is a user preference; a document.execCommand fallback keeps copy working
-         on plain-HTTP LAN where navigator.clipboard is unavailable. */}}
-    <div class="card palette" id="palette-panel"
-         data-approx="{{if .PaletteApprox}}true{{else}}false{{end}}">
-      <div class="palette-head">
-        <h2>Palette
-          {{if .PaletteApprox}}
-            <span class="badge badge-warn" title="a median-cut summary, not exact">approximate</span>
-          {{else}}
-            <span class="badge">exact · {{len .PaletteSwatches}} colours</span>
-          {{end}}
-        </h2>
-        <div class="palette-controls">
-          <label class="palette-copyfmt">Copy as
-            <select data-role="copy-format" aria-label="Copy format">
-              <option value="hex">#RRGGBB</option>
-              <option value="hexbare">RRGGBB</option>
-              <option value="rgb">rgb(r, g, b)</option>
-              <option value="rgbbare">r, g, b</option>
-              <option value="gd">Color(r, g, b)</option>
-            </select>
-          </label>
-          <span class="viewer-group" role="group" aria-label="Sort">
-            <button type="button" data-sort="frequency" class="on">Frequency</button>
-            <button type="button" data-sort="perceptual" title="Hue then lightness — reveals ramps">Perceptual</button>
-          </span>
-          <button type="button" data-toggle="greyscale" title="Check the value structure">Greyscale</button>
-        </div>
-      </div>
-
-      <ul class="swatches" data-role="swatches">
-        {{range .PaletteSwatches}}
-          <li>
-            <button type="button" class="swatch"
-                    data-hex="{{.Hex}}" data-r="{{.R}}" data-g="{{.G}}" data-b="{{.B}}"
-                    title="{{.Hex}} · {{.Count}} px · {{.Percent}}% of visible">
-              <span class="swatch-chip" aria-hidden="true"></span>
-              <span class="swatch-meta"><code>{{.Hex}}</code> <small>{{.Percent}}%</small></span>
-            </button>
-          </li>
-        {{end}}
-      </ul>
-
-      <p class="palette-status" data-role="status" role="status" aria-live="polite"></p>
-      <p class="hint">
-        Click a swatch to copy. Shift-click copies a range.
-        {{if .PaletteApprox}}
-          These swatches are a median-cut summary of a photographic image — approximate, not an exact colour list.
-        {{end}}
-      </p>
-
-      <p class="palette-export">
-        Export:
-        <a href="/assets/{{.ID}}/palette/gpl">.gpl</a> ·
-        <a href="/assets/{{.ID}}/palette/png">.png</a> ·
-        <a href="/assets/{{.ID}}/palette/txt">.txt</a> ·
-        <a href="/assets/{{.ID}}/palette/json">.json</a> ·
-        <a href="/assets/{{.ID}}/palette/css">.css</a> ·
-        <a href="/assets/{{.ID}}/palette/gd">.gd</a> ·
-        <a href="/assets/{{.ID}}/palette/tres">.tres</a>
-      </p>
-    </div>
-    <script src="/static/palette.js" defer></script>
-  {{end}}
-
   {{if $.Group}}
     {{if $.Group.MultiVariant}}
       {{/* §5.1: "The grid shows one entry per group; the detail panel lists variants
@@ -242,32 +222,247 @@
   {{if $.Flash}}<p class="note note-ok" role="status">{{$.Flash}}</p>{{end}}
 
   {{if .IsSheet}}
-    {{/* §6 spritesheet: show the proposed grid as an overlay and let the user
-         confirm in one click or correct the columns/rows. A detected guess is
-         never trusted silently — the badge says so until it is confirmed. */}}
-    <div class="card sheet-panel">
-      <h2>Spritesheet
-        {{if .SheetConfirmed}}<span class="badge">{{.FrameSource}}</span>
-        {{else}}<span class="badge badge-warn">detected — please confirm</span>{{end}}
-      </h2>
-      <div class="sheet-overlay" style="--cols: {{.FrameCols}}; --rows: {{.FrameRows}};">
-        <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}">
-        <div class="sheet-grid"></div>
-      </div>
-      <p class="hint">
-        {{.FrameCols}} × {{.FrameRows}} = {{.FrameCount}} frames, {{.FrameW}}×{{.FrameH}} px each.
-      </p>
+    {{/* §6 still needs the grid confirmed — that is what makes the animated preview
+         correct, what `frames:` searches find, and what the Godot import turns into an
+         AnimatedSprite2D. But it does not need half the page: the animation already
+         plays in the viewer above (its Play button), so this is one line of facts and
+         one control. */}}
+    <div class="sheet-line">
+      <span class="badge{{if not .SheetConfirmed}} badge-warn{{end}}">{{if .SheetConfirmed}}{{.FrameSource}}{{else}}detected — please confirm{{end}}</span>
+      <span class="hint" title="Confirming the grid is what makes the animated preview correct, what frames: searches find, and what the Godot import turns into an AnimatedSprite2D. Nothing is written to the file.">
+        {{.FrameCols}} × {{.FrameRows}} = {{.FrameCount}} frames, {{.FrameW}}×{{.FrameH}} px each —
+        drives the animated preview, <code>frames:</code> search and the Godot
+        <code>AnimatedSprite2D</code> import.
+      </span>
       <form method="post" action="/assets/{{.ID}}/frames" class="sheet-form">
         <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
-        <label>Columns <input type="number" name="cols" value="{{.FrameCols}}" min="1" max="256"></label>
-        <label>Rows <input type="number" name="rows" value="{{.FrameRows}}" min="1" max="256"></label>
-        <button type="submit">{{if .SheetConfirmed}}Update grid{{else}}Confirm grid{{end}}</button>
+        <label>cols <input type="number" name="cols" value="{{.FrameCols}}" min="1" max="256"></label>
+        <label>rows <input type="number" name="rows" value="{{.FrameRows}}" min="1" max="256"></label>
+        <button type="submit">{{if .SheetConfirmed}}Update{{else}}Confirm{{end}}</button>
       </form>
     </div>
   {{end}}
 
-  {{template "asset-tags" $}}
+  {{if .IsFont}}
+    {{/* A live specimen (M15): §4 has had a `font` kind since M1 and nothing ever let
+         you *use* one. The grid tile is a rendered specimen; here you type your own
+         text, because "does my UI label look right in this" is the only question that
+         matters and it cannot be answered by a fixed pangram. The face is registered
+         with the FontFace API from /assets/{id}/font — the CSP allows it (same origin)
+         and §11's attachment header does not, because this is a fetch. */}}
+    <div class="card specimen" id="specimen" data-src="/assets/{{.ID}}/font"
+         data-family="{{if .FontFamily}}{{.FontFamily}}{{else}}{{.Filename}}{{end}}">
+      <div class="palette-head">
+        <h2>Try it</h2>
+        <span class="badge" data-role="status">loading the face…</span>
+      </div>
+      <label class="specimen-input">
+        <span class="sr-only">Sample text</span>
+        <input type="text" data-role="text" value="Press Start · Level 3 · 1234"
+               autocomplete="off" spellcheck="false">
+      </label>
+      <div class="specimen-sizes">
+        {{range $size := (sizes 12 18 24 36 48 72)}}
+          <p class="specimen-line" data-size="{{$size}}" data-role="line">{{$size}}px</p>
+        {{end}}
+      </div>
+      <p class="hint">
+        Typed here only — nothing is written to the file. Family:
+        <code>{{if .FontFamily}}{{.FontFamily}}{{else}}unknown{{end}}</code>.
+      </p>
+    </div>
+    <script src="/static/specimen.js" defer></script>
+  {{end}}
 
+  {{/* What you decide *about* the asset, in the space the spritesheet panel used to
+       take: the palette — with search and copy on every swatch — and the tags. Both
+       are working tools rather than reference, so they get the centre column's width,
+       while the rail keeps identity, actions and the facts. */}}
+  <div class="asset-work">
+    <div class="asset-work-col">
+  {{if .HasPalette}}
+    {{/* §8 palette panel: the working tool a pixel artist needs to match colours.
+         Swatch chips get their background from data-hex in JS, not an inline
+         style, so the CSP stays free of 'unsafe-inline'. Click copies; the format
+         is a user preference; a document.execCommand fallback keeps copy working
+         on plain-HTTP LAN where navigator.clipboard is unavailable. */}}
+    <div class="card palette" id="palette-panel"
+         data-approx="{{if .PaletteApprox}}true{{else}}false{{end}}">
+      <div class="palette-head">
+        <h2>Palette
+          {{if .PaletteApprox}}
+            <span class="badge badge-warn" title="a median-cut summary, not exact">approximate</span>
+          {{else}}
+            <span class="badge">exact · {{len .PaletteSwatches}} colours</span>
+          {{end}}
+        </h2>
+        <div class="palette-controls">
+          <label class="palette-copyfmt">Copy as
+            <select data-role="copy-format" aria-label="Copy format">
+              <option value="hex">#RRGGBB</option>
+              <option value="hexbare">RRGGBB</option>
+              <option value="rgb">rgb(r, g, b)</option>
+              <option value="rgbbare">r, g, b</option>
+              <option value="gd">Color(r, g, b)</option>
+            </select>
+          </label>
+          <span class="viewer-group" role="group" aria-label="Sort">
+            <button type="button" data-sort="frequency" class="on">Frequency</button>
+            <button type="button" data-sort="perceptual" title="Hue then lightness — reveals ramps">Perceptual</button>
+          </span>
+          <button type="button" data-toggle="greyscale" title="Check the value structure">Greyscale</button>
+        </div>
+      </div>
+
+      <ul class="swatches" data-role="swatches">
+        {{range .PaletteSwatches}}
+          <li>
+            <button type="button" class="swatch"
+                    data-hex="{{.Hex}}" data-r="{{.R}}" data-g="{{.G}}" data-b="{{.B}}"
+                    title="Copy {{.Hex}} — {{.Count}} px, {{.Percent}}% of visible">
+              <span class="swatch-chip" aria-hidden="true"></span>
+              <span class="swatch-meta"><code>{{.Hex}}</code> <small>{{.Percent}}%</small></span>
+            </button>
+            {{/* Two affordances per swatch, both explicit. §7 calls finding the assets
+                 that match an art direction "the real daily problem", so search gets its
+                 own icon rather than a word tucked underneath; the chip itself still
+                 copies, which is what the panel is for day to day. */}}
+            <span class="swatch-actions">
+              <a class="swatch-icon" href="/?q=color%3A{{.HexQuery}}~24"
+                 title="Find assets containing {{.Hex}}"
+                 aria-label="Find assets containing {{.Hex}}">⌕</a>
+              <button type="button" class="swatch-icon" data-copy="{{.Hex}}"
+                      title="Copy {{.Hex}}" aria-label="Copy {{.Hex}}">⧉</button>
+            </span>
+          </li>
+        {{end}}
+      </ul>
+
+      <p class="palette-status" data-role="status" role="status" aria-live="polite"></p>
+      <p class="hint">
+        Click a swatch to copy, shift-click for a range. ⌕ searches the library for that
+        colour (<code>color:</code> with a tolerance you can widen), ⧉ copies it.
+        {{if .PaletteApprox}}
+          These swatches are a median-cut summary of a photographic image — approximate, not an exact colour list.
+        {{end}}
+      </p>
+
+      <p class="palette-export">
+        Export:
+        <a href="/assets/{{.ID}}/palette/gpl">.gpl</a> ·
+        <a href="/assets/{{.ID}}/palette/png">.png</a> ·
+        <a href="/assets/{{.ID}}/palette/txt">.txt</a> ·
+        <a href="/assets/{{.ID}}/palette/json">.json</a> ·
+        <a href="/assets/{{.ID}}/palette/css">.css</a> ·
+        <a href="/assets/{{.ID}}/palette/gd">.gd</a> ·
+        <a href="/assets/{{.ID}}/palette/tres">.tres</a>
+      </p>
+    </div>
+    <script src="/static/palette.js" defer></script>
+  {{end}}
+    </div>
+    <div class="asset-work-col">
+      {{template "asset-tags" $}}
+    </div>
+  </div>
+</div>
+{{end}}
+{{end}}
+
+{{/* The right-hand rail. What you decide *about* an asset — tags, palette, the
+     facts — sits beside it instead of a screen below it, and the centre column
+     keeps what you look *at*. Same shell as the grid, so navigation does not move
+     when you open something. */}}
+{{define "rail"}}
+<aside class="panel panel-right" aria-label="Asset details">
+  {{with .Asset}}
+    <div class="rail-head">
+      <h1 class="rail-title">{{.Filename}}</h1>
+      <p class="hint"><a href="/assets?pack={{.PackID}}">{{.PackName}}</a> · <code>.{{.Ext}}</code> · {{bytes .Size}}</p>
+      {{if not .Missing}}
+        <p class="actions"><a class="button" href="/assets/{{.ID}}/download">Download original</a></p>
+      {{end}}
+    </div>
+  {{end}}
+
+
+  {{/* M14 "open in…". Ambar cannot launch an application on your machine — this
+       server usually runs on the NAS, so launching anything would launch it there.
+       What it can do is hand over the path your machine understands, which turns
+       "open in Aseprite" into one copy and a double-click. Configured with
+       AMBAR_LOCAL_LIBRARY_PATH; the section is absent when it is not set, rather
+       than showing a path that would not resolve. */}}
+  {{/* Always rendered: someone who has not configured the mapping should still learn
+       that the feature exists, and the Godot half is useful either way. */}}
+  <section class="rail-section" id="open-with">
+      <h2>Open in</h2>
+
+      {{if .OpenApps}}
+        {{/* Real launch buttons (M15). `ambar://` is our own registered scheme — the
+             mechanism behind tel: and vscode:// — because Aseprite, Blender and Godot
+             ship no scheme of their own. The helper that answers it is installed once
+             from Settings; until then these links are inert, which is why the copyable
+             path below stays. */}}
+        <p class="open-apps">
+          {{range .OpenApps}}
+            <a class="button button-quiet" href="{{.URL}}">{{.Label}}</a>
+          {{end}}
+        </p>
+        <p class="hint">
+          These need the one-time <a href="/settings">ambar:// helper</a> on this
+          machine. Without it, use the path below.
+        </p>
+      {{end}}
+
+      {{with .Local}}
+        <p class="localpath">
+          <code data-role="path">{{.Path}}</code>
+          <button type="button" data-role="copy-path" title="Copy this path">copy</button>
+        </p>
+        {{if .URL}}
+          <p class="hint"><a href="{{.URL}}">open the folder</a> — browsers restrict these links, so the
+            copy button is the reliable route.</p>
+        {{end}}
+        <p class="hint">
+          Paste it into the application's Open dialog. Ambar cannot launch it for you:
+          it runs on the server, and “open” would happen there.
+        </p>
+      {{end}}
+
+      {{if not .Local}}
+        <p class="hint">
+          Set <code>AMBAR_LOCAL_LIBRARY_PATH</code> to how the library is mounted on your
+          machine (an SMB URL, a UNC path, a mount point) and this asset's local path will
+          appear here, ready to copy.
+        </p>
+      {{end}}
+
+      {{if .ProjectUses}}
+        <h2>In Godot projects</h2>
+        <ul class="uses">
+          {{range .ProjectUses}}
+            <li>
+              <strong>{{.ProjectName}}</strong>
+              {{if .Outdated}}<span class="badge badge-warn">outdated</span>{{end}}
+              <br><code>{{.ResPath}}</code>
+              <span class="hint">added {{.AddedAt.Format "2006-01-02"}}</span>
+            </li>
+          {{end}}
+        </ul>
+        <p class="hint">
+          Anything a project uses is never a removal candidate (§9.1).
+        </p>
+      {{else}}
+        <p class="hint">
+          To put this into a Godot project, use the Ambar dock inside the editor
+          (<code>addons/ambar</code>) — it copies the file in and records the use here.
+        </p>
+      {{end}}
+  </section>
+
+  {{with .Asset}}
+
+    <section class="rail-section">
   <div class="card">
     <h2>Details</h2>
     <dl class="facts">
@@ -321,17 +516,12 @@
       <dt>Last verified</dt><dd>{{.LastVerifiedAt.Format "2006-01-02 15:04"}}</dd>
     </dl>
 
-    {{if not .Missing}}
-      <p class="actions"><a class="button" href="/assets/{{.ID}}/download">Download original</a></p>
-    {{end}}
   </div>
-</div>
-{{end}}
+    </section>
+  {{end}}
+</aside>
 {{end}}
 
-{{/* The tag panel (§7). Rendered inline on the detail page and returned on its
-     own by the htmx add/remove handlers, so it is defined as a swappable block
-     keyed on #tag-panel. The dot here is the whole page data, not the asset. */}}
 {{define "asset-tags"}}
 <div id="tag-panel" class="card">
   <h2>Tags</h2>

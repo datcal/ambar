@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/datcal/ambar/internal/audit"
@@ -15,12 +16,14 @@ import (
 	"github.com/datcal/ambar/internal/config"
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/derive"
+	"github.com/datcal/ambar/internal/dupes"
 	"github.com/datcal/ambar/internal/httpx"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/junk"
 	"github.com/datcal/ambar/internal/projects"
 	"github.com/datcal/ambar/internal/provenance"
+	"github.com/datcal/ambar/internal/removal"
 	"github.com/datcal/ambar/internal/savedsearch"
 	"github.com/datcal/ambar/internal/sidecar"
 	"github.com/datcal/ambar/internal/tags"
@@ -47,6 +50,12 @@ type Server struct {
 	projects *projects.Store
 	sidecars *sidecar.Manager
 	jobs     *jobs.Queue
+
+	// The M13 removal path (§9.1). removals plans and refuses; trash carries plans
+	// out and owns the trash directory. Kept as two fields rather than one so the
+	// read-only half is obviously read-only at the call site.
+	removals *removal.Planner
+	trash    *removal.Executor
 	users    *auth.UserStore
 	tokens   *auth.TokenStore
 	sessions *auth.SessionStore
@@ -62,6 +71,11 @@ type Server struct {
 	// dummyHash equalizes the cost of a login against a username that does not
 	// exist. Computed once here because argon2id is deliberately slow.
 	dummyHash string
+
+	// The dedupe link probe writes a temporary file, so it runs once on first use
+	// rather than on every health check or page render (§9.1).
+	linkOnce  sync.Once
+	linkProbe removal.LinkSupport
 
 	templates map[string]*template.Template
 	handler   http.Handler
@@ -95,7 +109,10 @@ func New(cfg *config.Config, database *db.DB, indexer *index.Indexer, queue *job
 		sidecars: sidecar.New(database, sidecar.Options{
 			LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot, Readonly: cfg.LibraryReadonly, Log: log,
 		}),
-		jobs:        queue,
+		jobs:     queue,
+		removals: removal.NewPlanner(database, cfg.LibraryRoot, cfg.DataRoot, cfg.TrashDir),
+		trash: removal.NewExecutor(database, cfg.LibraryRoot, cfg.DataRoot, cfg.TrashDir,
+			cfg.DedupeLinkMode, audit.New(database, log), log),
 		log:         log,
 		build:       build,
 		users:       auth.NewUserStore(database),
@@ -131,7 +148,10 @@ func (s *Server) routes() http.Handler {
 
 	// {$} anchors the pattern to the exact path, so /nonsense 404s instead of
 	// being swallowed by a catch-all.
-	mux.Handle("GET /{$}", auth.RequireUser(http.HandlerFunc(s.handleIndex)))
+	// §0: "the whole point is the assets". The library grid is the landing page, and
+	// the dashboard it replaced moved to /status.
+	mux.Handle("GET /{$}", auth.RequireUser(http.HandlerFunc(s.handleAssets)))
+	mux.Handle("GET /status", auth.RequireUser(http.HandlerFunc(s.handleStatus)))
 
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
@@ -163,6 +183,14 @@ func (s *Server) routes() http.Handler {
 
 	// 3D (§8): the normalised preview.glb the three.js viewer loads.
 	mux.Handle("GET /assets/{id}/preview.glb", auth.RequireUser(http.HandlerFunc(s.handleModelPreview)))
+	// M14: the original model plus the files it references, so .obj and .fbx can be
+	// viewed in the browser instead of waiting for Blender.
+	mux.Handle("GET /assets/{id}/file/{name...}", auth.RequireUser(http.HandlerFunc(s.handleAssetFile)))
+	// M15: the browser hands back a thumbnail it rendered for a model, because the
+	// server has no renderer and Blender is optional (§6).
+	mux.Handle("POST /assets/{id}/thumb", auth.RequireUser(http.HandlerFunc(s.handleModelThumbUpload)))
+	// M15: a font's bytes, so the detail page can set your own text in it.
+	mux.Handle("GET /assets/{id}/font", auth.RequireUser(http.HandlerFunc(s.handleAssetFont)))
 
 	// Palette export (§8): one route per interchange format (.gpl, .png, .txt, …).
 	mux.Handle("GET /assets/{id}/palette/{format}", auth.RequireUser(http.HandlerFunc(s.handlePaletteExport)))
@@ -182,7 +210,25 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /junk", auth.RequireUser(http.HandlerFunc(s.handleJunk)))
 	mux.Handle("POST /junk/scan", auth.RequireUser(http.HandlerFunc(s.handleJunkScan)))
 
+	// §7 pack palette consistency: a read-only comparison, so one GET.
+	mux.Handle("GET /palettes", auth.RequireUser(http.HandlerFunc(s.handlePalettes)))
+
+	// Duplicates and the removal path (§9.1, M13). Every destructive route is a
+	// POST behind CSRF, and /removals/plan is the preview step no apply can skip.
+	mux.Handle("GET /dupes", auth.RequireUser(http.HandlerFunc(s.handleDupes)))
+	mux.Handle("POST /dupes/scan", auth.RequireUser(http.HandlerFunc(s.handleDupesScan)))
+	mux.Handle("POST /removals/plan", auth.RequireUser(http.HandlerFunc(s.handleRemovalPlan)))
+	mux.Handle("POST /removals/apply", auth.RequireUser(http.HandlerFunc(s.handleRemovalApply)))
+	mux.Handle("POST /removals/script", auth.RequireUser(http.HandlerFunc(s.handleRemovalScript)))
+	mux.Handle("GET /trash", auth.RequireUser(http.HandlerFunc(s.handleTrash)))
+	mux.Handle("POST /trash/{id}/restore", auth.RequireUser(http.HandlerFunc(s.handleTrashRestore)))
+	mux.Handle("POST /trash/purge", auth.RequireUser(http.HandlerFunc(s.handleTrashPurge)))
+
 	// Ingest (§5): the web-upload path. _inbox polling runs in `serve`, off the web.
+	// "Upload" is what this is from the user's side; /ingest stays as an alias so old
+	// links and bookmarks keep working (§5 calls the pipeline ingest, and the code
+	// still does).
+	mux.Handle("GET /upload", auth.RequireUser(http.HandlerFunc(s.handleIngestForm)))
 	mux.Handle("GET /ingest", auth.RequireUser(http.HandlerFunc(s.handleIngestForm)))
 	mux.Handle("POST /ingest/upload", auth.RequireUser(http.HandlerFunc(s.handleUpload)))
 
@@ -217,6 +263,13 @@ func (s *Server) routes() http.Handler {
 	apiWrite("DELETE /api/v1/projects/{project}/uses/{id}", s.handleAPIRemoveUse)
 
 	// API token management (§11), session-authed like the rest of the UI.
+	// Settings: users (§11 has no self-registration, so creating one is behind auth)
+	// and the tokens page.
+	mux.Handle("GET /settings", auth.RequireUser(http.HandlerFunc(s.handleSettings)))
+	// The ambar:// helper, generated per platform (M15). A GET because it is a
+	// download of a script the operator is expected to read before running.
+	mux.Handle("GET /settings/open-helper", auth.RequireUser(http.HandlerFunc(s.handleOpenHelper)))
+	mux.Handle("POST /settings/users", auth.RequireUser(http.HandlerFunc(s.handleUserCreate)))
 	mux.Handle("GET /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokenCreate)))
 	mux.Handle("POST /settings/tokens/{id}/revoke", auth.RequireUser(http.HandlerFunc(s.handleTokenRevoke)))
@@ -329,6 +382,59 @@ type pageData struct {
 	// sweep is queued or in flight, so the page can say so.
 	Junk        *junk.StoredReport
 	JunkRunning bool
+
+	// Duplicates, the removal preview and the trash (§9.1, M13).
+	Dupes        *dupes.StoredReport
+	DupesRunning bool
+	// Plan is the removal preview. Non-nil only on the confirmation page, and an
+	// empty plan there means "nothing in that selection may happen".
+	Plan     *removal.Plan
+	PlanForm removalForm
+	// LinkMode and LinkSupport describe AMBAR_DEDUPE_LINK_MODE and whether the
+	// filesystem actually supports it, so the UI can recommend the right action.
+	LinkMode    string
+	LinkSupport removal.LinkSupport
+	// Workspace switches base.html from a centred document to the full-height
+	// three-pane library shell.
+	Workspace bool
+
+	// M14 "open in…": the asset's path on the operator's machine, the applications
+	// worth suggesting for it, and the Godot projects already using it.
+	Local    *LocalPath
+	OpenWith []string
+	// OpenApps are the ambar:// launch links for this asset (M15).
+	OpenApps    []openApp
+	ProjectUses []projects.AssetUse
+
+	// NeedsModelThumbs is true when the grid holds a model with no thumbnail, so the
+	// page loads three.js and asks the browser to render one (M15).
+	NeedsModelThumbs bool
+
+	// Settings (M15): the user list, the form's error, and the password rule to show.
+	Users             []auth.User
+	UserError         string
+	MinPasswordLength int
+
+	// Colours is the library's own dominant palette, as a clickable filter (M15).
+	Colours []index.PackColour
+
+	// The M14 folder tree: the visible nodes, the browsed directory, and the whole
+	// library's count for the "everything" row.
+	Tree      []index.FlatNode
+	TreeTotal int
+	Dir       string
+
+	// §7 pack palette consistency.
+	PackPalettes      []index.PackPalette
+	PaletteA          int64
+	PaletteB          int64
+	PaletteComparison *paletteComparison
+
+	Trash          []*removal.Batch
+	TrashBytes     int64
+	TrashDir       string
+	TrashRetention time.Duration
+	RemovalRunning bool
 }
 
 func (s *Server) newPageData(r *http.Request) pageData {
@@ -353,10 +459,14 @@ func parseTemplates() (map[string]*template.Template, error) {
 		"bytes":      FormatBytes,
 		"libraryDir": libraryDir,
 		"jobAge":     formatJobAge,
+		// sizes builds a literal list, which templates cannot do on their own. Used by
+		// the font specimen's size ladder (M15).
+		"sizes": func(v ...int) []int { return v },
 	}
 
 	pages := []string{"login.html", "index.html", "assets.html", "asset.html", "jobs.html",
-		"ingest.html", "provenance.html", "pack_provenance.html", "tokens.html", "junk.html"}
+		"ingest.html", "provenance.html", "pack_provenance.html", "tokens.html", "junk.html",
+		"dupes.html", "removal_confirm.html", "trash.html", "palettes.html", "settings.html"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		t, err := template.New("base.html").Funcs(funcs).
@@ -422,10 +532,13 @@ func (s *Server) renderPartial(w http.ResponseWriter, r *http.Request, page, blo
 	}
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+// handleStatus is the old landing dashboard: counts, derivative progress and the
+// links to the operational views. It is not the front door any more — the library
+// is — but the numbers are still worth one page.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	data := s.newPageData(r)
 
-	// A failing stats query should not blank the home page; the rest of it is
+	// A failing stats query should not blank the page; the rest of it is
 	// still useful, and the health endpoint is the place that reports trouble.
 	if stats, err := s.index.Stats(r.Context()); err != nil {
 		s.log.ErrorContext(r.Context(), "index stats failed", "error", err)

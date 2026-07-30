@@ -12,7 +12,8 @@ the milestones in §14.
 
 ## Status
 
-**M0, M1 and M2 complete.** What exists today:
+**Every milestone in §14 is complete (M0 through M13).** What exists today, in the
+detail the first three milestones were written up with:
 
 - Configuration from the environment, with validation that fails at startup
 - SQLite with WAL, a single writer connection and a separate read pool
@@ -41,20 +42,101 @@ Measured at 20,000 assets: first scan 2.9s, rescan 157ms with nothing re-hashed,
 both the asset grid and the group grid stay flat as you page — a page 10,000 rows deep
 costs the same as the first.
 
-Not yet: tags and the full query language (M3), ingest (M4), audio (M5), 3D and HDRI
-(M6), spritesheet grid detection (M7), the JSON API (M8), the Godot plugin (M9).
+Since then: tags with namespaces, hierarchy, aliases and the query language (M3);
+`_inbox` ingest with archive extraction and provenance capture (M4); audio peaks and
+keyboard audition (M5); glb normalisation and the three.js viewer (M6); spritesheet grid
+detection (M7); the JSON API and tokens (M8); the Godot editor plugin (M9); licence risk
+and `CREDITS.md` (M10); `verify`, `rebuild-index` and backups (M11); palette extraction
+(M11.5); the junk view (M12); and duplicates with the removal path (M13):
 
-### Known gaps in M2
+- **`ambar dupes` and `/dupes`** — exact-hash duplicates, pack similarity (identical,
+  contained, overlapping) computed from member hash sets, and near-duplicate image
+  clusters reported as "review these" and never proposed for removal
+- **A removal path built around refusing** — nothing is pre-selected, every selection is
+  previewed in full before it moves, an asset a Godot project uses is a hard block, and
+  the last live copy of a content hash can never be removed
+- **A trash rather than a delete** — removals move to `AMBAR_TRASH_DIR` keeping their
+  relative path, with a JSON record of where each came from and why; `/trash` restores
+  without ever overwriting, and purging is manual, never scheduled
+- **Linking preferred over deleting** — `reflink` (btrfs copy-on-write, via `FICLONE`)
+  or `hardlink` reclaims the same space while every path keeps working, probed at
+  startup and reported in the health endpoint
+- **A reviewable shell script** as an alternative to acting in-app: the same operations,
+  quoted, commented with the reasoning, and listing what Ambar refused
+- **Colour search** — `color:#8b3a3a` finds assets containing that colour within a
+  tolerance you can widen (`~40`) or close (`~0`), and `palette-near:<asset_id>` finds
+  assets whose palette shares a majority of another's dominant colours
+- **A pack palette consistency view** at `/palettes` answering §7's daily question —
+  "does this tileset sit next to that character set" — as two coverage numbers, the
+  colours behind them, and a sentence
+
+### The interface (M14)
+
+The library is the front door: `/` is the grid, in a three-pane workspace — folder tree
+and filters on the left, thumbnails in the middle, the asset's tags, palette, facts and
+actions on the right. Forms and reports stay centred documents.
+
+- **A folder tree with rolled-up counts**, derived from the index, filtering the grid to
+  any subtree
+- **A thumbnail size slider** (⌘/Ctrl +/− too), and small pixel art that fills its tile
+  instead of sitting in the middle of it as a speck
+- **3D in the browser for `.obj`, `.fbx` and `.gltf`** through vendored three.js loaders,
+  with the model's `.mtl`, `.bin` and textures served beside it — only `.blend` still
+  needs Blender, and only for a grid thumbnail
+- **"Open in…"** — the asset's path as *your* machine sees it
+  (`AMBAR_LOCAL_LIBRARY_PATH`), one click to copy, plus the Godot projects already using
+  it. A browser cannot launch Aseprite for you and the server runs on the NAS; this is
+  the honest version of that feature
+- **A spritesheet player** that says what frame detection is for: pause, step, frame
+  counter, fps, grid overlay
+- Documentation, archives and model companion files (`.mtl`, `.bin`) are no longer
+  indexed as assets — on the target library that is 540 files that stopped being grid
+  tiles
+
+### The interface, second pass (M15)
+
+- **Kinds, colours and tags first; folders on demand.** The sidebar leads with a re-scan
+  action, the kinds, the library's own dominant colours as clickable filters, and the
+  tags. The folder tree is there but starts collapsed
+- **Colour search where you see the colour**: ⌕ on every swatch searches the library for
+  it, ⧉ copies it
+- **A preview for every kind**: waveform tiles for audio, rendered specimens for fonts
+  (with a detail page you can type your own text into), and 3D thumbnails rendered by the
+  browser once and cached server-side — no Blender required
+- **“Open in Aseprite / Blender / Godot”** through an `ambar://` link plus a one-time
+  helper you install and can read first (Settings). The copyable local path stays for
+  before you install it
+- **Add a user from Settings** — §11 still forbids self-registration, so it is behind
+  auth and audited
+- Fit scales small images *up* (integer factors for pixel art), so a 20×21 tile no longer
+  opens at 20×21
+
+### Known gaps
 
 - **`.tga` and `.xcf` have no decoder.** Both are recorded as
   `derive_state=unsupported` with a reason, visible in the UI, rather than failing
   silently. See `docs/decisions.md`.
-- **The `.aseprite` decoder has never seen a file Aseprite actually wrote.** Its tests
-  build files to the documented format, which verifies the implementation against the
-  spec but not against reality. Dropping one real `.aseprite` into
-  `testdata/fixtures/` is the most valuable contribution available.
 - **Blend modes other than Normal are approximated** as Normal when compositing
-  Aseprite layers, and say so in the job log.
+  Aseprite layers, and say so in the job log. No file in the 72-file corpus measured
+  below uses one, so there is nothing to implement against yet.
+
+### The `.aseprite` decoder is measured against real files
+
+The decoder's fixtures are built to the documented format, which tests it against the
+spec. That was not enough: every fixture used opaque colours, and a compositing bug that
+only affected semi-transparent pixels passed all of them for two milestones.
+
+`internal/aseprite/corpus_test.go` decodes real Aseprite-authored files from a directory
+named by `AMBAR_ASEPRITE_CORPUS` and, where the pack also ships the vendor's own PNG
+export of the same artwork, compares them pixel by pixel:
+
+```
+AMBAR_ASEPRITE_CORPUS=/volume2/game/assets go test ./internal/aseprite/
+```
+
+Nothing is vendored — the corpus available here is non-redistributable — so the test
+skips when the variable is unset. On a 72-file corpus, 70 files match the vendor's export
+byte for byte; the tolerance for the other two is narrow and explained in the test.
 
 ### FTS5
 

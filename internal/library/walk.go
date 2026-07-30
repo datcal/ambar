@@ -70,6 +70,10 @@ type WalkResult struct {
 	// the scan summary because a surprisingly large number usually means a
 	// `__MACOSX` tree, which is worth telling the human about.
 	IgnoredCount int
+	// SkippedNonAssets is how many files were present but are not artwork —
+	// readmes, licences, archives, dotfiles. Counted separately from junk because
+	// these are legitimate files that simply do not belong in a grid of assets.
+	SkippedNonAssets int
 	// ReservedSkipped names the underscore-prefixed directories skipped (§17).
 	ReservedSkipped []string
 	// Errors are per-file problems. §16 wants deliberately broken files handled,
@@ -158,6 +162,17 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 		// confirm a pack, which rule 4 would then apply to every top-level folder.
 		assetCount = map[string]int{}
 		isBucket   = map[string]bool{}
+		// standaloneOf is kept apart from packOf on purpose. packOf means "this
+		// directory is inside a real pack", and the directory branch below inherits
+		// from it — so registering the synthetic standalone pack there would make a
+		// loose file at the root claim every sibling directory as part of itself.
+		//
+		// That was a real bug, and an ordering-dependent one: WalkDir visits entries
+		// lexically, so a loose `TileSet.png` at the root (uppercase sorts first)
+		// collapsed the whole library into one pack, while the same file named
+		// `zz.png` left pack detection intact. The target library has exactly such a
+		// file.
+		standaloneOf = map[string]string{}
 	)
 
 	err = filepath.WalkDir(opts.Root, func(absPath string, d fs.DirEntry, err error) error {
@@ -247,8 +262,15 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 			result.IgnoredCount++
 			return nil
 		}
-		// The sidecar is metadata, not an asset. M4 reads it.
-		if name == ".ambar.json" {
+		// Not artwork, so not indexed: readmes, licences, PDFs, downloaded archives,
+		// and dotfiles like .gitkeep or .gdignore. This check used to gate only pack
+		// *confirmation* further down, which is why the grid filled up with
+		// documentation — a real bug, visible on the first real library it met.
+		//
+		// The sidecar is excluded by the same rule (it is a dotfile): metadata about
+		// assets, read by §3's importer rather than indexed as one.
+		if !IsAssetFile(name) {
+			result.SkippedNonAssets++
 			return nil
 		}
 		// Symlinked files are skipped: the target is either already indexed under
@@ -260,12 +282,16 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 		dir := parentDir(relPath)
 		owner, ok := packOf[dir]
 		if !ok {
+			owner, ok = standaloneOf[dir]
+		}
+		if !ok {
 			// No pack ancestor: a loose file at the library root or directly inside
 			// a bucket. §5.1 forbids treating a bucket as a pack, and §4 provides
-			// `standalone` for exactly this.
+			// `standalone` for exactly this. Recorded in standaloneOf rather than
+			// packOf so it owns the loose files and nothing else.
 			pack := newPack(dir, "standalone")
 			candidates[pack.RelPath] = pack
-			packOf[dir] = pack.RelPath
+			standaloneOf[dir] = pack.RelPath
 			owner = pack.RelPath
 		}
 
@@ -280,9 +306,8 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 			fileInfo = Classify(absPath)
 		}
 
-		if IsAssetFile(name) {
-			assetCount[owner]++
-		}
+		// Only real assets reach this point, so every one of them confirms its pack.
+		assetCount[owner]++
 		result.Files = append(result.Files, File{
 			PackRelPath: owner,
 			RelPath:     relativeTo(owner, relPath),

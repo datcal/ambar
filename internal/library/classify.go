@@ -194,14 +194,39 @@ func ClassifyReader(filename string, r io.Reader) FileInfo {
 // because refusing to index an unknown file type would hide it entirely, and
 // invariant 2 wants the filesystem fully represented in the index.
 func IsAssetFile(filename string) bool {
+	// Dotfiles are never assets. A library checked out or synced through git or a
+	// game engine collects .gitkeep, .gdignore, .gitattributes and friends, and they
+	// have no business appearing in a grid of artwork. The sidecar is a dotfile too
+	// and is excluded here for the same reason — it is metadata about assets, read by
+	// §3's importer rather than indexed as one.
+	if strings.HasPrefix(filename, ".") {
+		return false
+	}
 	switch strings.ToLower(filename) {
 	case "readme", "readme.txt", "readme.md", "license", "license.txt",
-		"licence", "licence.txt", "license.md", "copyright", "credits.txt",
-		".ambar.json":
+		"licence", "licence.txt", "license.md", "copyright", "credits.txt":
 		return false
 	}
 	switch Ext(filename) {
 	case "txt", "md", "url", "nfo", "pdf", "rtf", "doc", "docx":
+		return false
+	// A downloaded pack archive sitting in the library is not artwork. §5 routes
+	// archives through _inbox and keeps the originals in _archives; one that was
+	// dropped straight into the library is provenance at best, and in the grid it is
+	// a tile you can neither preview nor use.
+	case "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz":
+		return false
+	// Companion files of a model, meaningless on their own: an .obj's material
+	// library, a glTF's binary buffer. They are *served* — the 3D viewer fetches them
+	// beside the model through /assets/{id}/file/, which resolves against the
+	// filesystem rather than the index — but a tile for `building.mtl` is noise. One
+	// real 3D pack contributed 484 such tiles before this rule existed.
+	case "mtl", "bin":
+		return false
+	// Engine-side metadata that sits beside an asset: Godot writes `hero.png.import`
+	// next to every imported file, Unity writes `.meta`. They describe an import, not
+	// artwork, and they reappear the moment the engine reimports.
+	case "import", "meta":
 		return false
 	}
 	return true

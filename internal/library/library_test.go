@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -805,4 +806,155 @@ func makePNG(t *testing.T, w, h int) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// TestLooseRootFileDoesNotSwallowPacks is a regression test for an
+// ordering-dependent pack-detection bug found against the real target library.
+//
+// WalkDir visits entries lexically. A loose asset file at the library root used to
+// register the root in the "inside a pack" map, so every pack directory visited
+// *after* it was treated as part of that synthetic standalone pack. Whether the
+// library split into packs therefore depended on whether the loose file's name
+// sorted before the pack directories: `TileSet.png` broke it, `zz.png` did not. The
+// target library has both a `TileSet_V2.png` at the root and craftpix pack
+// directories, so it hit the broken case and indexed 1500 assets as one pack.
+func TestLooseRootFileDoesNotSwallowPacks(t *testing.T) {
+	// Both names must behave identically: one sorts before the pack directories,
+	// the other after.
+	for _, loose := range []string{"TileSet.png", "zz-loose.png"} {
+		t.Run(loose, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"craftpix-a/PNG", "craftpix-b/PNG", "raw/craftpix-c"} {
+				if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, dir, "sprite.png"), []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, loose), []byte("y"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := Walk(WalkOptions{Root: root})
+			if err != nil {
+				t.Fatalf("walk: %v", err)
+			}
+
+			kinds := map[string]string{}
+			files := map[string]int{}
+			for _, p := range res.Packs {
+				kinds[p.RelPath] = p.Kind
+			}
+			for _, f := range res.Files {
+				files[f.PackRelPath]++
+			}
+
+			// Three real packs, each owning its own file, plus the standalone pack
+			// holding only the loose one.
+			for _, want := range []string{"craftpix-a", "craftpix-b", "raw/craftpix-c"} {
+				if kinds[want] != "folder" {
+					t.Errorf("%s: kind = %q, want folder — pack detection was swallowed", want, kinds[want])
+				}
+				if files[want] != 1 {
+					t.Errorf("%s owns %d file(s), want 1", want, files[want])
+				}
+			}
+			if kinds["."] != "standalone" {
+				t.Errorf("the loose file should sit in a standalone pack, got %q", kinds["."])
+			}
+			if files["."] != 1 {
+				t.Errorf("the standalone pack owns %d file(s), want only the loose one", files["."])
+			}
+			if len(res.Packs) != 4 {
+				t.Errorf("%d pack(s), want 4: %+v", len(res.Packs), res.Packs)
+			}
+		})
+	}
+}
+
+// TestNonAssetsAreNotIndexed covers the M14 fix for a bug the real library exposed:
+// IsAssetFile existed from M1 but was only consulted when *confirming* a pack, so
+// readmes, licences, coupons and .gitkeep files were indexed as assets and appeared
+// in the grid.
+func TestNonAssetsAreNotIndexed(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		// Real assets.
+		"pack/PNG/hero.png": "art",
+		"pack/PSD/hero.psd": "source",
+		"pack/tiles.tsx":    "<tileset/>",
+		// Everything a vendor pack ships alongside them.
+		"pack/readme.txt":      "how to use",
+		"pack/License.txt":     "terms",
+		"pack/COUPON.pdf":      "%PDF",
+		"pack/Free Assets.url": "[InternetShortcut]",
+		"pack/pack-source.zip": "PK",
+		"pack/notes.md":        "# notes",
+		// Dotfiles from git and from Godot.
+		"pack/.gitkeep":       "",
+		"pack/.gdignore":      "",
+		"pack/.gitattributes": "* text=auto",
+	}
+	for rel, content := range files {
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := Walk(WalkOptions{Root: root})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+
+	var indexed []string
+	for _, f := range res.Files {
+		indexed = append(indexed, f.RelPath)
+	}
+	sort.Strings(indexed)
+	want := []string{"PNG/hero.png", "PSD/hero.psd", "tiles.tsx"}
+	if !reflect.DeepEqual(indexed, want) {
+		t.Errorf("indexed %v, want only the artwork %v", indexed, want)
+	}
+	if res.SkippedNonAssets != 9 {
+		t.Errorf("SkippedNonAssets = %d, want 9 — the count is what makes the exclusion visible",
+			res.SkippedNonAssets)
+	}
+}
+
+// TestDocumentationOnlyDirectoryIsNotAPack: a directory holding nothing but a readme
+// and a licence has no assets in it, so it is neither a pack nor indexed. That was
+// the original intent of IsAssetFile and it now holds end to end.
+func TestDocumentationOnlyDirectoryIsNotAPack(t *testing.T) {
+	root := t.TempDir()
+	for rel, content := range map[string]string{
+		"docs/readme.txt":  "nothing here",
+		"docs/License.txt": "terms",
+		"art/hero.png":     "art",
+	} {
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := Walk(WalkOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range res.Packs {
+		if p.RelPath == "docs" {
+			t.Errorf("a documentation-only directory became a pack: %+v", p)
+		}
+	}
+	if len(res.Packs) != 1 || res.Packs[0].RelPath != "art" {
+		t.Errorf("packs = %+v, want only art", res.Packs)
+	}
 }

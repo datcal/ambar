@@ -1,0 +1,107 @@
+{{define "title"}}Trash — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Trash</h1>
+
+  {{/* §9.1: "Nothing is ever deleted in place. Move to $AMBAR_TRASH_DIR, preserving
+       the original relative path so restoration is unambiguous, with a JSON record
+       of where it came from and why." This page reads those records. Purging is the
+       one irreversible action in Ambar, so it happens only when a person presses the
+       button — never on a schedule, and never under space pressure. */}}
+  <p class="note">
+    Removed files live here with their original relative paths and a JSON record of where each
+    came from. Nothing is purged automatically — not on a timer, not when the volume fills up.
+  </p>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+  {{if .RemovalRunning}}
+    <p class="hint">A removal is running — watch <a href="/jobs">background work</a>, then reload.</p>
+  {{end}}
+
+  <p class="resultcount">
+    {{if .Trash}}{{len .Trash}} batch(es), {{bytes .TrashBytes}} held in <code>{{.TrashDir}}</code>.
+    {{else}}The trash is empty.{{end}}
+  </p>
+
+  <div class="actions-row">
+    <form method="post" action="/trash/purge" class="inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit"{{if not .Trash}} disabled{{end}}>Purge batches older than the retention window</button>
+    </form>
+    <span class="hint">
+      {{if .TrashRetention}}
+        Retention is {{.TrashRetention}}; nothing younger than that is ever purged.
+      {{else}}
+        <code>AMBAR_TRASH_RETENTION</code> is not set, so purging from here is refused. Use
+        <code>ambar trash purge --older-than 30d</code> when you mean it.
+      {{end}}
+    </span>
+  </div>
+
+  {{range .Trash}}
+    <div class="card">
+      <div class="palette-head">
+        <h2>{{.CreatedTime.Format "2006-01-02 15:04"}}</h2>
+        <span class="badge">
+          {{len .Entries}} entr{{if eq (len .Entries) 1}}y{{else}}ies{{end}} ·
+          {{bytes .Bytes}}{{if .Failed}} · {{.Failed}} failed{{end}}
+        </span>
+      </div>
+      <p class="hint">
+        <code>{{.ID}}</code>{{if .Actor}} · requested by {{.Actor}}{{end}}
+        {{if ne .State "applied"}} · <strong>state: {{.State}}</strong> (interrupted; the entries
+          below are what it intended to move){{end}}
+      </p>
+      {{if .Reason}}<p>{{.Reason}}</p>{{end}}
+
+      <form method="post" action="/trash/{{.ID}}/restore">
+        <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+        <div class="tablewrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th scope="col">Restore</th>
+                <th scope="col">Original path</th>
+                <th scope="col">Root</th>
+                <th scope="col" class="num">Size</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Entries}}
+                <tr>
+                  <td>
+                    {{if and .Done (not .Restored)}}
+                      <input type="checkbox" name="path" value="{{.Path}}" aria-label="restore {{.Path}}">
+                    {{else}}—{{end}}
+                  </td>
+                  <td><code>{{.Path}}</code>{{if .IsDir}} <span class="hint">directory</span>{{end}}</td>
+                  <td>{{.Root}}</td>
+                  <td class="num">{{bytes .Bytes}}</td>
+                  <td class="dir">
+                    {{if not .Done}}<strong>failed:</strong> {{.Error}}
+                    {{else if .Restored}}restored
+                    {{else if eq .Action "link"}}linked to <code>{{.KeepPath}}</code>
+                    {{else}}in the trash{{end}}
+                    {{if .Finding}}<span class="hint"> · {{.Finding}}</span>{{end}}
+                  </td>
+                </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+        {{if .Restorable}}
+          <div class="actions-row">
+            <button type="submit">Restore the ticked items</button>
+            <span class="hint">
+              Restoring never overwrites: a path that has since been re-created is reported and
+              left here.
+            </span>
+          </div>
+        {{end}}
+      </form>
+    </div>
+  {{end}}
+</div>
+{{end}}

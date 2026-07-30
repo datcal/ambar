@@ -48,14 +48,27 @@ function init(root) {
     return { w, h };
   }
 
+  // How far "fit" is allowed to scale a small image up. A 4x4 icon blown across the
+  // whole stage is a wall of colour rather than a preview, so the growth stops here.
+  const MAX_FIT_UPSCALE = 16;
+
   function fitScale() {
     const { w, h } = naturalSize();
     if (!w || !h) return 1;
     const rect = stage.getBoundingClientRect();
     if (!rect.width || !rect.height) return 1;
-    // Never scale up to fit: a 16x16 sprite shown at 40x is not "fit", it is a
-    // decision the user should make with the zoom buttons.
-    return Math.min(1, Math.min(rect.width / w, rect.height / h));
+
+    const raw = Math.min(rect.width / w, rect.height / h);
+    if (raw <= 1) return raw;
+
+    // Fit now scales *up* as well as down. The old rule ("never scale up to fit")
+    // meant a 20x21 tile opened at 20x21 in a 46rem stage and you had to click 800%
+    // to see anything — which is exactly what the grid's tiles used to do wrong too.
+    //
+    // Pixel art snaps to a whole factor: a 3.7x upscale resamples every edge, while 3x
+    // keeps each authored pixel a clean square.
+    const capped = Math.min(raw, MAX_FIT_UPSCALE);
+    return pixelArt ? Math.max(1, Math.floor(capped)) : capped;
   }
 
   function render() {
@@ -160,12 +173,24 @@ function init(root) {
   // --- drag to pan ---
 
   stage.addEventListener('pointerdown', (event) => {
+    // preventDefault is what makes dragging *pan* instead of picking the image up.
+    // Without it the browser starts its own native image drag the moment the pointer
+    // moves over the <img>, so panning only worked from the empty space around it —
+    // which is exactly the wrong way round.
+    event.preventDefault();
     state.dragging = true;
     state.dragStartX = event.clientX - state.panX;
     state.dragStartY = event.clientY - state.panY;
     stage.setPointerCapture(event.pointerId);
     stage.classList.add('dragging');
+    // Focus the stage so the arrow keys and +/- work straight after a drag.
+    if (typeof stage.focus === 'function') stage.focus({ preventScroll: true });
   });
+
+  // Belt and braces: some browsers begin a drag from mousedown rather than from the
+  // pointer events above, and an <img> is draggable by default.
+  img.setAttribute('draggable', 'false');
+  stage.addEventListener('dragstart', (event) => event.preventDefault());
 
   stage.addEventListener('pointermove', (event) => {
     if (!state.dragging) return;

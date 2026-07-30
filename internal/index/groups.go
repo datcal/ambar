@@ -408,6 +408,13 @@ func groupFilters(opts ListOptions) ([]string, []any) {
 		where = append(where, "g.pack_id = ?")
 		args = append(args, opts.PackID)
 	}
+	// The folder tree's filter (M14). Matched against the primary asset's path: a
+	// group belongs to the directory its engine-ready file sits in, which is the one
+	// the grid tile represents.
+	if dir := cleanDir(opts.Dir); dir != "" {
+		where = append(where, dirExpr("a"))
+		args = append(args, dir, dir+"/", dir+"/")
+	}
 	// The §7 query clause is added by ListGroups, which has the context and tag
 	// resolver the compiler needs; groupFilters covers only the sidebar facets.
 	return where, args

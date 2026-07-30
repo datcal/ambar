@@ -89,8 +89,11 @@ func TestParseWarnings(t *testing.T) {
 		in      string
 		wantLen int
 	}{
-		{"color:#8b3a3a", 1},
-		{"palette-near:42", 1},
+		// color: and palette-near: used to warn and do nothing; they are real filters
+		// now, so what warns is a malformed one.
+		{"color:notacolour", 1},
+		{"color:#8b3a3a~wide", 1},
+		{"palette-near:notanid", 1},
 		{"tris:<5000", 1},
 		{"duration:>1000", 1},
 		{"width:notanumber", 1},
@@ -124,5 +127,62 @@ func TestParseEmpty(t *testing.T) {
 		if !q.Empty() {
 			t.Errorf("Parse(%q) not empty: %#v", in, q.Groups)
 		}
+	}
+}
+
+// TestParseColourTerms covers §7's two colour filters, including the tolerance
+// suffix and the forms a person actually types.
+func TestParseColourTerms(t *testing.T) {
+	tests := []struct {
+		in            string
+		wantR         int
+		wantG         int
+		wantB         int
+		wantTolerance int
+	}{
+		{"color:#8b3a3a", 0x8b, 0x3a, 0x3a, DefaultColorTolerance},
+		{"color:8b3a3a", 0x8b, 0x3a, 0x3a, DefaultColorTolerance},
+		{"colour:#8b3a3a", 0x8b, 0x3a, 0x3a, DefaultColorTolerance},
+		{"color:#f0a", 0xff, 0x00, 0xaa, DefaultColorTolerance},
+		{"color:#8b3a3a~0", 0x8b, 0x3a, 0x3a, 0},
+		{"color:#8b3a3a~40", 0x8b, 0x3a, 0x3a, 40},
+		// A tolerance past the end of the range matches everything either way.
+		{"color:#8b3a3a~9000", 0x8b, 0x3a, 0x3a, 255},
+	}
+	for _, tc := range tests {
+		q, err := Parse(tc.in)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.in, err)
+		}
+		if len(q.Groups) != 1 || len(q.Groups[0].Terms) != 1 {
+			t.Fatalf("Parse(%q) = %#v, want one term (warnings %v)", tc.in, q.Groups, q.Warnings)
+		}
+		got, ok := q.Groups[0].Terms[0].(ColorTerm)
+		if !ok {
+			t.Fatalf("Parse(%q) term = %#v, want a ColorTerm", tc.in, q.Groups[0].Terms[0])
+		}
+		if got.R != tc.wantR || got.G != tc.wantG || got.B != tc.wantB || got.Tolerance != tc.wantTolerance {
+			t.Errorf("Parse(%q) = %d,%d,%d ~%d; want %d,%d,%d ~%d", tc.in,
+				got.R, got.G, got.B, got.Tolerance, tc.wantR, tc.wantG, tc.wantB, tc.wantTolerance)
+		}
+	}
+
+	// Negation applies to the whole filter.
+	q, _ := Parse("-color:#8b3a3a")
+	if term, ok := q.Groups[0].Terms[0].(ColorTerm); !ok || !term.negated() {
+		t.Errorf("-color: did not parse as a negated ColorTerm: %#v", q.Groups[0].Terms[0])
+	}
+
+	// palette-near takes an asset id.
+	q, _ = Parse("palette-near:42~30")
+	near, ok := q.Groups[0].Terms[0].(PaletteNearTerm)
+	if !ok {
+		t.Fatalf("palette-near term = %#v", q.Groups[0].Terms[0])
+	}
+	if near.AssetID != 42 || near.Tolerance != 30 {
+		t.Errorf("palette-near:42~30 = id %d ~%d", near.AssetID, near.Tolerance)
+	}
+	if q, _ := Parse("palette-near:0"); len(q.Warnings) != 1 {
+		t.Errorf("palette-near:0 should warn, got %v", q.Warnings)
 	}
 }
