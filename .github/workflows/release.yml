@@ -1,0 +1,91 @@
+# Publish the container image to GHCR when a version tag is pushed.
+#
+# This is the credential-free path to "build it and push it to GitHub": the job
+# authenticates with the automatic GITHUB_TOKEN, so no personal access token has to
+# be created, stored on a workstation, or rotated. Pushing the tag is the whole
+# operation:
+#
+#   git tag -a v0.1.0 -m "M15" && git push origin v0.1.0
+#
+# The NAS then pulls that tag (scripts/deploy.sh, or `docker compose pull`).
+#
+# The tests run first. An image that gets published is one somebody will deploy, and
+# `make check` is cheap next to debugging a bad image on a NAS.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A manual run builds and pushes :edge, for trying the pipeline without minting a
+  # version.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Invariant 6: the binary must stay statically linkable, and the FTS5-under-
+      # modernc assertion lives in the test suite. Publishing without running it would
+      # ship the one failure mode the architecture cannot tolerate.
+      - name: check
+        run: make check
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr.io/<owner>/ambar:<version> plus :latest for a tag, :edge for a manual run.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ambar
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The deployment target is an x86_64 Synology (§17). arm64 is added here the
+          # day there is a machine that needs it, not speculatively — each extra
+          # platform doubles the build.
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: summary
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Deploy it with \`make deploy\` (AMBAR_IMAGE pointing at one of these tags)."
+          } >> "$GITHUB_STEP_SUMMARY"
