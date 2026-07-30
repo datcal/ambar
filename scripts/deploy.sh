@@ -216,7 +216,7 @@ ssh_nas "mkdir -p '$REMOTE_DIR'"
 # token has no business sitting on the NAS or inside the running process.
 env_for_server=$(mktemp)
 trap 'rm -f "$env_for_server"' EXIT
-grep -vE '^(GITHUB_TOKEN|GHCR_TOKEN|GHCR_USER|CR_PAT|AMBAR_SSH_[A-Z_]*|AMBAR_PUSH_IMAGE|AMBAR_BUILDER)=' \
+grep -vE '^(GITHUB_TOKEN|GHCR_TOKEN|GHCR_USER|CR_PAT|AMBAR_SSH_[A-Z_]*|AMBAR_REMOTE_DIR|AMBAR_PUSH_IMAGE|AMBAR_BUILDER)=' \
     .env > "$env_for_server"
 stripped=$(( $(grep -cE '^[A-Z]' .env) - $(grep -cE '^[A-Z]' "$env_for_server") ))
 [ "$stripped" -gt 0 ] && echo "   withheld $stripped local-only setting(s) from the copy"
