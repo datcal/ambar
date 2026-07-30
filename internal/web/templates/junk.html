@@ -1,0 +1,87 @@
+{{define "title"}}Junk & clutter — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Junk &amp; clutter</h1>
+
+  {{/* §9.1: Ambar is "a detector and a reporter, not a cleaner". This page finds
+       and measures; it never removes. Invariant 3 forbids acting on a computed set,
+       so there is deliberately no delete control here — the human-selected removal
+       workflow, with trash staging and the safety invariants, is M13. */}}
+  <p class="note">
+    This is a report only. Ambar never removes anything on its own — it finds candidates and
+    shows what each would reclaim. A deliberate, human-selected removal workflow arrives in a
+    later milestone.
+  </p>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  <div class="actions-row">
+    <form method="post" action="/junk/scan" class="inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit"{{if .JunkRunning}} disabled{{end}}>
+        {{if .Junk}}Rescan{{else}}Scan for junk{{end}}
+      </button>
+    </form>
+    {{if .JunkRunning}}
+      <span class="hint">A scan is running — watch <a href="/jobs">background work</a>, then reload.</span>
+    {{end}}
+  </div>
+
+  {{if not .Junk}}
+    <div class="card">
+      <p>No scan has run yet.</p>
+      <p class="hint">
+        Press “Scan for junk” to sweep the library and the derivative cache in the background,
+        or run <code>ambar junk</code> from the command line.
+      </p>
+    </div>
+  {{else}}
+    {{with .Junk}}
+      <p class="resultcount">
+        Last scanned {{.ScannedTime.Format "2006-01-02 15:04"}}.
+        {{if .Report.Empty}}
+          Nothing to report — the library and derivative cache are clean.
+        {{else}}
+          {{.Report.TotalItems}} candidate(s), {{bytes .Report.TotalBytes}} reclaimable.
+        {{end}}
+      </p>
+
+      {{range .Report.Findings}}
+        <div class="card">
+          <div class="palette-head">
+            <h2>{{.Kind.Title}}</h2>
+            <span class="badge">{{.Count}} item(s) · {{bytes .TotalBytes}}</span>
+          </div>
+          <p class="hint">{{.Kind.Explanation}}</p>
+          <div class="tablewrap junk-list">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th scope="col">Path</th>
+                  <th scope="col">Detail</th>
+                  <th scope="col" class="num">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range $i, $it := .Items}}
+                  {{if lt $i 500}}
+                    <tr>
+                      <td><code>{{$it.Path}}</code></td>
+                      <td class="dir">{{if $it.Detail}}{{$it.Detail}}{{else}}—{{end}}</td>
+                      <td class="num">{{if $it.Bytes}}{{bytes $it.Bytes}}{{else}}0 B{{end}}</td>
+                    </tr>
+                  {{end}}
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{if gt .Count 500}}
+            <p class="hint">Showing the first 500 of {{.Count}} — the rest are the same kind and are counted in the total above.</p>
+          {{end}}
+        </div>
+      {{end}}
+    {{end}}
+  {{end}}
+</div>
+{{end}}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/color/palette"
+	stdpalette "image/color/palette"
 	"image/draw"
 	"image/gif"
 	"os"
@@ -15,7 +15,24 @@ import (
 
 	"github.com/HugoSmits86/nativewebp"
 	xdraw "golang.org/x/image/draw"
+
+	"github.com/datcal/ambar/internal/audio"
+	"github.com/datcal/ambar/internal/model"
+	"github.com/datcal/ambar/internal/palette"
+	"github.com/datcal/ambar/internal/spritesheet"
 )
+
+// SheetInfo is a proposed spritesheet grid (§6). Source is "detected" here; the
+// UI promotes it to "manual" on confirmation or correction.
+type SheetInfo struct {
+	Cols       int
+	Rows       int
+	FrameW     int
+	FrameH     int
+	FrameCount int
+	Source     string
+	Confident  bool
+}
 
 // Version is the derivative algorithm version.
 //
@@ -23,7 +40,13 @@ import (
 // derivatives regenerate. Without it, every improvement means manually re-triggering
 // twenty thousand files." Bump this whenever the output of this package changes in a
 // way that should be visible on existing assets.
-const Version = 1
+//
+// v2 (M5): audio assets, previously recorded unsupported, now derive peaks and
+// metadata — so every asset is reconsidered once.
+// v3 (M6): glTF/GLB models derive preview.glb and metadata.
+// v4 (M7): still images are checked for a spritesheet grid.
+// v5 (M11.5): still images extract a colour palette (palette_json, palette_kind).
+const Version = 5
 
 // Thumbnail sizes. 512 is what §3's layout specifies; @2x covers a high-DPI display.
 const (
@@ -42,7 +65,12 @@ const (
 	FileThumbAlpha = "thumb-alpha.webp"
 	FilePreview    = "preview.webp"
 	FileAnimation  = "anim.gif"
+	FileSheet      = "sheet.gif" // §6 spritesheet animation preview
 )
+
+// SheetFPS is the frame rate the spritesheet preview plays at when the source
+// carries none (§6). 12 fps reads as animation without being frantic.
+const SheetFPS = 12
 
 // Dir returns the derivative directory for a content hash, relative to the data root:
 // derivatives/<sha[0:2]>/<sha>/ exactly as §3 lays out.
@@ -74,6 +102,24 @@ type Result struct {
 	// AnimationNames comes from Aseprite frame tags (§6).
 	AnimationNames []string
 
+	// Audio is set only for sound files (§6): the deriver takes a separate path
+	// that writes peaks.json and fills the §4 audio columns instead of an image.
+	Audio *audio.Info
+
+	// Model is set only for 3D assets (§6): a separate path that writes preview.glb
+	// and fills the §4 model columns.
+	Model *model.Info
+
+	// Sheet is set when a still image is detected as a spritesheet (§6): the
+	// proposed grid, filling the §4 frame columns. Confident guesses also get a
+	// sheet.gif preview.
+	Sheet *SheetInfo
+
+	// Palette is the extracted colour palette (§8), set for every decoded still
+	// image. It is analysis, not a file, so it fills palette_json / palette_kind
+	// rather than living under the derivative directory.
+	Palette *palette.Palette
+
 	// Files written, relative to the derivative directory.
 	Files []string
 	// Notes from the decoder, worth surfacing rather than swallowing.
@@ -92,6 +138,9 @@ type GenerateOptions struct {
 	DataRoot string
 	// MaxPixels guards against a decompression bomb.
 	MaxPixels int64
+	// BlenderBin is the optional external Blender CLI for FBX/.blend (§6). Empty
+	// means Blender is unavailable, and those formats stay needs_blender.
+	BlenderBin string
 }
 
 // Generate decodes an asset and writes its derivatives.
@@ -99,6 +148,15 @@ type GenerateOptions struct {
 // Returns an error wrapping ErrUnsupported when there is no decoder, which the caller
 // records as derive_state=unsupported rather than as a failure.
 func Generate(opts GenerateOptions) (*Result, error) {
+	// Audio and 3D each take a wholly separate path: no image is decoded, and the
+	// peaks.json / preview.glb plus their §4 columns are produced instead (§6).
+	if isAudioExt(opts.Ext) {
+		return deriveAudio(opts)
+	}
+	if isModelExt(opts.Ext) {
+		return deriveModel(opts)
+	}
+
 	src, err := Decode(opts.AbsPath, opts.Ext, DecodeOptions{MaxPixels: opts.MaxPixels})
 	if err != nil {
 		return nil, err
@@ -116,12 +174,18 @@ func Generate(opts GenerateOptions) (*Result, error) {
 	first := src.First()
 	analysis := Analyse(first)
 
+	// The colour palette (§8), from the first frame — the same image the still
+	// thumbnail shows. Exact for a sprite's hand-picked colours, quantized for a
+	// photographic texture; the UI labels which.
+	pal := palette.Extract(first, palette.Options{})
+
 	result := &Result{
 		Analysis:       analysis,
 		PHash:          PerceptualHash(first),
 		FrameCount:     len(src.Frames),
 		FPS:            src.FPS(),
 		AnimationNames: src.AnimationNames,
+		Palette:        &pal,
 		Notes:          src.Notes,
 	}
 
@@ -159,7 +223,65 @@ func Generate(opts GenerateOptions) (*Result, error) {
 			result.Files = append(result.Files, FileAnimation)
 		}
 	}
+
+	// §6 spritesheet detection: for a still image whose name or dimensions suggest
+	// a sheet, propose a frame grid; a confident guess also gets an animated
+	// preview built from its cells. A guess is never trusted silently — it is
+	// recorded as frame_source=detected for the UI to confirm (§6).
+	if !src.Animated() {
+		b := first.Bounds()
+		if spritesheet.IsCandidate(filepath.Base(opts.AbsPath), b.Dx(), b.Dy()) {
+			if g, ok := spritesheet.Detect(first); ok {
+				result.Sheet = &SheetInfo{
+					Cols: g.Cols, Rows: g.Rows, FrameW: g.FrameW, FrameH: g.FrameH,
+					FrameCount: g.FrameCount, Source: "detected", Confident: g.Confident,
+				}
+				if g.Confident {
+					if err := writeSheetGIF(filepath.Join(outDir, FileSheet), first, g, analysis.IsPixelArt); err != nil {
+						result.Notes = append(result.Notes, "sheet preview could not be written: "+err.Error())
+					} else {
+						result.Files = append(result.Files, FileSheet)
+					}
+				}
+			}
+		}
+	}
 	return result, nil
+}
+
+// writeSheetGIF renders a spritesheet's cells as an animated GIF playing at
+// SheetFPS (§6: "so the grid view shows animation instead of forty tiny
+// squares"). Cells are read row-major, the reading order of a sheet.
+func writeSheetGIF(path string, sheet image.Image, g spritesheet.Grid, pixelArt bool) error {
+	anim := &gif.GIF{LoopCount: 0}
+	delay := 100 / SheetFPS
+	origin := sheet.Bounds().Min
+
+	for r := 0; r < g.Rows; r++ {
+		for c := 0; c < g.Cols; c++ {
+			cell := image.NewRGBA(image.Rect(0, 0, g.FrameW, g.FrameH))
+			src := image.Pt(origin.X+c*g.FrameW, origin.Y+r*g.FrameH)
+			xdraw.Draw(cell, cell.Bounds(), sheet, src, xdraw.Src)
+
+			scaled := Fit(cell, ThumbSize, pixelArt)
+			flattened := CompositeOver(scaled, MidGrey)
+			bounds := flattened.Bounds()
+			paletted := image.NewPaletted(bounds, nil)
+			paletted.Palette = stdpalette.Plan9
+			xdraw.Draw(paletted, bounds, flattened, bounds.Min, xdraw.Src)
+
+			anim.Image = append(anim.Image, paletted)
+			anim.Delay = append(anim.Delay, delay)
+		}
+	}
+	if len(anim.Image) == 0 {
+		return fmt.Errorf("no frames to write")
+	}
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, anim); err != nil {
+		return fmt.Errorf("encode sheet GIF: %w", err)
+	}
+	return writeFileAtomic(path, buf.Bytes())
 }
 
 // Fit scales an image so its longest edge is at most size, preserving aspect ratio.
@@ -244,7 +366,7 @@ func writeAnimatedGIF(path string, src *Source, pixelArt bool) error {
 		paletted := image.NewPaletted(bounds, nil)
 		// A fixed 256-colour palette rather than per-frame quantisation, which would
 		// make the animation shimmer as colours were reassigned between frames.
-		paletted.Palette = palette.Plan9
+		paletted.Palette = stdpalette.Plan9
 		xdraw.Draw(paletted, bounds, flattened, bounds.Min, xdraw.Src)
 
 		anim.Image = append(anim.Image, paletted)

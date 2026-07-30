@@ -1,0 +1,92 @@
+{{define "title"}}Provenance — {{.ProvPackName}}{{end}}
+
+{{define "content"}}
+{{with .Prov}}
+<div class="stack">
+  <p class="breadcrumb"><a href="/provenance?view={{$.ProvView}}">provenance</a> / {{$.ProvPackName}}</p>
+  <h1>Provenance — {{$.ProvPackName}}</h1>
+  <p class="hint"><code>{{$.ProvPackRel}}</code></p>
+
+  <form method="post" action="/packs/{{$.ProvPackID}}/provenance" class="card stack">
+    <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+    <input type="hidden" name="view" value="{{$.ProvView}}">
+
+    <p>
+      <label>Source URL<br>
+        <input type="url" name="source_url" value="{{.SourceURL}}" size="50"
+               placeholder="https://kenney.itch.io/…"></label>
+    </p>
+    <p>
+      <label>Site<br>
+        <input type="text" name="source_site" value="{{.SourceSite}}"
+               placeholder="{{if $.Sniff.Site}}{{$.Sniff.Site}} (from URL){{end}}"></label>
+      &nbsp;
+      <label>Author<br>
+        <input type="text" name="source_author" value="{{.SourceAuthor}}"
+               placeholder="{{if $.Sniff.Author}}{{$.Sniff.Author}} (from URL){{end}}"></label>
+    </p>
+    <p>
+      <label>Author URL<br>
+        <input type="url" name="source_author_url" value="{{.SourceAuthorURL}}" size="40"></label>
+    </p>
+
+    <p>
+      <label>Licence<br>
+        <select name="license">
+          <option value="">— unlicensed (needs review) —</option>
+          {{range $.Licenses}}
+            <option value="{{.SPDXID}}"{{if $.Prov.HasLicense .ID}} selected{{end}}>{{.SPDXID}} — {{.Name}}</option>
+          {{end}}
+        </select></label>
+    </p>
+    <p>
+      <label>Licence note<br>
+        <input type="text" name="license_note" value="{{.LicenseNote}}" size="50"></label>
+    </p>
+    <p>
+      <label><input type="checkbox" name="attribution_required"{{if .AttributionRequired}} checked{{end}}>
+        Attribution required</label>
+    </p>
+    <p>
+      <label>Attribution text (emitted into CREDITS.md)<br>
+        <textarea name="attribution_text" rows="2" cols="50">{{.AttributionText}}</textarea></label>
+    </p>
+
+    <p>
+      <label>Price paid<br>
+        <input type="text" name="price" value="{{.PriceMajor}}" size="8" placeholder="0.00"></label>
+      &nbsp;
+      <label>Currency<br>
+        <input type="text" name="currency" value="{{.Currency}}" size="4" placeholder="EUR"></label>
+      &nbsp;
+      <label>Acquired<br>
+        <input type="date" name="acquired"{{if .AcquiredAt}} value="{{.AcquiredAt.Format "2006-01-02"}}"{{end}}></label>
+    </p>
+    <p>
+      <label>Order reference<br>
+        <input type="text" name="order_ref" value="{{.OrderRef}}" size="30"></label>
+    </p>
+
+    {{if .OriginalArchiveName}}
+      <p class="hint">Original archive: <code>{{.OriginalArchiveName}}</code>
+        {{if .OriginalArchiveSize}} ({{bytes .ArchiveSizeBytes}}){{end}}</p>
+    {{end}}
+
+    <p>
+      <label>Notes<br>
+        <textarea name="notes" rows="2" cols="50">{{.Notes}}</textarea></label>
+    </p>
+
+    <p>
+      <label><input type="checkbox" name="complete"{{if eq .State "complete"}} checked{{end}}>
+        Mark provenance complete</label>
+    </p>
+
+    <p class="actions">
+      <button type="submit">Save</button>
+      <a class="clear" href="/provenance?view={{$.ProvView}}">Cancel</a>
+    </p>
+  </form>
+</div>
+{{end}}
+{{end}}

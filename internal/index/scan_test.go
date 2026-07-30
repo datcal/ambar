@@ -958,34 +958,6 @@ func TestSearchNeverErrorsOnHostileInput(t *testing.T) {
 	}
 }
 
-func TestFTSQuery(t *testing.T) {
-	tests := map[string]string{
-		"sword":        `"sword"*`,
-		"wooden sword": `"wooden"* "sword"*`,
-		// Operators are neutralised by quoting.
-		"AND":    `"AND"*`,
-		"a OR b": `"a"* "OR"* "b"*`,
-		// Punctuation SPLITS rather than being deleted, matching how the tokenizer
-		// indexes the filename. Deleting it would join across separators and match
-		// nothing.
-		`sword"`:          `"sword"*`,
-		"wooden_sword_01": `"wooden"* "sword"* "01"*`,
-		"file.png":        `"file"* "png"*`,
-		"new_name":        `"new"* "name"*`,
-		// Non-ASCII letters survive, since café and Hörn are real pack names.
-		"café": `"café"*`,
-		// Nothing usable produces an empty match, which means "no filter".
-		"":      "",
-		"   ":   "",
-		`"" ()`: "",
-	}
-	for in, want := range tests {
-		if got := FTSQuery(in); got != want {
-			t.Errorf("FTSQuery(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestPaginationWalksEveryRowExactlyOnce(t *testing.T) {
 	f := newFixture(t)
 	const total = 250

@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path"
 	"sort"
@@ -317,6 +318,19 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 
 	where, args := groupFilters(opts)
 
+	// The §7 query is matched against ANY variant in the group, compiled over the
+	// `v` alias and wrapped so a match on one format pulls in the whole group.
+	compiled, err := ix.compileQuery(ctx, opts.Query, "v")
+	if err != nil {
+		return nil, err
+	}
+	if compiled.SQL != "" {
+		where = append(where, `g.id IN (
+			SELECT v.group_id FROM assets v
+			WHERE v.group_id IS NOT NULL AND `+compiled.SQL+`)`)
+		args = append(args, compiled.Args...)
+	}
+
 	var total int
 	if err := ix.db.Reader.QueryRowContext(ctx, `
 		SELECT count(*)
@@ -394,15 +408,8 @@ func groupFilters(opts ListOptions) ([]string, []any) {
 		where = append(where, "g.pack_id = ?")
 		args = append(args, opts.PackID)
 	}
-	if match := FTSQuery(opts.Query); match != "" {
-		// Any variant matching pulls in the whole group, so searching for a format's
-		// filename finds the artwork even though the grid shows a different variant.
-		where = append(where, `g.id IN (
-			SELECT v.group_id FROM assets v
-			WHERE v.group_id IS NOT NULL
-			  AND v.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?))`)
-		args = append(args, match)
-	}
+	// The §7 query clause is added by ListGroups, which has the context and tag
+	// resolver the compiler needs; groupFilters covers only the sidebar facets.
 	return where, args
 }
 
@@ -472,6 +479,25 @@ func scanGroupRow(row scanner, g *Group) (Asset, error) {
 		missingSince     *int64
 		contentChangedAt *int64
 		derived          deriveColumns
+		durationMS       sql.NullInt64
+		sampleRate       sql.NullInt64
+		channels         sql.NullInt64
+		bitDepth         sql.NullInt64
+		peakDBFS         sql.NullFloat64
+		isLoopable       sql.NullInt64
+		triCount         sql.NullInt64
+		vertCount        sql.NullInt64
+		bboxX            sql.NullFloat64
+		bboxY            sql.NullFloat64
+		bboxZ            sql.NullFloat64
+		materialCount    sql.NullInt64
+		frameW           sql.NullInt64
+		frameH           sql.NullInt64
+		frameCols        sql.NullInt64
+		frameRows        sql.NullInt64
+		frameSource      sql.NullString
+		paletteJSON      sql.NullString
+		paletteKind      sql.NullString
 	)
 	if err := row.Scan(
 		&g.ID, &g.PackID, &g.GroupKey, &g.VariantCount,
@@ -482,10 +508,31 @@ func scanGroupRow(row scanner, g *Group) (Asset, error) {
 		&derived.isPixelArt, &derived.phash,
 		&derived.frameCount, &derived.fps, &derived.animationNames,
 		&a.DeriveState, &a.DeriveError, &a.DeriveVersion,
+		&durationMS, &sampleRate, &channels, &bitDepth, &peakDBFS, &isLoopable,
+		&triCount, &vertCount, &bboxX, &bboxY, &bboxZ, &materialCount,
+		&frameW, &frameH, &frameCols, &frameRows, &frameSource,
+		&paletteJSON, &paletteKind,
 	); err != nil {
 		return Asset{}, err
 	}
 	derived.apply(&a)
+	a.DurationMS = int(durationMS.Int64)
+	a.SampleRate = int(sampleRate.Int64)
+	a.Channels = int(channels.Int64)
+	a.BitDepth = int(bitDepth.Int64)
+	a.PeakDBFS = peakDBFS.Float64
+	a.IsLoopable = isLoopable.Valid && isLoopable.Int64 != 0
+	a.TriCount = int(triCount.Int64)
+	a.VertCount = int(vertCount.Int64)
+	a.BBoxX, a.BBoxY, a.BBoxZ = bboxX.Float64, bboxY.Float64, bboxZ.Float64
+	a.MaterialCount = int(materialCount.Int64)
+	a.FrameW = int(frameW.Int64)
+	a.FrameH = int(frameH.Int64)
+	a.FrameCols = int(frameCols.Int64)
+	a.FrameRows = int(frameRows.Int64)
+	a.FrameSource = frameSource.String
+	a.PaletteJSON = paletteJSON.String
+	a.PaletteKind = paletteKind.String
 
 	a.ModTime = time.Unix(mtime, 0)
 	a.FirstSeenAt = time.Unix(firstSeen, 0)

@@ -1,0 +1,75 @@
+{{define "title"}}Provenance — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Provenance &amp; licensing</h1>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  <nav class="kinds" aria-label="Provenance views">
+    <a class="chip{{if eq .ProvView "needs"}} chip-on{{end}}" href="/provenance?view=needs">needs provenance</a>
+    <a class="chip{{if eq .ProvView "risk"}} chip-on{{end}}" href="/provenance?view=risk">licence risk</a>
+    <a class="chip{{if eq .ProvView "all"}} chip-on{{end}}" href="/provenance?view=all">all packs</a>
+  </nav>
+
+  {{if .PackSummaries}}
+    <p class="hint">
+      Nothing is gated on provenance — every pack is fully usable. This is the backlog to
+      resolve before release (§9). Set a licence per pack, or select several and apply one
+      to all.
+    </p>
+    <form method="post" action="/provenance/bulk" class="bulkform">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="view" value="{{.ProvView}}">
+      <div class="bulkbar">
+        <label>Apply licence to selected:
+          <select name="license">
+            <option value="">— licence —</option>
+            {{range .Licenses}}<option value="{{.SPDXID}}">{{.SPDXID}}</option>{{end}}
+          </select>
+        </label>
+        <button type="submit">Apply to selected</button>
+      </div>
+
+      <div class="tablewrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">Pack</th>
+              <th scope="col">Author</th>
+              <th scope="col">Licence</th>
+              <th scope="col">Status</th>
+              <th scope="col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .PackSummaries}}
+              <tr>
+                <td><input type="checkbox" name="id" value="{{.PackID}}" aria-label="Select {{.Name}}"></td>
+                <td><a href="/assets?pack={{.PackID}}">{{.Name}}</a></td>
+                <td>{{if .SourceAuthor}}{{.SourceAuthor}}{{else}}<span class="hint">—</span>{{end}}</td>
+                <td>
+                  {{if .Unlicensed}}<span class="badge badge-warn">none</span>{{else}}<code>{{.LicenseSPDX}}</code>{{end}}
+                </td>
+                <td>
+                  {{with .AttentionReason}}<span class="badge badge-warn">{{.}}</span>{{else}}<span class="badge">ok</span>{{end}}
+                </td>
+                <td class="num"><a href="/packs/{{.PackID}}/provenance?view={{$.ProvView}}">edit</a></td>
+              </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </form>
+  {{else}}
+    <div class="card">
+      <p>
+        {{if eq .ProvView "needs"}}Every pack has its provenance recorded. 🎉
+        {{else if eq .ProvView "risk"}}No licence risks — everything is cleared.
+        {{else}}No packs yet. Ingest an archive to get started.{{end}}
+      </p>
+    </div>
+  {{end}}
+</div>
+{{end}}

@@ -15,6 +15,7 @@ import (
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/library"
+	"github.com/datcal/ambar/internal/sidecar"
 )
 
 const scanUsage = `Usage:
@@ -95,6 +96,18 @@ func runScan(args []string) error {
 		if queued > 0 {
 			fmt.Printf("\nqueued %d derivative job(s). Run `ambar derive` to generate them now,\n"+
 				"or leave them for `ambar serve` to pick up.\n", queued)
+		}
+
+		// §3: import metadata from any sidecars whose packs the index does not
+		// already carry — this is what recovers a rebuilt or copied library.
+		mgr := sidecar.New(database, sidecar.Options{
+			LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot,
+			Readonly: cfg.LibraryReadonly, Log: log,
+		})
+		if n, err := mgr.ImportAll(ctx); err != nil {
+			log.Warn("sidecar import failed", "error", err)
+		} else if n > 0 {
+			fmt.Printf("imported metadata for %d pack(s) from sidecars\n", n)
 		}
 	}
 

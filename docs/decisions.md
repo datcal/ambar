@@ -467,7 +467,516 @@ only, and M4 adds the provenance fields, the capture form and sidecars.
 M2 added `jobs`, `asset_groups`, and the derive and image-analysis columns — and took
 the agreed exception for `phash`, which is written in M2 and read by nothing until M13.
 
----
+M3 (0004_tags) added `tags`, `tag_closure`, `tag_aliases`, `asset_tags` and `pack_tags`.
+`saved_searches` is §4/M3 too but waits for the M3 UI slice that writes it — same policy.
+
+### A tag's `name` is the whole hierarchy path, not just the leaf (M3)
+
+§4 sketches `tags(id, namespace, name, parent_id)` and §7 writes hierarchy as
+`type:sfx:impact`. Two readings of `name` were possible: the leaf segment (`impact`)
+with `parent_id` carrying the structure, or the full path within the namespace
+(`sfx:impact`). We store the full path.
+
+The leaf reading breaks the natural `UNIQUE(namespace, name)` identity — `type:sfx:impact`
+and `type:ui:impact` would collide on `(type, impact)` — and would need
+`UNIQUE(namespace, parent_id, name)`, which SQLite does not enforce across NULL parents
+(two roots named `sfx` would both slip through). The full-path reading keeps a canonical
+string a direct `(namespace, name)` lookup, and `parent_id` still records the single edge
+up. `Tag.Leaf()` recovers the short form for display.
+
+### Hierarchy is a closure table, not a recursive CTE (M3)
+
+§7 offers either. The closure table (`tag_closure`, self-edge at depth 0) makes "searching
+a parent returns children" one indexed `WHERE ancestor_id = ?` and the reverse (a tag's
+ancestors, for building `tag_text`) one `WHERE descendant_id = ?`. It is derived data,
+rebuilt from `parent_id` by `rebuild-index` (M11), so it is not a second source of truth.
+The cost is a handful of rows per tag, which at this library's tag count is nothing.
+
+### `assets_fts.tag_text` holds expanded canonical strings + aliases; structured filters do not use it (M3)
+
+Tagging an asset rewrites its `tag_text` to the space-joined canonical strings of every
+tag it carries (direct and inherited from its pack) expanded up to their ancestors, plus
+those tags' aliases. The tokenizer splits `type:sfx:impact` into type/sfx/impact, so
+free-text search finds an asset by any segment or alias. The `namespace:name` filters of
+the M3 query language deliberately do **not** read this column — they query `asset_tags`
+and `tag_closure` directly, where a filter is exact and hierarchy-aware. `tag_text` serves
+only the free-text half of search. A pack tag change reindexes every member asset.
+
+### Auto-path tags live in a `folder:` namespace (M3)
+
+§7 shows path tags as bare words — `Models/Environment/Rocks/` → `models`, `environment`,
+`rocks`. But §7 also makes the case that namespaces are what keep a 20k-asset library
+navigable, and every other tag in the model is namespaced. Bare path tags would be a flat
+soup mixed in with curated `type:`/`author:`/`style:` tags and impossible to facet
+separately. So auto-path segments become `folder:<segment>` (`folder:rocks`), source
+`auto_path`. They stay flat — one tag per segment, no hierarchy — matching the §7 example's
+shape, since deep vendor paths would otherwise build noisy accidental hierarchies.
+
+### Auto-tagging is a re-runnable `ambar retag`, not yet wired into scan/ingest (M3)
+
+§7 frames auto-tagging as happening "on ingest", but ingest is M4 and the `style:pixel-art`
+/ `has:alpha` signals depend on M2 derive results that land after a scan, not during it.
+Rather than thread tagging through the scan and derive hot paths mid-milestone, M3 ships a
+standalone `ambar retag` that recomputes auto tags for the whole index from current DB
+state — additive, idempotent, manual-preserving. Wiring it to run automatically after
+scan/derive, and into the M4 ingest flow, is a later, low-risk follow-up. Auto tags that no
+longer apply (a reclassified file) are not pruned yet; that reconcile belongs with the same
+follow-up.
+
+### The query language is its own package; `index.FTSQuery` was removed (M3)
+
+M1 shipped `index.FTSQuery`, a search-box-to-FTS5 quoter, with a note that the real §7
+language would replace it in M3. It now has: `internal/search` parses a query into an AST
+(OR of AND-groups, negation, quoted phrases, tag/kind/has/style/field terms) and compiles it
+to SQL. `FTSQuery` and its test are gone rather than left beside the new parser — two FTS
+quoting implementations would drift. `internal/search` has no database dependency; tag and
+alias resolution reach it through a small `TagResolver` interface the index package
+implements over the tag store.
+
+### Each free-text and tag term compiles to its own asset-id subquery (M3)
+
+Rather than translate the whole free-text part into one FTS5 MATCH expression (which cannot
+mix with structured filters under OR/NOT), every term — a word, a phrase, a tag — becomes
+`a.id IN (SELECT ... )`. These compose freely under AND, OR and NOT as ordinary SQL boolean
+operators. The cost is several correlated subqueries per query, which at this library's size
+is irrelevant, and the win is that `type:model OR "laser turret"` and `-has:alpha` just work.
+
+### `type:` is the kind column, not a tag; `has:` / `style:pixel-art` are columns too (M3)
+
+`type:model` and `kind:model` both compile to `a.kind = ?`, and `has:alpha` /
+`has:animation` / `style:pixel-art` compile to the analysis columns — so these work off the
+indexed truth regardless of whether `ambar retag` has run. `type:` with a non-kind value
+(`type:sfx:impact`) is treated as a genuine namespaced tag. Arbitrary namespaces
+(`theme:`, `author:`, `folder:`) go through the tag tables, hierarchy- and
+inheritance-aware. A tag nobody holds matches nothing; a future/`color:` field is a no-op
+with a surfaced warning.
+
+### The tag UI is htmx fragments and native datalists, no inline script (M3)
+
+Tag add/remove on the detail page swap a single `#tag-panel` fragment via htmx; the CSRF
+token rides the global `hx-headers` already on `<body>`, so no per-form hidden field is
+needed for the htmx posts. Autocomplete uses a native `<datalist>` filled by an htmx GET to
+`/api/v1/tags/suggest` — no bundler, no inline `<script>`, nothing for the §11 CSP to
+forbid. Non-htmx forms (save search, delete) carry the hidden `csrf_token` field as the M0
+forms do.
+
+### Facets count assets, direct + inherited, over the current filter (M3)
+
+`index.Facets` runs List's exact asset-level filter (so a facet's count matches what
+clicking it narrows to) and counts an asset once per tag it holds directly or inherits from
+its pack. Counts are over assets, not groups: "17" next to a tag means seventeen things, not
+seventeen files that might be the same artwork across format variants. Ancestor roll-up
+(showing `type:sfx` next to an asset tagged only `type:sfx:impact`) is deliberately not done
+yet — the facet lists tags actually present; drilling to a parent is a search, not a facet.
+
+### Saved searches store the raw query; bulk tagging is POST-redirect-GET (M3)
+
+A saved search keeps the raw §7 expression a person typed, re-parsed on use, unique by name
+(re-saving a name updates it). Bulk tagging has two scopes — the checked tiles, or every
+asset matching the current search via `index.MatchingAssetIDs` — and both redirect back to
+the search with a one-shot `?msg=` flash rather than returning a fragment, so a browser
+refresh cannot re-apply a tag to thousands of assets.
+
+### `color:` / `palette-near:` are parsed but not matched in M3
+
+§7 lists colour search under tagging/search, but the palette columns it needs
+(`palette_json`, `palette_kind`) are §8's palette panel, scheduled in M11.5 — they do not
+exist after M2. The M3 query parser will therefore accept `color:` / `palette-near:` tokens
+without error but treat them as no-ops until M11.5 wires them to real palette data, rather
+than pretending to filter on data that is not there.
+
+### M4 provenance: licences are seeded reference data; every pack starts unverified
+
+M4 (0006_provenance) adds the pack provenance columns and a `licenses` lookup, seeded in the
+migration with a practical set (CC0, CC-BY family, OGA-BY, MIT, Apache, GPL, Unlicense,
+Proprietary) and their commercial/attribution/share-alike flags. The lookup is application
+reference data, not user metadata, so seeding it in the migration (and re-seeding on a
+rebuilt database) is correct and does not violate "the filesystem is the source of truth" —
+*which* licence a pack carries is the user metadata, and that lives on the pack and, from
+4f, in its sidecar. Every pack — including the ones M1 already indexed — defaults to
+`provenance_state=needs_provenance` per §9: fully usable, just flagged until the capture
+form clears it.
+
+### M4 archive extraction: pure-Go deps, and traversal aborts rather than neutralises
+
+The two new dependencies §5 names — `github.com/nwaples/rardecode/v2` (RAR5) and
+`github.com/bodgit/sevenzip` (7z) — were verified to build under `CGO_ENABLED=0` before being
+adopted, so invariant 6 holds; the whole binary still links statically. zip stays on the
+stdlib.
+
+All three formats funnel through one `sink` that is the sole place bytes reach disk, so the
+§5 safety rules live in exactly one spot and the (crafted-zip) tests exercise them for every
+format. The deliberate choice: a traversal or absolute entry **aborts the whole extraction**
+(`ErrUnsafeEntry`) rather than being silently rewritten to an in-root path. `cleanEntryName`
+therefore uses `path.Clean` *without* anchoring at root, preserving `..` and leading `/` for
+`safepath.Resolve` to reject — an archive that attempts an escape is hostile and belongs in
+`_quarantine`, not quietly extracted. Symlinks and other non-regular entries are skipped and
+reported. Uncompressed-size and entry-count caps (defaults 8 GiB / 200k, overridable)
+defend against zip bombs, enforced both from the listing and again byte-by-byte during copy.
+
+### M4 ingest extracts and records the pack, but the scanner indexes it
+
+Ingest (internal/ingest) does the filesystem-shaping half of §5 — inspect, safe-extract,
+retire the original to `_archives`, create the pack row with what provenance it knows — and
+then enqueues a normal library scan to index the extracted files. It does **not** index
+inline. Three reasons: the indexer already does classification, hashing, grouping and
+derivative-enqueue correctly, so reusing it avoids a second implementation; two ingests
+running inline scans would race the single-writer scan the indexer explicitly says is not
+concurrency-safe, whereas the scan job is deduplicated; and provenance set at pack creation
+survives, because the scanner's pack upsert (0002) touches only identity columns
+(name/slug/kind/last_seen), never the provenance columns 0006 added.
+
+A consequence: the scan reconciles the ingested directory as an ordinary `folder` pack, so
+`kind` ends up `folder`, not `archive`. That is acceptable — `original_archive_name` being
+non-empty is the durable "came from an archive" signal, and it is what §9's receipt trace
+needs. Removing the consumed archive from `_inbox` (when `AMBAR_KEEP_ARCHIVES=false`) is
+ingest handling its own transient input, not the application deleting indexed library
+content, so it does not violate invariant 3.
+
+Two follow-ups are deliberately left open: a **targeted per-pack index** (a full scan per
+inbox drop is correct and idempotent but walks the whole tree), and **auto-tagging on the
+serve ingest path** — the `ambar ingest` CLI runs `retag` itself, but the serve job only
+enqueues a scan, so a pack ingested through the poller (M4-4e) is indexed and derived but
+not auto-tagged until `ambar retag` runs. Both are the same class of "wire autotag into the
+scan/ingest completion" work noted under M3.
+
+### M4 archive flatten never strips "." or ".."
+
+A single redundant top-level folder is flattened away (§5), but `flattenPrefix` refuses to
+treat `.` or `..` as that folder. Without the guard, a hostile archive whose only entry is
+`../evil` would have its `../` stripped as a "wrapper", neutralising the traversal into a
+valid in-root write and robbing `safepath` of the chance to reject it. The guard keeps the
+"traversal aborts extraction" contract intact for the lone-entry case; a regression test
+covers it.
+
+### M4 web upload: multipart CSRF rides the header, which M0 already planned for
+
+The upload is multipart, and the M0 CSRF middleware deliberately refuses to parse a
+multipart body to find the token — parsing it would buffer the whole upload before the
+handler could impose a size cap. So the upload form posts through htmx, which carries the
+CSRF token in the header from the global `hx-headers`, and the handler's
+`http.MaxBytesReader` is therefore the first thing to touch the body and the cap actually
+bites. A too-large upload is rejected with the §5-mandated message pointing at `_inbox`. The
+handler answers htmx with an `HX-Redirect` header (a 303 body would be swapped into the DOM
+instead of navigating); `redirectWithMessage` now emits that for htmx callers and a plain
+303 otherwise, so the M3 bulk/saved-search forms are unaffected. Uploads are extension-gated
+to zip/rar/7z, written into `_inbox` through `safepath`, then enqueued — the same job the
+poller would raise, deduplicated on the path.
+
+### M4 inbox poller: stability over two polls, dedup by path, sidecar URL sniff
+
+`_inbox` is polled, not watched (inotify does not cross SMB or bind mounts), and a file is
+ingested only once its size and mtime are unchanged across two consecutive polls, so a
+half-copied bundle is never extracted. Enqueue is deduplicated on the archive path, so a
+file still sitting in `_inbox` on later polls does not pile up jobs. The poller acts only on
+zip/rar/7z by extension and reads a source URL from a `<archive>.url`/`.txt` sidecar
+(tolerating the Windows `URL=` INI form), so provenance can be captured in the browser at
+download time. It runs as a goroutine under `serve`, skipped entirely when the library is
+read-only. The `.url` sidecar is left in `_inbox` after ingest — harmless, since the poller
+ignores non-archives, though a later sweep could tidy them.
+
+### M4 sidecars carry human metadata only; auto tags are never written
+
+`.ambar.json` (internal/sidecar) holds a pack's provenance, licence (as an SPDX string),
+notes and **manual** tags — pack-level and per-asset. Auto tags (`folder:`, `type:`, …) are
+deliberately excluded: they are derived and regenerate from `ambar retag`, so writing them
+would bloat the sidecar and create spurious diffs. This makes the sidecar exactly the set of
+facts a human authored and the index cannot reconstruct on its own.
+
+Import is gated by §3's rule "if a sidecar exists and the DB row does not, import ... newest
+updated_at wins": a pack with no human metadata in the index imports unconditionally; a pack
+that already has some keeps it unless the sidecar is strictly newer, and the divergence is
+logged either way. Auto-import runs at the end of every scan (CLI and the serve job), which
+is what recovers a rebuilt or freshly-copied library; `ambar sidecar sync` writes them in
+bulk for a library indexed before sidecars existed, and `ambar sidecar import` runs the
+import on demand. Verified end-to-end: sync, delete the whole database, rescan — provenance
+and manual tags come back from the files.
+
+On a read-only library the sidecar is written to `$AMBAR_DATA_ROOT/sidecars/<pack>/…`
+instead of beside the originals (§3, invariant 1). Writes are atomic (temp + rename) so a
+reader never sees a partial file.
+
+Deferred: writing the sidecar on *every* metadata change (debounced, per §3). Today it is
+written by `sidecar sync` and — from 4g — after a provenance edit; wiring a write into every
+individual tag mutation is the same "write-through on change" follow-up noted under M3.
+
+### M4 provenance UI: three views, sniff-to-prefill, and a sidecar write on save
+
+The capture UI (§9) has three views — the needs-provenance backlog, the licence-risk view
+(no licence, or `commercial_ok=0`, or attribution required with no text), and all packs.
+Nothing is gated: every pack stays fully usable, the views are just the backlog to work
+through. A per-pack form edits every field; the licence is a dropdown keyed on SPDX id. The
+source URL is sniffed to pre-fill site and author (itch subdomain → author) as
+non-destructive placeholder suggestions, so an edit never overwrites what the user typed.
+Saving persists to the database and then writes the sidecar (§3) — this is the concrete
+"write on metadata change" for the provenance path. A licence can also be set across a
+multi-selection from the list. Verified end-to-end against the running server: risk view
+lists an unlicensed pack, saving a licence marks it complete and rewrites its `.ambar.json`.
+
+That closes M4: provenance model and licences (4b), safe archive extraction (4c), the ingest
+pipeline and CLI (4d), the `_inbox` poller and web upload (4e), sidecars (4f), and this
+capture UI (4g).
+
+### M5 audio: four pure-Go decoders, mono analysis, a separate derive path
+
+M5 (0007_audio) adds the audio columns and `internal/audio`, which decodes wav/mp3/ogg/flac
+with the four §6 pure-Go libraries (`go-audio/wav`, `hajimehoshi/go-mp3`,
+`jfreymuth/oggvorbis`, `mewkiz/flac`) — all verified to build under `CGO_ENABLED=0` before
+adoption, so the binary stays statically linkable (invariant 6). Everything is mixed to mono
+for analysis: a waveform and a peak level need no per-channel detail, and the source channel
+count is still reported. Peaks are exactly ~2000 evenly-spaced min/max buckets in [-1,1] —
+stored, not rendered, so the client draws the waveform on a canvas (§6, §8). `is_loopable` is
+an advisory guess: a sound loops cleanly when it is still sounding at both ends (so a decayed
+one-shot is excluded) and the wrap-around seam is small enough not to click.
+
+Audio takes a wholly separate branch in `derive.Generate` — no image is decoded — that writes
+`peaks.json` and fills the audio columns. Because audio files were recorded `unsupported`
+before M5, the derive `Version` was bumped 1→2 so every asset is reconsidered once and the
+audio ones now derive. A *malformed* audio file is a failure (retried), not unsupported;
+only a format with no decoder at all stays unsupported.
+
+### M5 audio serving: peaks as a derivative, the original streamed inline
+
+The §8 audio viewer draws a canvas waveform from `peaks.json` (served like any other
+derivative) and plays the original through an `<audio>` element. Playing the original means
+serving a library file inline — the one exception to the "never serve originals inline" rule
+(M1) — which is safe here because the response carries an explicit `audio/*` Content-Type and
+the global `nosniff` header (§11) stops the browser re-interpreting the bytes as HTML; audio
+is not an executable type, and an `<audio>` element cannot play an `attachment`. `ServeContent`
+supplies Range, so seeking a long track does not re-download it. The viewer is a plain-JS
+island keyed on `#audio-viewer`, a no-op elsewhere, config passed in `data-` attributes so
+the CSP needs no inline script.
+
+### M5 keyboard audition is a dormant grid island with a preset quick-tag
+
+The §8 audition mode (`audition.js`) is the feature that "makes the difference between using
+the library and avoiding it": with it on, the arrow keys step through only the audio tiles in
+the current result set, each playing immediately through one shared `Audio` element, and a
+single `t` tags the current sound with whatever is in the quick-tag box — POSTed to the M3
+tag endpoint with the CSRF token from a `<meta>`, since this fires outside htmx. The island
+reveals its toolbar only when the grid actually contains audio tiles (marked with
+`data-audio`), so it is invisible on an all-image library. `a` toggles the mode, space
+plays/pauses, escape exits. This closes M5.
+
+### M6 3D: glTF/GLB derive in pure Go; FBX/.blend wait for Blender
+
+M6 (0008_model) adds the model columns and `internal/model`, which reads glTF/GLB with the
+pure-Go `qmuntal/gltf` (CGO-free, invariant 6), extracts triangle/vertex counts, the bounding
+box (metres, for §8's scale reference), material count and animation names, and normalises
+the input to a single self-contained `preview.glb` via `SaveBinary` — the §6 "normalise
+everything to preview.glb" for the formats readable without Blender. `derive.Generate` gains
+a model branch alongside the audio one; FBX and `.blend` return the new
+`derive_state=needs_blender` (not a failure, not retried — the UI can offer to fetch Blender),
+and the other model formats (obj/dae/stl/…) report unsupported with a reason until a converter
+is built. Derive `Version` bumped 2→3 so previously-unsupported models re-derive.
+
+### M6 3D viewer: three.js vendored r128, loaded only on 3D detail pages
+
+The §8 3D viewer (`model-viewer.js`) is a plain-JS island over the global `THREE` from a
+**vendored** three.js r128 (`static/vendor/three/`: the UMD `three.min.js` plus the non-module
+`GLTFLoader`/`OrbitControls`, which attach to `THREE`). Vendored rather than from a CDN
+because §2/§11 run a `default-src 'self'` CSP and the NAS often has no internet egress — the
+same reasoning that vendors htmx. r128's single-file UMD builds are chosen over a modern
+module tree specifically so three scripts suffice. The ~600 KB library is loaded only inside
+the `{{if .IsModel}}` block on a model's detail page, so an all-2D library never ships it. The
+viewer gives OrbitControls, grid and axis helpers sized to the model, a wireframe toggle and
+the §8 1.8 m human-height scale reference; the triangle/vertex/material counts and bounding
+box are rendered server-side from the columns. `preview.glb` is served inline like any
+generated derivative (`model/gltf-binary`).
+
+### M6 OBJ is converted to glTF in pure Go
+
+`.obj` is parsed in `internal/model/obj.go` (§6: "obj converts in pure Go") and built into a
+glTF document with `qmuntal/gltf`'s modeler, then normalised to `preview.glb` and analysed by
+the same path as native glTF. OBJ stores position/normal/texcoord indices independently, so
+the parser de-indexes each unique `v/vt/vn` combination into the single shared index buffer
+glTF requires, triangulating polygons by a fan and resolving OBJ's 1-based and negative
+(relative) indices. Materials/.mtl are ignored — the viewer needs geometry, and the counts
+and bounding box come from the positions.
+
+### M6 FBX/.blend derive through an optional external Blender, never a bundled one
+
+`internal/blender` drives a Blender CLI as a subprocess to convert FBX/.blend to `preview.glb`
+(a `--background --factory-startup --python` invocation that imports the source into an empty
+scene and exports one GLB). Blender is never in the image (§6: the 250 MB vs 2 GB difference);
+`Locate` finds it from `AMBAR_BLENDER_BIN` or `$DATA_ROOT/tools/blender/`, and when neither is
+present those formats stay `needs_blender` — usable, just unpreviewed. A Blender *failure* is
+a real failure (retried); producing no output is a failure too. The wiring is verified with a
+stub Blender that emits a known GLB, so the subprocess plumbing and derive routing are tested
+without a 300 MB binary.
+
+That gives M6 full format coverage: glTF/GLB/OBJ in pure Go, FBX/.blend through a configured
+Blender. Still open as optional extras (§6): the runtime *download* of Blender with checksum
+verification (configuring `AMBAR_BLENDER_BIN` is the manual equivalent today), and Workbench
+turntable thumbnails. Neither blocks previewing or browsing a 3D asset.
+
+### M7 spritesheet grid detection: divisor candidates scored by seam transparency
+
+§15.5 asked for the scoring heuristic to be proposed before implementing; this is it (in
+`internal/spritesheet`). Candidate column/row counts are the exact divisors of each dimension
+that give a cell ≥ 8 px and ≤ 64 frames per axis. Each candidate grid scores as
+`0.6·seamTransparency + 0.25·squareness + 0.15·cellContent`, where seamTransparency is the
+fraction of interior seam-line pixels that are fully transparent (a real grid has transparent
+gutters), squareness rewards square cells, and cellContent is the fraction of cells holding
+some opaque pixel. A grid with < 50 % non-empty cells is rejected outright. On a score tie the
+*finer* grid wins — a coarser grid only ties when its seams fall on the finer grid's gutters,
+so the finer one is the true frame size.
+
+A detection is only `Confident` when the seams are ≥ 90 % transparent and ≥ 75 % of cells have
+content. A tight, gutterless sheet scores low on purpose: §6 insists the tool must "never
+silently guess wrong", so a low-confidence guess is shown with a grid overlay for the user to
+confirm or correct (`frame_source` = detected → manual), rather than trusted. Sidecar formats
+(TexturePacker/Godot/Aseprite/Kenney) override detection when present.
+
+Migration 0009 adds `frame_w/h/cols/rows` and `frame_source`; `frame_count`/`fps` already
+exist from 0003.
+
+Detection runs in the image derive path for still images whose name or dimensions make them
+candidates, storing the grid as `frame_source=detected`; a *confident* guess also gets a
+`sheet.gif` built from its cells at 12 fps (§6: "so the grid view shows animation instead of
+forty tiny squares"). The confirm/correct UI draws the grid as a pure-CSS overlay of repeating
+gradients over the thumbnail, and a one-click confirm or a corrected columns/rows count
+promotes the grid to `frame_source=manual`. A manual (or sidecar) grid is preserved across a
+re-detection — `confirmedFrames` reads it back so a derive `Version` bump does not revert a
+human's correction. `Version` bumped 3→4 so existing images are checked for a grid once.
+
+Still open in M7: parsing the sidecar atlas formats (TexturePacker JSON, Godot `.tres`,
+Aseprite JSON, Kenney XML) to override detection with exact geometry when a sibling file is
+present. Detection + confirmation covers the gutter-grid case that dominates the target
+library today.
+
+### M8 API tokens reuse the session token discipline; the JSON API is bearer-only
+
+M8 (0010_api_tokens) adds `api_tokens` and `internal/auth` token support. A token is 32 bytes
+of CSPRNG output shown once as `ambar_<base64url>` and stored as an unsalted SHA-256 — the
+same reasoning as session tokens (§11): the input is already high-entropy, so a slow KDF buys
+nothing. Scopes are `read < write < admin` with a hierarchy (`write` implies `read`); an empty
+set floors at `read`. Tokens carry expiry, revocation (set, not deleted, for the audit trail)
+and a best-effort `last_used_at` so a stale one is visible. Creation and revocation are
+audit-logged.
+
+The JSON API (§10) lives under `/api/v1`, authenticated by `Authorization: Bearer` via
+`TokenStore.RequireToken(scope, …)`, which injects the resolved user into the same context key
+the session path uses — so the serving handlers (thumb, file, preview.glb, peaks) are reused
+unchanged under token auth. Reads require the `read` scope; the search/asset/pack/tags
+endpoints return JSON DTOs that omit kind-irrelevant fields and carry `links` to the binary
+endpoints. Token management is a session-authed settings page that shows the plaintext exactly
+once and never redirects it (a token in a URL would land in logs).
+
+Deferred to later milestones: the write endpoints `/projects/{project}/uses` and
+`/credits.md` (they need the `projects` table, M9) and `/packs/{id}/download` as a zip.
+
+### M9 write API: projects keyed on UUID, uses deduplicated and soft-removed
+
+M9 (0011_projects) adds `projects` and `project_uses` and `internal/projects`. A project is
+identified by its UUID (invariant 10), created on first use, so the same Godot checkout at
+different paths on two machines is one project. `RecordUse` is idempotent on
+`(project, asset, res_path)` — a repeat re-activates a soft-removed row rather than
+duplicating it, which is how two people importing the same asset produce one row. Removal sets
+`removed_at` rather than deleting, so credits and history survive, and it is what M13 will read
+to keep an in-use asset off every removal list (invariant 5). `credits.md` is rendered from
+the used assets' provenance, deduplicated by pack and grouped by licence then author (§9).
+
+The write endpoints (`POST`/`DELETE /api/v1/projects/{project}/uses`) require the `write`
+scope; `credits.md` needs only `read`. Bearer-token requests are exempted from CSRF in the
+middleware — CSRF exploits ambient cookies a browser attaches automatically, which a token
+request has none of, and the token is itself the proof of intent — so the Godot plugin can
+POST without a CSRF cookie it has no way to obtain.
+
+### M9 Godot plugin is GDScript, unverified in this environment
+
+The editor plugin (`addons/ambar/`, §10) is GDScript and cannot be exercised from the Go test
+suite or without a Godot editor — it is the one component with no automated verification here.
+It is written to the §10 contract (UUID identity, additive manifest, import presets, offline
+queue) and must be smoke-tested in Godot before it is trusted.
+
+### M11 ops orchestrate existing pieces behind a testable API
+
+`internal/ops` holds rebuild-index, verify and backup (§12) behind a package API rather than
+only in the CLI, because rebuild-index fidelity is a §16 quality-bar test and invariant 2 is
+only real if it passes. `RebuildIndex` removes the database file (and its -wal/-shm), opens a
+fresh one, migrates, scans for identity, imports sidecars for provenance and manual tags, then
+re-auto-tags — reconstructing everything from the filesystem without touching the library;
+derivatives keyed by content hash survive and are left for `ambar derive`. The fidelity test
+proves a manual tag and provenance survive a full drop-and-rebuild via the sidecar, and that
+auto tags regenerate. `Verify` re-hashes every present file (even when size and mtime are
+unchanged, unlike scan) and flags a mismatch with `content_changed_at`; it exits non-zero so a
+scheduled run alerts, and never deletes or rewrites the stored hash. `Backup` is `VACUUM INTO`
+a timestamped copy (§12: SQLite-level, since a filesystem snapshot of a live WAL database can
+be inconsistent), refusing to overwrite. Three thin CLI commands wrap them; all verified
+end-to-end.
+
+M10 (licensing) is already covered without a dedicated milestone: the licence-risk view is the
+`/provenance?view=risk` page (M4-4g) and CREDITS.md generation is the M9 write API.
+
+### M11.5 palette: exact-or-quantized by colour count, extraction folded into derive
+
+0012_palette adds `palette_json` and `palette_kind` to `assets`; `internal/palette` does the
+extraction and every export format. The one decision that matters is §8's "exact, not
+approximate": an image with ≤256 distinct **visible** colours is enumerated exactly
+(`palette_kind=exact`), and only an image over that threshold is reduced by median-cut
+(`quantized`, N=16), which the UI labels as approximate. 256 is the indexed-PNG maximum, so
+every indexed image lands on the exact path without a separate `PLTE`-chunk reader — counting
+the pixels gives the same colours plus their real counts, and surfaces only colours actually
+used. Fully transparent pixels are excluded (§8: or the palette is "dominated by transparent
+black"); semi-transparent pixels still count and set `has_semitransparent`. Median-cut, not
+k-means, because it is deterministic — identical bytes must yield byte-identical
+`palette_json`, or every rescan would look like a change.
+
+Extraction runs inside `derive.Generate`'s image path (Version bumped 4→5, so existing
+libraries re-derive once) rather than as a separate job: the image is already decoded there,
+and a second pass over 20k files to add a palette would be exactly the waste `derive_version`
+exists to avoid. Palette is derived analysis, like `phash`/`color_count` — it is **not**
+written to sidecars and is reconstructed by re-running derive after `rebuild-index`, not from
+the filesystem, consistent with the other derived columns.
+
+Copy and export live server-side (`/assets/{id}/palette/{format}`, one route, format as a path
+segment because Go 1.22 wildcards must be whole segments — a `palette.{format}` segment is
+invalid). The panel's click-to-copy is a JS island: swatch chip colours are set through the
+CSSOM, never an inline `style` attribute, so the CSP stays `default-src 'self'` with no
+`unsafe-inline`; copy prefers `navigator.clipboard` and falls back to a hidden-textarea
+`execCommand('copy')` so it does not silently fail on plain-HTTP LAN (§8's explicit gotcha).
+The GDScript `Color(…)` rendering is shared between the copy island and the `.gd`/JS paths at
+three decimals, so a copied value is byte-identical to an exported one.
+
+**Deviation surfaced:** the earlier note "`color:` / `palette-near:` … no-ops until M11.5 wires
+them" is only half-honoured. M11.5 delivers the columns those tokens need, but wiring the
+**search matching** (a colour box query with tolerance, palette-distance ranking) needs an
+indexed per-swatch table and query-compiler work that is §7 search, not §8 panel — so the
+tokens remain accepted no-ops for now, and the matching is deferred to its own slice rather
+than bolted on here. Flagged rather than done silently.
+
+### M12 junk view: reporting-only, and the sweep runs on the job queue
+
+`internal/junk` detects the §9.1 clutter — `__MACOSX` shadow trees, OS metadata files
+(`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`), zero-byte files, empty directories, and
+orphaned derivative directories — and returns a report sorted by reclaimable bytes, largest
+win first. It is a **detector and reporter only** (invariant 3): the package contains no
+delete, move, or trash code, and the web page offers no removal control. The human-selected
+removal path, its trash staging, and the safety invariants all ship together in M13 — §9.1
+calls removal "the highest-risk surface in the codebase", so building selection-for-deletion
+UI before that safety net exists would be exactly the hazard it warns against. Surfaced here
+rather than papered over: "manual selection" in the §14 M12 line is delivered as a read-only
+report, not clickable checkboxes, deliberately.
+
+Two design choices worth recording:
+
+- **The sweep is a job, not a synchronous handler.** A junk sweep re-walks the whole library,
+  and invariant 8 forbids a long-running HTTP handler — every other library walk (scan,
+  ingest) already goes through the queue. So `/junk/scan` enqueues `maintenance.junk` (deduped,
+  one pending at a time) and the worker caches the result to `$DATA_ROOT/junk-report.json`
+  (atomic write, beside the derivatives — it is rebuildable generated data, not source of
+  truth, so it does not belong in the database). `/junk` reads that cache and shows "last
+  scanned at …"; `ambar junk` prints the same report synchronously for a one-shot CLI check.
+- **`internal/junk` stays free of SQL,** like `internal/library`. Orphan detection needs the
+  set of live content hashes, so the caller supplies it (`index.ContentHashes`, passed as a
+  `HashProvider` callback) and the whole package is testable against a fixture tree with no
+  database. A **nil** hash set means "not supplied, skip the orphan check" and is deliberately
+  distinct from an **empty** set ("no assets exist, so every derivative is an orphan") — without
+  that distinction a caller that forgot the hashes would report the entire derivative cache as
+  removable. `.git` and the reserved `_trash`/`_inbox`/… directories are never reported; the
+  trash especially must not be surfaced as clutter to clean up. A zero-byte `.ambar.json` is
+  never proposed either — it is a pack's provenance anchor, not junk.
 
 ## Still open
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/jobs"
+	"github.com/datcal/ambar/internal/palette"
 	"github.com/datcal/ambar/internal/safepath"
 )
 
@@ -20,10 +21,11 @@ const JobType = "asset.derive"
 
 // Derive states, matching the comment in 0003_derive.sql.
 const (
-	StatePending     = "pending"
-	StateOK          = "ok"
-	StateFailed      = "failed"
-	StateUnsupported = "unsupported"
+	StatePending      = "pending"
+	StateOK           = "ok"
+	StateFailed       = "failed"
+	StateUnsupported  = "unsupported"
+	StateNeedsBlender = "needs_blender" // M6: FBX/.blend, until Blender is installed
 )
 
 // Payload is the job payload. Just the asset id: everything else is read fresh from
@@ -37,6 +39,7 @@ type Deriver struct {
 	db          *db.DB
 	libraryRoot string
 	dataRoot    string
+	blenderBin  string
 	maxPixels   int64
 	log         *slog.Logger
 }
@@ -47,7 +50,9 @@ type Options struct {
 	DataRoot    string
 	// MaxPixels is AMBAR_MAX_IMAGE_PIXELS. Zero uses DefaultMaxPixels.
 	MaxPixels int64
-	Log       *slog.Logger
+	// BlenderBin is AMBAR_BLENDER_BIN, the optional external Blender CLI (§6).
+	BlenderBin string
+	Log        *slog.Logger
 }
 
 func New(database *db.DB, opts Options) *Deriver {
@@ -63,6 +68,7 @@ func New(database *db.DB, opts Options) *Deriver {
 		db:          database,
 		libraryRoot: opts.LibraryRoot,
 		dataRoot:    opts.DataRoot,
+		blenderBin:  opts.BlenderBin,
 		maxPixels:   maxPixels,
 		log:         log,
 	}
@@ -133,14 +139,20 @@ func (d *Deriver) Handle(ctx context.Context, raw []byte) error {
 	}
 
 	result, err := Generate(GenerateOptions{
-		AbsPath:   absPath,
-		Ext:       asset.ext,
-		SHA256:    asset.sha256,
-		DataRoot:  d.dataRoot,
-		MaxPixels: d.maxPixels,
+		AbsPath:    absPath,
+		Ext:        asset.ext,
+		SHA256:     asset.sha256,
+		DataRoot:   d.dataRoot,
+		MaxPixels:  d.maxPixels,
+		BlenderBin: d.blenderBin,
 	})
 
 	switch {
+	case errors.Is(err, ErrNeedsBlender):
+		// Not a failure and not retryable until Blender is installed (§6). Recorded
+		// with the reason so the UI can offer to fetch Blender.
+		return d.recordForContent(ctx, asset.sha256, StateNeedsBlender, err.Error(), nil)
+
 	case errors.Is(err, ErrUnsupported):
 		// Expected and permanent. Recorded with the reason so the UI can say *why*
 		// rather than just shrugging, and returning nil keeps it out of the retry
@@ -254,6 +266,61 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		return nil
 	}
 
+	// Model assets fill the §4 3D columns and render no image (§6).
+	if result.Model != nil {
+		m := result.Model
+		var animationNames any
+		if len(m.AnimationNames) > 0 {
+			if encoded, err := json.Marshal(m.AnimationNames); err == nil {
+				animationNames = string(encoded)
+			}
+		}
+		if _, err := d.db.Writer.ExecContext(ctx, `
+			UPDATE assets SET
+			    tri_count       = ?,
+			    vert_count      = ?,
+			    bbox_x          = ?,
+			    bbox_y          = ?,
+			    bbox_z          = ?,
+			    material_count  = ?,
+			    animation_names = ?,
+			    derive_state    = ?,
+			    derive_error    = ?,
+			    derive_version  = ?,
+			    updated_at      = ?
+			WHERE sha256 = ? AND missing_since IS NULL`,
+			nullableInt(m.TriCount), nullableInt(m.VertCount),
+			m.BBox[0], m.BBox[1], m.BBox[2], nullableInt(m.MaterialCount),
+			animationNames, state, truncateError(message), Version, now, sha256hex); err != nil {
+			return fmt.Errorf("record model derive for content %s: %w", sha256hex[:8], err)
+		}
+		return nil
+	}
+
+	// Audio assets fill their own columns and render no image (§6).
+	if result.Audio != nil {
+		a := result.Audio
+		if _, err := d.db.Writer.ExecContext(ctx, `
+			UPDATE assets SET
+			    duration_ms    = ?,
+			    sample_rate    = ?,
+			    channels       = ?,
+			    bit_depth      = ?,
+			    peak_dbfs      = ?,
+			    is_loopable    = ?,
+			    derive_state   = ?,
+			    derive_error   = ?,
+			    derive_version = ?,
+			    updated_at     = ?
+			WHERE sha256 = ? AND missing_since IS NULL`,
+			nullableInt(a.DurationMS), nullableInt(a.SampleRate), nullableInt(a.Channels),
+			nullableInt(a.BitDepth), a.PeakDBFS, boolToInt(a.IsLoopable),
+			state, truncateError(message), Version, now, sha256hex); err != nil {
+			return fmt.Errorf("record audio derive for content %s: %w", sha256hex[:8], err)
+		}
+		return nil
+	}
+
 	var animationNames any
 	if len(result.AnimationNames) > 0 {
 		encoded, err := json.Marshal(result.AnimationNames)
@@ -271,6 +338,43 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		}
 	}
 
+	// The colour palette (§8). Stored as JSON alongside a kind label; a nil palette
+	// (a decoder that produced no analysis) leaves both columns NULL rather than
+	// writing an empty string that would read as "analysed, no colours".
+	var paletteJSON, paletteKind any
+	if result.Palette != nil {
+		swatches := result.Palette.Swatches
+		if swatches == nil {
+			swatches = []palette.Swatch{}
+		}
+		encoded, err := json.Marshal(swatches)
+		if err != nil {
+			return fmt.Errorf("marshal palette: %w", err)
+		}
+		paletteJSON = string(encoded)
+		paletteKind = result.Palette.Kind
+	}
+
+	// Spritesheet geometry (§6), when the image was detected as a sheet. The frame
+	// count and fps come from the grid so the grid view can animate it.
+	//
+	// A human's or a sidecar's grid is never overwritten by a re-detection: §6 wants
+	// a confirmed value distinguishable from a guess, and a Version bump that
+	// re-derives everything must not silently revert corrections.
+	var frameW, frameH, frameCols, frameRows, frameSource any
+	if s := result.Sheet; s != nil {
+		if ew, eh, ec, er, es, ok := d.confirmedFrames(ctx, sha256hex); ok {
+			frameW, frameH, frameCols, frameRows, frameSource = ew, eh, ec, er, es
+			frameCount = ec * er
+		} else {
+			frameW, frameH, frameCols, frameRows, frameSource = s.FrameW, s.FrameH, s.Cols, s.Rows, s.Source
+			frameCount = s.FrameCount
+		}
+		if fps == nil {
+			fps = float64(SheetFPS)
+		}
+	}
+
 	if _, err := d.db.Writer.ExecContext(ctx, `
 		UPDATE assets SET
 		    width               = ?,
@@ -283,6 +387,13 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		    frame_count         = ?,
 		    fps                 = ?,
 		    animation_names     = ?,
+		    frame_w             = ?,
+		    frame_h             = ?,
+		    frame_cols          = ?,
+		    frame_rows          = ?,
+		    frame_source        = ?,
+		    palette_json        = ?,
+		    palette_kind        = ?,
 		    derive_state        = ?,
 		    derive_error        = ?,
 		    derive_version      = ?,
@@ -298,6 +409,13 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		frameCount,
 		fps,
 		animationNames,
+		frameW,
+		frameH,
+		frameCols,
+		frameRows,
+		frameSource,
+		paletteJSON,
+		paletteKind,
 		state,
 		truncateError(message),
 		Version,
@@ -307,6 +425,24 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 		return fmt.Errorf("record derive result for content %s: %w", sha256hex[:8], err)
 	}
 	return nil
+}
+
+// confirmedFrames returns a manual or sidecar frame grid already recorded for
+// this content, so a re-detection preserves it rather than reverting it.
+func (d *Deriver) confirmedFrames(ctx context.Context, sha256hex string) (fw, fh, cols, rows int, source string, ok bool) {
+	var (
+		w, h, c, r sql.NullInt64
+		src        sql.NullString
+	)
+	err := d.db.Reader.QueryRowContext(ctx, `
+		SELECT frame_w, frame_h, frame_cols, frame_rows, frame_source
+		FROM assets
+		WHERE sha256 = ? AND frame_source IN ('manual', 'sidecar') AND frame_cols IS NOT NULL
+		LIMIT 1`, sha256hex).Scan(&w, &h, &c, &r, &src)
+	if err != nil || !c.Valid || !r.Valid {
+		return 0, 0, 0, 0, "", false
+	}
+	return int(w.Int64), int(h.Int64), int(c.Int64), int(r.Int64), src.String, true
 }
 
 // EnqueueStale queues a derive job for every asset that needs one.

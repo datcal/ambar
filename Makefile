@@ -11,6 +11,12 @@ GO     ?= go
 GOFMT  ?= gofmt
 DOCKER ?= docker
 
+# Local dev port for `make run`. Overridable, because the container default of
+# 8080 is regularly taken on a dev box (an IDE, another service). 8973 is Ambar's
+# own host-facing port elsewhere in this file, so it is the memorable default;
+# override with `make run PORT=9001` if that one is busy too.
+PORT   ?= 8973
+
 BIN     := dist/ambar
 PKG     := ./cmd/ambar
 IMAGE   ?= ghcr.io/datcal/ambar
@@ -80,8 +86,8 @@ $(TESTDATA_LIBRARY) $(TESTDATA_DATA):
 run: build | $(TESTDATA_LIBRARY) $(TESTDATA_DATA)
 	AMBAR_LIBRARY_ROOT=$(TESTDATA_LIBRARY) \
 	AMBAR_DATA_ROOT=$(TESTDATA_DATA) \
-	AMBAR_BIND=127.0.0.1:8080 \
-	AMBAR_BASE_URL=http://localhost:8080 \
+	AMBAR_BIND=127.0.0.1:$(PORT) \
+	AMBAR_BASE_URL=http://localhost:$(PORT) \
 	AMBAR_LOG_LEVEL=debug \
 	$(BIN) serve
 

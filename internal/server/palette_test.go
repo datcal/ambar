@@ -1,0 +1,142 @@
+package server
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+// setPalette writes a palette directly onto an asset row. Derive is not run in
+// these tests, so this stands in for what the deriver would store — the export
+// handler and the detail panel both read the row, never the original file.
+func (ts *testServer) setPalette(t *testing.T, id int64, kind, paletteJSON string) {
+	t.Helper()
+	if _, err := ts.db.Writer.ExecContext(context.Background(),
+		`UPDATE assets SET palette_json = ?, palette_kind = ?, derive_state = 'ok' WHERE id = ?`,
+		paletteJSON, kind, id); err != nil {
+		t.Fatalf("set palette: %v", err)
+	}
+}
+
+const exactPaletteJSON = `[{"hex":"#8b3a3a","r":139,"g":58,"b":58,"count":10,"ratio":0.5},` +
+	`{"hex":"#000000","r":0,"g":0,"b":0,"count":6,"ratio":0.3},` +
+	`{"hex":"#ffffff","r":255,"g":255,"b":255,"count":4,"ratio":0.2}]`
+
+func paletteTestServer(t *testing.T) (*testServer, int64) {
+	t.Helper()
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{"pack/hero.png": "not really a png"})
+	id := ts.assetID(t, "pack/hero.png")
+	ts.setPalette(t, id, "exact", exactPaletteJSON)
+	return ts, id
+}
+
+func TestPalettePanelRendered(t *testing.T) {
+	ts, id := paletteTestServer(t)
+
+	resp := ts.get(t, itoa("/assets/%d", id))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := ts.body(t, resp)
+
+	for _, want := range []string{
+		`id="palette-panel"`,
+		`exact · 3 colours`,
+		`data-hex="#8b3a3a"`,
+		`data-r="139"`,
+		`/static/palette.js`,
+		itoa("/assets/%d/palette/gpl", id),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page missing %q", want)
+		}
+	}
+}
+
+func TestPaletteApproximateBadge(t *testing.T) {
+	ts, id := paletteTestServer(t)
+	ts.setPalette(t, id, "quantized", exactPaletteJSON)
+
+	body := ts.body(t, ts.get(t, itoa("/assets/%d", id)))
+	if !strings.Contains(body, "approximate") {
+		t.Error("a quantized palette should be labelled approximate")
+	}
+	if strings.Contains(body, "exact · ") {
+		t.Error("a quantized palette must not claim to be exact")
+	}
+}
+
+func TestPaletteExportFormats(t *testing.T) {
+	ts, id := paletteTestServer(t)
+
+	cases := []struct {
+		format      string
+		contentType string
+		wantFrag    string
+	}{
+		{"gpl", "text/plain; charset=utf-8", "GIMP Palette"},
+		{"txt", "text/plain; charset=utf-8", "#8b3a3a\n"},
+		{"json", "application/json", `"kind": "exact"`},
+		{"css", "text/plain; charset=utf-8", "--color-1: #8b3a3a;"},
+		{"gd", "text/plain; charset=utf-8", "Color(0.545, 0.227, 0.227)"},
+		{"tres", "text/plain; charset=utf-8", `type="Gradient"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.format, func(t *testing.T) {
+			resp := ts.get(t, itoa("/assets/%d/palette/%s", id, tc.format))
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != tc.contentType {
+				t.Errorf("Content-Type = %q, want %q", ct, tc.contentType)
+			}
+			cd := resp.Header.Get("Content-Disposition")
+			if !strings.Contains(cd, "attachment") || !strings.Contains(cd, "hero-palette."+tc.format) {
+				t.Errorf("Content-Disposition = %q, want attachment hero-palette.%s", cd, tc.format)
+			}
+			if body := ts.body(t, resp); !strings.Contains(body, tc.wantFrag) {
+				t.Errorf("%s body missing %q:\n%s", tc.format, tc.wantFrag, body)
+			}
+		})
+	}
+}
+
+func TestPaletteExportPNGStrip(t *testing.T) {
+	ts, id := paletteTestServer(t)
+	resp := ts.get(t, itoa("/assets/%d/palette/png", id))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	body := ts.body(t, resp)
+	if !strings.HasPrefix(body, "\x89PNG") {
+		t.Errorf("body is not a PNG (prefix %q)", body[:min(4, len(body))])
+	}
+}
+
+func TestPaletteExportUnknownFormat(t *testing.T) {
+	ts, id := paletteTestServer(t)
+	if resp := ts.get(t, itoa("/assets/%d/palette/xcf", id)); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown format status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestPaletteExportNoPalette(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	// An asset that was never analysed: palette_json stays NULL, so HasPalette is
+	// false and every export must 404 rather than emit an empty file.
+	ts.seedLibrary(t, map[string]string{"pack/unanalysed.png": "no palette written"})
+	id := ts.assetID(t, "pack/unanalysed.png")
+
+	if resp := ts.get(t, itoa("/assets/%d/palette/gpl", id)); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("no-palette export status = %d, want 404", resp.StatusCode)
+	}
+}

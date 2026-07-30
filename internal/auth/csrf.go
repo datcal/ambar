@@ -80,6 +80,16 @@ func (c *CSRF) Protect(next http.Handler) http.Handler {
 			return
 		}
 
+		// A bearer-token request is not cookie-authenticated, so CSRF — which
+		// exploits ambient cookies a browser attaches automatically — cannot apply
+		// to it. The token itself is the proof of intent. This is what lets the
+		// §10 API's POST/DELETE work without a CSRF cookie the Godot plugin has no
+		// way to obtain.
+		if strings.HasPrefix(strings.ToLower(r.Header.Get("Authorization")), "bearer ") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// The cookie as the client sent it, never the one Ensure may have just
 		// created — otherwise a first-ever POST with no cookie would validate
 		// against a token the server minted for it.

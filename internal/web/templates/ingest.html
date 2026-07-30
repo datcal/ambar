@@ -1,0 +1,52 @@
+{{define "title"}}Ingest — Ambar{{end}}
+
+{{define "content"}}
+<div class="stack">
+  <h1>Ingest an archive</h1>
+
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  {{if .Readonly}}
+    <p class="note note-warn">
+      The library is read-only (<code>AMBAR_LIBRARY_READONLY</code>), so ingest is disabled.
+    </p>
+  {{else}}
+    <div class="card">
+      <h2>Upload</h2>
+      <p class="hint">
+        For small archives. Extraction is safe — path traversal, absolute paths and
+        symlinks are refused, and a bad archive is quarantined rather than half-applied.
+        Uploads over <strong>{{bytes .MaxUploadSize}}</strong> are rejected; drop those into
+        <code>_inbox/</code> instead.
+      </p>
+      {{/* Multipart, so CSRF must travel in the header (§11): the middleware will
+           not parse an upload body to find a hidden field. htmx sends the header
+           from the global hx-headers, so this posts through htmx. */}}
+      <form hx-post="/ingest/upload" hx-encoding="multipart/form-data" class="stack">
+        <p>
+          <label>Archive (.zip, .rar, .7z)<br>
+            <input type="file" name="archive" accept=".zip,.rar,.7z" required>
+          </label>
+        </p>
+        <p>
+          <label>Source URL (optional — recorded as provenance)<br>
+            <input type="url" name="source" placeholder="https://kenney.itch.io/…" size="40">
+          </label>
+        </p>
+        <p><button type="submit">Upload &amp; ingest</button></p>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Or drop into <code>_inbox/</code></h2>
+      <p class="hint">
+        The primary path for large bundles: copy the archive into the library's
+        <code>_inbox/</code> folder over SMB. The server polls it and ingests each archive
+        once it has finished arriving. Drop a <code>&lt;archive&gt;.url</code> or
+        <code>.txt</code> beside it to capture the source URL at download time.
+      </p>
+      <p><a href="/jobs">Watch background work</a> to see ingests in progress.</p>
+    </div>
+  {{end}}
+</div>
+{{end}}

@@ -16,9 +16,12 @@ import (
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/ingest"
 	"github.com/datcal/ambar/internal/jobs"
+	"github.com/datcal/ambar/internal/junk"
 	"github.com/datcal/ambar/internal/library"
 	"github.com/datcal/ambar/internal/server"
+	"github.com/datcal/ambar/internal/sidecar"
 )
 
 // shutdownGrace is how long in-flight requests get to finish (§12: graceful
@@ -115,12 +118,23 @@ func runServe(args []string) error {
 		DataRoot:    cfg.DataRoot,
 		MaxPixels:   cfg.MaxImagePixels,
 		Log:         log,
+		BlenderBin:  cfg.BlenderBin,
 	})
 	deriver.Register(queue)
 
 	// A scan enqueues the derivative work it discovered. Passing this in as a
 	// callback keeps internal/index unaware of internal/derive.
+	sidecars := sidecar.New(database, sidecar.Options{
+		LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot,
+		Readonly: cfg.LibraryReadonly, Log: log,
+	})
 	indexer.RegisterScanJob(queue, func(ctx context.Context) error {
+		// §3: recover metadata from sidecars for any pack the index does not carry.
+		if n, err := sidecars.ImportAll(ctx); err != nil {
+			log.WarnContext(ctx, "sidecar import failed", "error", err)
+		} else if n > 0 {
+			log.InfoContext(ctx, "imported sidecar metadata", "packs", n)
+		}
 		n, err := derive.EnqueueStale(ctx, database, queue)
 		if err != nil {
 			return err
@@ -130,6 +144,26 @@ func runServe(args []string) error {
 		}
 		return nil
 	})
+
+	// Ingest (§5). A finished extraction enqueues a scan, which indexes the new
+	// pack and (via the callback above) its derivatives. The _inbox poller (M4)
+	// enqueues these jobs.
+	ingest.New(database, ingest.Options{
+		LibraryRoot:  cfg.LibraryRoot,
+		KeepArchives: cfg.KeepArchives,
+		Readonly:     cfg.LibraryReadonly,
+		MaxBytes:     cfg.MaxArchiveUncompressed,
+		MaxEntries:   cfg.MaxArchiveEntries,
+		Log:          log,
+	}).Register(queue, func(ctx context.Context) error {
+		_, err := index.EnqueueScan(ctx, queue, index.ScanJobPayload{ReadDimensions: true})
+		return err
+	})
+
+	// Junk sweep (§9.1, M12): reporting only. The walk is real work, so it runs on
+	// the queue with pollable status (invariant 8), caching a report the /junk page
+	// reads. The hash provider keeps internal/junk free of SQL.
+	junk.NewRunner(cfg.LibraryRoot, cfg.DataRoot, indexer.ContentHashes, log).Register(queue)
 
 	srv, err := server.New(cfg, database, indexer, queue, log,
 		server.BuildInfo{Version: version, Commit: commit})
@@ -175,6 +209,13 @@ func runServe(args []string) error {
 		log.Warn("could not enqueue outstanding derivatives", "error", err)
 	} else if n > 0 {
 		log.Info("enqueued outstanding derivative jobs", "count", n)
+	}
+
+	// Poll _inbox for dropped archives (§5, the primary ingest path). Skipped on a
+	// read-only library, where ingest is disabled.
+	if !cfg.LibraryReadonly {
+		go ingest.NewPoller(cfg.LibraryRoot, queue, cfg.InboxPollInterval, log).Run(ctx)
+		log.Info("watching _inbox for archives", "interval", cfg.InboxPollInterval)
 	}
 
 	// Serve in the background so the main goroutine can wait on the signal.
