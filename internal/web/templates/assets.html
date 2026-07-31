@@ -263,7 +263,11 @@
                     {{/* M15: the server has no 3D renderer and Blender is optional
                          (§6), but the browser has one and is about to be asked. Until
                          it answers, the tile says what it is. */}}
-                    <span class="thumb-none thumb-pending" data-model="{{.ViewerSrc}}"
+                    {{/* The original through the companion route, never a derived glb:
+                         the thumbnailer's whole point is the formats derive could not
+                         normalise, and for glTF the .bin and textures resolve beside
+                         it anyway. */}}
+                    <span class="thumb-none thumb-pending" data-model="{{.ViewerFile}}"
                           data-format="{{.ViewerFormat}}" data-asset="{{.ID}}"
                           {{with .MTLName}}data-mtl="{{.}}"{{end}}
                           title="Rendering a preview…">{{.Ext}}</span>

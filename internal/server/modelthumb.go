@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -31,7 +32,12 @@ import (
 //   - Store what the client sent. The PNG is decoded, bounds-checked and re-encoded
 //     as WebP by our own encoder, so a malformed or hostile file cannot be handed back
 //     to another user later.
-//   - Accept anything but a plausible thumbnail: a size cap, a pixel cap, and PNG only.
+//   - Accept anything but a plausible thumbnail: a size cap, a pixel cap, PNG only,
+//     and something actually visible in the frame. A loader that resolves with an empty
+//     scene produces a transparent square, and accepting one is worse than accepting
+//     nothing: it replaces the extension chip with a blank tile *and* records
+//     derive_state=ok, which hides the fact that the model never rendered. Every .fbx in
+//     the library got exactly that treatment before this check existed.
 //   - Overwrite a thumbnail that already exists. A derivative that is present was
 //     produced by derive (or by an earlier render) and is not the client's to replace.
 
@@ -72,7 +78,14 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 
 	// Already thumbnailed — by derive, by Blender, or by an earlier render. Not the
 	// client's to replace, and saying so plainly stops a page from looping.
-	if _, err := os.Stat(thumbPath); err == nil {
+	//
+	// "Already thumbnailed" means the row says so, not merely that a file is lying
+	// there. The two came apart badly: a blank FBX snapshot wrote a transparent
+	// thumb.webp, and once the row was repaired the file stayed behind and was served
+	// as this model's picture for ever, because the file alone was enough to refuse
+	// every later attempt. A file whose asset is not in state 'ok' is an orphan from a
+	// path that failed, and overwriting it is the point.
+	if _, err := os.Stat(thumbPath); err == nil && asset.DeriveState == "ok" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -85,6 +98,9 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	img, err := decodeThumbPNG(raw)
+	if err == nil && blankImage(img) {
+		err = errors.New("the image is blank; the model probably did not render")
+	}
 	if err != nil {
 		s.log.WarnContext(r.Context(), "rejected a browser thumbnail",
 			"asset_id", asset.ID, "error", err)
@@ -169,4 +185,39 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// minVisibleRatio is how much of a thumbnail must actually be covered by the model.
+// A 512x512 frame of a barrel fills a good part of it; 0.2% is far below anything a
+// real render produces and far above the zero a failed one gives.
+const minVisibleRatio = 0.002
+
+// blankImage reports whether an image has (almost) nothing visible in it.
+//
+// The thumbnailer renders onto a transparent canvas, so a failed render arrives as a
+// fully transparent PNG — about 550 bytes, which is small enough to look plausible and
+// large enough to pass any size check. Alpha is therefore what gets counted; a sparse
+// sample is enough, because the question is "did anything draw at all", not "how much".
+func blankImage(img image.Image) bool {
+	b := img.Bounds()
+	if b.Empty() {
+		return true
+	}
+
+	// Every 4th pixel in each direction: 1/16th of the work, and a model that covers
+	// 0.2% of the frame still lands dozens of samples.
+	const step = 4
+	var sampled, visible int
+	for y := b.Min.Y; y < b.Max.Y; y += step {
+		for x := b.Min.X; x < b.Max.X; x += step {
+			sampled++
+			if _, _, _, a := img.At(x, y).RGBA(); a > 0x1000 {
+				visible++
+			}
+		}
+	}
+	if sampled == 0 {
+		return true
+	}
+	return float64(visible)/float64(sampled) < minVisibleRatio
 }

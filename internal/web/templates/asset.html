@@ -79,7 +79,7 @@
          original file — .obj and .fbx are read directly by three.js, which is why
          they no longer wait for Blender. */}}
     <div class="model" id="model-viewer"
-         data-src="{{.ViewerSrc}}"
+         data-src="{{$.ViewerSrc}}"
          data-format="{{.ViewerFormat}}"
          {{with .MTLName}}data-mtl="{{.}}"{{end}}>
       <div class="viewer-toolbar">
@@ -128,7 +128,7 @@
     </div>
   {{end}}
 
-  {{if and .HasPreview (not .IsAudio)}}
+  {{if .Has2DPreview}}
     {{/* The 2D viewer from §8: zoom, pan, background toggle.
          It loads preview.webp rather than the original — §11 forbids serving library
          content inline, and these bytes came from our own encoder. Configuration

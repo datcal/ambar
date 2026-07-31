@@ -156,3 +156,157 @@ func TestBrowserModelThumbnailRefusesJunk(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+// transparentPNG builds the image a failed render produces: a fully transparent frame.
+func transparentPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestBrowserModelThumbnailRefusesBlank: the regression that made every .fbx in the
+// library unopenable.
+//
+// FBXLoader resolved with an empty scene, the island snapshotted the empty canvas
+// anyway, and the server accepted the resulting transparent PNG. That did two kinds of
+// damage: the tile became a blank square instead of an honest extension chip, and
+// derive_state flipped to 'ok', which made the detail page believe a normalised
+// preview.glb existed and hand the viewer a URL that 404s — a 3D page that opened to
+// nothing at all, silently.
+//
+// So: a blank frame is not a thumbnail, and nothing about the asset changes when one
+// arrives.
+func TestBrowserModelThumbnailRefusesBlank(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{"pack/models/barrel.fbx": "Kaydara FBX Binary\x00"})
+	id := ts.assetID(t, "pack/models/barrel.fbx")
+
+	resp := ts.postRaw(t, itoa("/assets/%d/thumb", id), "image/png", transparentPNG(t, 512, 512))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a blank render: status = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var sha, state string
+	if err := ts.db.Reader.QueryRow(
+		`SELECT sha256, derive_state FROM assets WHERE id = ?`, id).Scan(&sha, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state == "ok" {
+		t.Error("derive_state was flipped to ok by a blank upload; the viewer would then be sent to a preview that does not exist")
+	}
+	relDir, err := derive.Dir(sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ts.cfg.DataRoot, relDir, derive.FileThumb)); !os.IsNotExist(err) {
+		t.Errorf("a blank thumbnail was written to disk (err = %v)", err)
+	}
+
+	// And the tile still asks honestly rather than showing an empty square.
+	if body := ts.body(t, ts.get(t, "/")); !strings.Contains(body, "thumb-pending") {
+		t.Error("the tile should still be pending after a rejected render")
+	}
+}
+
+// TestBlankImage covers the boundary directly: what counts as "nothing rendered".
+func TestBlankImage(t *testing.T) {
+	// A centred square of side `side` in a 512x512 frame, at the given alpha — the
+	// shape a small model far from the camera would leave.
+	blob := func(side int, alpha uint8) image.Image {
+		const size = 512
+		img := image.NewNRGBA(image.Rect(0, 0, size, size))
+		off := (size - side) / 2
+		for y := off; y < off+side; y++ {
+			for x := off; x < off+side; x++ {
+				img.SetNRGBA(x, y, color.NRGBA{R: 0xcc, G: 0x88, B: 0x44, A: alpha})
+			}
+		}
+		return img
+	}
+
+	tests := []struct {
+		name string
+		img  image.Image
+		want bool
+	}{
+		{"a fully transparent frame is what a failed loader produces", image.NewNRGBA(image.Rect(0, 0, 512, 512)), true},
+		{"an empty frame", image.NewNRGBA(image.Rect(0, 0, 0, 0)), true},
+		{"a frame filled with opaque colour is a render", blob(512, 0xff), false},
+		{"a small model far from the camera still counts", blob(64, 0xff), false},
+		{"almost-invisible alpha does not count", blob(512, 0x08), true},
+		{"a handful of stray pixels is below the floor", blob(8, 0xff), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := blankImage(tc.img); got != tc.want {
+				t.Errorf("blankImage() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBrowserModelThumbnailReplacesAnOrphan: a thumbnail file whose asset is not in
+// state 'ok' is left over from a path that failed, and must not shield itself from
+// being replaced.
+//
+// This is the second half of the FBX repair. Migration 0014 puts the wrongly-'ok' rows
+// back to 'pending', but the blank thumb.webp those uploads wrote stays on disk — and
+// while a bare os.Stat was enough to refuse an upload, that blank file would have been
+// served as the model's picture for ever, with every fresh render politely turned away.
+func TestBrowserModelThumbnailReplacesAnOrphan(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{"pack/models/barrel.fbx": "Kaydara FBX Binary\x00"})
+	id := ts.assetID(t, "pack/models/barrel.fbx")
+
+	// The state after the repair: an orphaned blank thumbnail, and a row that does not
+	// claim a preview.
+	ts.writeDerivative(t, id, derive.FileThumb, []byte("STALE-BLANK-WEBP"))
+	if _, err := ts.db.Writer.Exec(
+		`UPDATE assets SET derive_state = 'needs_blender' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := ts.postRaw(t, itoa("/assets/%d/thumb", id), "image/png", pngBytes(t, 256, 256))
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var sha string
+	if err := ts.db.Reader.QueryRow(`SELECT sha256 FROM assets WHERE id = ?`, id).Scan(&sha); err != nil {
+		t.Fatal(err)
+	}
+	relDir, err := derive.Dir(sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(ts.cfg.DataRoot, relDir, derive.FileThumb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored, []byte("STALE-BLANK-WEBP")) {
+		t.Error("the orphaned thumbnail was kept; the model would show it for ever")
+	}
+	if !bytes.Contains(stored[:12], []byte("WEBP")) {
+		t.Errorf("the replacement is not WebP: % x", stored[:12])
+	}
+
+	// And now that the row says 'ok', it is protected again.
+	resp = ts.postRaw(t, itoa("/assets/%d/thumb", id), "image/png", pngBytes(t, 64, 64))
+	resp.Body.Close()
+	again, err := os.ReadFile(filepath.Join(ts.cfg.DataRoot, relDir, derive.FileThumb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored, again) {
+		t.Error("a derive-owned thumbnail must not be replaceable by a client")
+	}
+}
