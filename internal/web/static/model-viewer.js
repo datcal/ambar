@@ -9,6 +9,15 @@
 // Blender to preview" dead end from every OBJ and FBX in the library. Companion
 // files — an .obj's .mtl, an .mtl's textures, a .gltf's .bin — resolve relative to
 // that URL without the viewer rewriting anything.
+//
+// M15 fix: a texture that cannot be fetched used to make the model *invisible* rather
+// than untextured. three.js binds a 1x1 transparent-black placeholder for a texture
+// whose image never arrived, and `colour x rgba(0,0,0,0)` is nothing at all — so an FBX
+// naming a texture by an artist's Windows path rendered as an empty stage with no error
+// anywhere. Every .fbx in this library does that. Hence two things below: the loaders
+// share a LoadingManager so the viewer knows when fetching has actually finished, and a
+// texture that never arrived is dropped so the geometry shows in its base colour. An
+// untextured barrel answers "what is this"; an empty stage does not.
 
 (function () {
   const root = document.getElementById("model-viewer");
@@ -50,6 +59,47 @@
 
   let model = null;
   let wireframe = false;
+
+  // Shared by every loader below, so "has all fetching finished" is answerable. The
+  // model file itself is a tracked item, and the textures a loader starts during parse
+  // are tracked too, so onLoad fires after the whole set has either arrived or failed.
+  const manager = new THREE.LoadingManager();
+  let settled = false;
+  const missing = [];
+
+  // Texture slots worth checking. Any of them left holding a placeholder is enough to
+  // turn a mesh invisible, so they are all cleared rather than just `map`.
+  const TEXTURE_SLOTS = [
+    "map", "specularMap", "emissiveMap", "normalMap", "bumpMap",
+    "aoMap", "alphaMap", "metalnessMap", "roughnessMap", "envMap",
+  ];
+
+  function textureArrived(texture) {
+    const image = texture && texture.image;
+    if (!image) return false;
+    if (typeof image.complete === "boolean" && !image.complete) return false;
+    // An <img>, an ImageBitmap, a canvas, or raw data — any of these is usable.
+    return (image.width || 0) > 0 || !!image.data;
+  }
+
+  // Drop textures that will never arrive. Only ever called once fetching has settled,
+  // so a texture still in flight is never thrown away.
+  function dropMissingTextures(object) {
+    let dropped = 0;
+    object.traverse(function (o) {
+      if (!o.material) return;
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach(function (m) {
+        TEXTURE_SLOTS.forEach(function (slot) {
+          if (m[slot] && !textureArrived(m[slot])) {
+            m[slot] = null;
+            m.needsUpdate = true;
+            dropped += 1;
+          }
+        });
+      });
+    });
+    return dropped;
+  }
 
   function resize() {
     const w = stage.clientWidth;
@@ -110,7 +160,26 @@
     scene.add(model);
     frame(model);
     if (status) status.textContent = "";
+    settle();
   }
+
+  // Runs when both the model and its fetches are done, in whichever order that
+  // happens. Says so when a texture had to be dropped: a white model is otherwise
+  // baffling, and "the texture is missing" is something the user can act on.
+  function settle() {
+    if (!settled || !model) return;
+    const dropped = dropMissingTextures(model);
+    if (dropped > 0 && status) {
+      const what = missing.length === 1 ? missing[0].split("/").pop() : dropped + " textures";
+      status.textContent = "Showing untextured geometry: " + what + " could not be found beside this model.";
+    }
+  }
+
+  manager.onError = function (url) { missing.push(url); };
+  manager.onLoad = function () { settled = true; settle(); };
+  // Backstop: a request that never completes would otherwise leave an invisible model
+  // on screen for ever.
+  window.setTimeout(function () { settled = true; settle(); }, 10000);
 
   // The format, as the page worked it out. Defaults to glTF so an older page that
   // only knows about preview.glb keeps working.
@@ -126,14 +195,14 @@
       const mtlName = root.dataset.mtl;
       const base = src.slice(0, src.lastIndexOf("/") + 1);
       const loadObj = function (materials) {
-        const loader = new THREE.OBJLoader();
+        const loader = new THREE.OBJLoader(manager);
         if (materials) loader.setMaterials(materials);
         loader.load(src, show, undefined, function (err) {
           fail("Could not read this .obj file.", err);
         });
       };
       if (mtlName) {
-        new THREE.MTLLoader()
+        new THREE.MTLLoader(manager)
           .setPath(base)
           .load(mtlName, function (materials) {
             materials.preload();
@@ -153,13 +222,13 @@
         fail("The FBX loader did not load.", null);
         break;
       }
-      new THREE.FBXLoader().load(src, show, undefined, function (err) {
+      new THREE.FBXLoader(manager).load(src, show, undefined, function (err) {
         fail("Could not read this .fbx file.", err);
       });
       break;
 
     default:
-      new THREE.GLTFLoader().load(
+      new THREE.GLTFLoader(manager).load(
         src,
         function (gltf) {
           show(gltf.scene);

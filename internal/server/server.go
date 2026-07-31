@@ -406,6 +406,10 @@ type pageData struct {
 	OpenApps    []openApp
 	ProjectUses []projects.AssetUse
 
+	// ViewerSrc is the file the 3D viewer loads for this asset: a derived preview.glb
+	// when one exists, otherwise the original through the companion route.
+	ViewerSrc string
+
 	// NeedsModelThumbs is true when the grid holds a model with no thumbnail, so the
 	// page loads three.js and asks the browser to render one (M15).
 	NeedsModelThumbs bool

@@ -1389,6 +1389,83 @@ earlier scan persist until a rescan marks them missing.
 alias), and `palettes` left the top bar for the sidebar's Tools section — it is a view you
 visit occasionally, not a primary destination.
 
+## FBX models rendered nothing (M15) — resolved
+
+Reported from the deployed instance: `barrel.gltf` has a grid thumbnail and opens in the
+viewer; `barrel.fbx` beside it has neither, and clicking it never opens anything.
+
+Four separate faults, each of which alone was enough to produce a blank page. Found by
+running the vendored `FBXLoader.js` over the library's real `barrel.fbx` under Deno with
+a DOM stub, and by pulling the deployed thumbnail and measuring it — not by reading the
+code and guessing.
+
+**1. The viewer was sent a file that does not exist.** `Asset.ViewerSrc()` chose
+`/assets/{id}/preview.glb` whenever `derive_state = 'ok'`. That is sound for glTF, which
+`deriveModel` really does normalise to a glb — but M15's browser thumbnailer also sets
+`'ok'`, and it produces no glb at all. So every FBX pointed its loader at a 404, and
+three.js reports a failed fetch into a status line that the empty stage sat behind.
+`derive_state` answers "is there *a* preview", never "is there a preview.glb"; the
+distinction needs the filesystem, so `handleAsset` now stats the file
+(`Server.derivativeExists`) and `ViewerSrc()` is gone. `Asset.ViewerFile()` returns the
+companion-route URL and nothing infers a glb from a column any more.
+
+**2. A missing texture rendered the model invisible, not untextured.** This is the root
+cause of "resim yok". The FBX records the absolute path its artist had:
+
+    C:\Users\Kay Lousberg\...\Export Files\Textures\hexagons_medieval.png
+
+Every loader reduces that to the basename and looks beside the model, where it is not:
+in this pack it lives four directories up in a shared `Textures/`. three.js binds a 1×1
+transparent-black placeholder for a texture whose image never arrived, and the fragment
+shader multiplies the material down to `rgba(0,0,0,0)` — the mesh is *there*, framed and
+lit, and draws nothing. Measured on the deployed thumbnail: 512×512, mean alpha exactly
+0, against 0.25 for the glTF twin.
+
+Two fixes, because either alone leaves a real gap. `handleAssetFile` now looks a texture
+up within the model's own pack when it is not beside it — each directory from the model
+to the pack root, plus a `Textures/` beside each, a fixed dozen stat calls rather than a
+walk, never crossing into another pack, still through safepath. And both islands now
+drop a texture that never arrived so the geometry shows in its base colour: an untextured
+barrel answers "what is this", an empty stage does not. The pack lookup is textures only
+— a `.mtl` or `.bin` is genuinely relative to its model, and a same-named file elsewhere
+in the pack would be the wrong file.
+
+**3. The thumbnailer snapshotted before the textures existed.** `GLTFLoader` resolves
+after its textures are ready; `FBXLoader` calls back the moment parsing finishes and
+lets textures land later. The island rendered inside that callback, so even a texture
+that *would* have arrived was not there yet. Both islands now share a `LoadingManager`
+per load — the model file and the textures a loader starts during parse are all tracked
+items, so `onLoad` fires exactly once fetching has settled — with a 10 s backstop so a
+hung request cannot strand an invisible model or block the render queue.
+
+**4. A blank render was accepted and cached, and hid all of the above.** The island
+uploaded the transparent canvas anyway; the server stored it and set
+`derive_state = 'ok'`, which replaced an honest extension chip with a blank square *and*
+made fault 1 fire. Now refused on both sides: the island skips a load with no geometry
+at all, and `handleModelThumbUpload` rejects an almost-entirely-transparent PNG
+(`blankImage`, 0.2 % of sampled pixels must carry alpha). A rejected upload changes
+nothing about the asset, so the tile stays pending and the problem stays visible.
+
+Two consequences for data already written, both handled in the product rather than by
+hand on the NAS:
+
+- Migration `0014_model_thumb_repair.sql` puts the wrongly-`'ok'` rows back to
+  `pending`. Deliberately narrow, since `'ok'` is correct for nearly every row:
+  `ext IN ('fbx','blend')` (the only formats `deriveModel` cannot do in pure Go) **and**
+  `vert_count IS NULL` (a real conversion runs `model.Analyze` over the glb it wrote and
+  fills the 0008 geometry columns; a thumbnail upload touches none of them). Rows Blender
+  genuinely converted are left alone.
+- The blank `thumb.webp` files those uploads left behind are orphans, and a bare
+  `os.Stat` was enough to refuse every later render — so the blank image would have been
+  served for ever. An existing thumbnail is now protected only when the row says
+  `derive_state = 'ok'`, i.e. when derive owns it.
+
+Worth keeping in mind: three.js failing *silently* is the expensive part here. A missing
+texture is not an error in WebGL, it is a transparent pixel, and a 404 the loader
+swallowed looked identical to a model that had not loaded yet. The blank-render check is
+as much a diagnostic as a fix — it turns "nothing appeared" into a rejected upload and a
+log line.
+
 ## Still open
 
 Every milestone in §14 is delivered, and so is every deferral recorded above. What

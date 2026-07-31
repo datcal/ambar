@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -328,5 +329,86 @@ func TestOpenCreatesMissingDirectory(t *testing.T) {
 
 	if _, err := d.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+}
+
+// TestModelThumbRepairMigration checks 0014, the repair for the M15 FBX regression.
+//
+// The bad state it undoes: a browser-rendered thumbnail set derive_state='ok', the
+// detail page read that as "a normalised preview.glb exists", and every .fbx opened to
+// an empty stage behind a URL that 404s. The migration has to be narrow — 'ok' is the
+// normal, correct value for almost every row — so it is exercised against the rows it
+// must leave alone as well as the ones it must fix.
+//
+// Applied by hand here rather than by Open(): by the time a test has a database, the
+// migration has already run, so the statement is replayed against rows that look like
+// the ones a deployed instance actually had.
+func TestModelThumbRepairMigration(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+
+	if _, err := d.Writer.ExecContext(ctx,
+		`INSERT INTO packs (id, name, slug, kind, library_rel_path,
+		                    first_seen_at, last_seen_at, created_at, updated_at)
+		 VALUES (1, 'p', 'p', 'folder', 'p',
+		         unixepoch(), unixepoch(), unixepoch(), unixepoch())`); err != nil {
+		t.Fatal(err)
+	}
+
+	type row struct {
+		name       string
+		ext        string
+		vertCount  any
+		state      string
+		wantRepair bool
+		why        string
+	}
+	rows := []row{
+		{"fbx.fbx", "fbx", nil, "ok", true,
+			"an fbx cannot be 'ok' with no geometry recorded: no Blender ran, a thumbnail upload did this"},
+		{"scene.blend", "blend", nil, "ok", true, "same for a .blend"},
+		{"converted.fbx", "fbx", 512, "ok", false,
+			"Blender really did convert this one — model.Analyze filled the geometry columns"},
+		{"model.glb", "glb", nil, "ok", false,
+			"glTF normalises in pure Go; its 'ok' is derive's own and is not ours to touch"},
+		{"hero.obj", "obj", nil, "ok", false, "so does .obj"},
+		{"waiting.fbx", "fbx", nil, "needs_blender", false, "already saying the honest thing"},
+	}
+	for i, r := range rows {
+		if _, err := d.Writer.ExecContext(ctx,
+			`INSERT INTO assets (id, pack_id, rel_path, filename, ext, kind, size,
+			                     sha256, mtime, derive_state, derive_version, vert_count,
+			                     first_seen_at, last_verified_at, created_at, updated_at)
+			 VALUES (?, 1, ?, ?, ?, 'model', 1, ?, 0, ?, 6, ?,
+			         unixepoch(), unixepoch(), unixepoch(), unixepoch())`,
+			i+1, r.name, r.name, r.ext, fmt.Sprintf("%064d", i+1), r.state, r.vertCount); err != nil {
+			t.Fatalf("insert %s: %v", r.name, err)
+		}
+	}
+
+	sql, err := migrationFS.ReadFile("migrations/0014_model_thumb_repair.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Writer.ExecContext(ctx, string(sql)); err != nil {
+		t.Fatalf("apply the repair: %v", err)
+	}
+
+	for i, r := range rows {
+		var state string
+		var version int
+		if err := d.Reader.QueryRowContext(ctx,
+			`SELECT derive_state, derive_version FROM assets WHERE id = ?`, i+1).Scan(&state, &version); err != nil {
+			t.Fatal(err)
+		}
+		if r.wantRepair {
+			if state != "pending" || version != 0 {
+				t.Errorf("%s: state = %q version = %d, want pending/0 — %s", r.name, state, version, r.why)
+			}
+			continue
+		}
+		if state != r.state {
+			t.Errorf("%s: state = %q, want it left as %q — %s", r.name, state, r.state, r.why)
+		}
 	}
 }

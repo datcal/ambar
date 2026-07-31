@@ -106,7 +106,9 @@ func (a Asset) SheetConfirmed() bool {
 // IsModel reports whether this asset is a 3D model (§8 3D viewer).
 func (a Asset) IsModel() bool { return a.Kind == "model" }
 
-// HasModelPreview reports whether a normalised preview.glb was produced.
+// HasModelPreview reports whether *a* preview exists for this model — a normalised
+// glb, or a thumbnail rendered by the browser (M15). It does not say which, so it
+// must not be used to build a URL; see ViewerFile.
 func (a Asset) HasModelPreview() bool { return a.IsModel() && a.DeriveState == "ok" }
 
 // ViewerFormat says which three.js loader can show this model in the browser, or ""
@@ -144,15 +146,18 @@ func (a Asset) NeedsBrowserThumb() bool {
 	return a.ViewerFormat() != "" && !a.HasPreview() && !a.Missing()
 }
 
-// ViewerSrc is the URL the 3D viewer should load: the derived, normalised preview
-// when there is one, otherwise the original file through the companion-file route so
-// its .mtl, .bin and textures resolve beside it.
-func (a Asset) ViewerSrc() string {
-	id := strconv.FormatInt(a.ID, 10)
-	if a.HasModelPreview() {
-		return "/assets/" + id + "/preview.glb"
-	}
-	return "/assets/" + id + "/file/" + url.PathEscape(a.Filename)
+// ViewerFile is the companion-route URL for the original model, which is what the
+// browser loads for a format three.js reads directly.
+//
+// There is deliberately no method here that picks between this and a derived
+// preview.glb. `derive_state = 'ok'` means "some preview exists" — after M15 it can
+// mean a browser-rendered *thumbnail* — and a glb is only produced for the formats
+// deriveModel normalises. Guessing from the row gave every .obj and .fbx a
+// data-src of /preview.glb, which 404s, which is why an FBX opened to an empty
+// stage. The choice needs the filesystem, so the handler makes it (server.pageData
+// .ViewerSrc).
+func (a Asset) ViewerFile() string {
+	return "/assets/" + strconv.FormatInt(a.ID, 10) + "/file/" + url.PathEscape(a.Filename)
 }
 
 // MTLName is the material library an .obj conventionally sits beside: the same
@@ -211,6 +216,11 @@ func (a Asset) PeakLevel() string {
 
 // HasPreview reports whether derivatives exist to show.
 func (a Asset) HasPreview() bool { return a.DeriveState == "ok" }
+
+// Has2DPreview reports whether the §8 pan-and-zoom image viewer applies. Models and
+// audio are excluded: a model has its own 3D stage, and after M15 its "preview" may be
+// a browser-rendered thumbnail, which in the 2D viewer looked like the asset itself.
+func (a Asset) Has2DPreview() bool { return a.HasPreview() && !a.IsModel() && !a.IsAudio() }
 
 // HasPalette reports whether a non-empty colour palette was extracted (§8).
 func (a Asset) HasPalette() bool {

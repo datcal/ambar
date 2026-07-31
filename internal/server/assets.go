@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"github.com/datcal/ambar/internal/derive"
 	"mime"
 	"net/http"
 	"os"
@@ -121,6 +122,20 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	data.Workspace = true
 	data.Asset = &asset
 	data.Flash = r.URL.Query().Get("msg")
+
+	// Which file the 3D viewer loads. A derived, normalised preview.glb when one was
+	// actually produced (deriveModel does that for glTF), otherwise the original
+	// through the companion route — which is how .obj and .fbx are viewed at all.
+	//
+	// Decided here rather than on the row: `derive_state = 'ok'` says a preview of some
+	// kind exists, and since M15 that can be a browser-rendered thumbnail. Trusting it
+	// to mean "a glb exists" pointed every FBX at a 404 and left the stage empty.
+	if format := asset.ViewerFormat(); format != "" {
+		data.ViewerSrc = asset.ViewerFile()
+		if s.derivativeExists(asset.SHA256, derive.FileModelPreview) {
+			data.ViewerSrc = fmt.Sprintf("/assets/%d/preview.glb", asset.ID)
+		}
+	}
 
 	// M14 "open in…": the path as the operator's own machine sees it, when they have
 	// told us how the library is mounted there.
@@ -292,4 +307,18 @@ func libraryDir(libPath string) string {
 		return ""
 	}
 	return dir
+}
+
+// derivativeExists reports whether one derived file was produced for this content.
+//
+// The derivative cache is keyed by content hash (§6), so this is a stat rather than a
+// query — and it is the only honest answer to "was a glb actually written", which the
+// derive_state column cannot give.
+func (s *Server) derivativeExists(sha256hex, name string) bool {
+	relDir, err := derive.Dir(sha256hex)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(s.cfg.DataRoot, relDir, name))
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }

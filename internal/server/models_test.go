@@ -6,7 +6,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/datcal/ambar/internal/derive"
 )
+
+// writeDerivative places a file in an asset's derivative directory by hand, for tests
+// that need to say "this derivative exists" without running a deriver that could not
+// produce it anyway (there is no pure-Go FBX-to-glTF converter).
+func (ts *testServer) writeDerivative(t *testing.T, assetID int64, name string, content []byte) {
+	t.Helper()
+
+	var sha string
+	if err := ts.db.Reader.QueryRow(`SELECT sha256 FROM assets WHERE id = ?`, assetID).Scan(&sha); err != nil {
+		t.Fatal(err)
+	}
+	relDir, err := derive.Dir(sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(ts.cfg.DataRoot, relDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // seedModel indexes a small OBJ model with an .mtl and a texture beside it, plus a
 // file it must never be able to reach.
@@ -118,5 +143,143 @@ func TestObjViewerNeedsNoBlender(t *testing.T) {
 	// references resolve beside it.
 	if !strings.Contains(body, itoa("/assets/%d/file/hero.obj", id)) {
 		t.Error("the viewer should load the original .obj through the companion route")
+	}
+}
+
+// TestModelViewerSourceFollowsWhatIsOnDisk is the regression test for the FBX bug.
+//
+// The viewer's source used to be derived from derive_state alone: state 'ok' meant
+// "there is a normalised preview.glb", so the page pointed the loader at
+// /assets/{id}/preview.glb. That held for glTF, which derive really does normalise —
+// but a browser-rendered thumbnail also sets state 'ok', and it produces no .glb at
+// all. Every .fbx therefore got a URL that 404s, and a 3D page that opened to an empty
+// stage with no error anywhere.
+//
+// The source is now decided by what exists on disk, so the two cases cannot be
+// confused: preview.glb when there is one, the original file otherwise.
+func TestModelViewerSourceFollowsWhatIsOnDisk(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"pack/models/barrel.fbx": "Kaydara FBX Binary" + "\x00",
+		"pack/models/crate.glb":  "glTF",
+	})
+	fbxID := ts.assetID(t, "pack/models/barrel.fbx")
+	glbID := ts.assetID(t, "pack/models/crate.glb")
+
+	// Both are marked derived — the .glb by derive, the .fbx by a thumbnail upload —
+	// but only the .glb has a preview.glb beside it.
+	for _, id := range []int64{fbxID, glbID} {
+		if _, err := ts.db.Writer.Exec(
+			`UPDATE assets SET derive_state = 'ok' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts.writeDerivative(t, glbID, "preview.glb", []byte("glTF-normalised"))
+
+	tests := []struct {
+		name string
+		id   int64
+		want string
+	}{
+		{"a normalised preview is used when it exists", glbID, itoa("/assets/%d/preview.glb", glbID)},
+		{"an fbx is loaded from the library, not from a preview that was never written",
+			fbxID, itoa("/assets/%d/file/barrel.fbx", fbxID)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := ts.body(t, ts.get(t, itoa("/assets/%d", tc.id)))
+			if !strings.Contains(body, `data-src="`+tc.want+`"`) {
+				t.Errorf("the viewer source is not %s", tc.want)
+			}
+			// And the 2D image viewer has no business on a model page: it used to
+			// render too, stacking an empty canvas under the 3D stage.
+			if strings.Contains(body, `id="viewer2d"`) {
+				t.Error("the 2D viewer should not appear on a model page")
+			}
+		})
+	}
+}
+
+// TestModelTextureFoundInPack: an FBX records the absolute path the artist had on
+// their own machine, so every loader falls back to the basename — and the basename is
+// usually not beside the model. In this library the texture is real, four directories
+// up in the pack's shared Textures/. Refusing it renders the model invisible, so it is
+// looked up within the pack.
+func TestModelTextureFoundInPack(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		// The layout KayKit ships: models deep under Assets/, textures at the pack root.
+		"hexpack/Assets/fbx/decoration/props/barrel.fbx": "Kaydara FBX Binary\x00",
+		"hexpack/Textures/hexagons_medieval.png":         "PACK-TEXTURE-BYTES",
+		"hexpack/Assets/fbx/decoration/beside.png":       "BESIDE-BYTES",
+		// A different pack, which must stay out of reach.
+		"otherpack/Textures/hexagons_medieval.png": "OTHER-PACK-BYTES",
+		"otherpack/Textures/only_in_other.png":     "OTHER-ONLY-BYTES",
+		"otherpack/secret.png":                     "OTHER-SECRET-BYTES",
+	})
+	id := ts.assetID(t, "hexpack/Assets/fbx/decoration/props/barrel.fbx")
+
+	// Found, from the pack root, by basename alone.
+	resp := ts.get(t, itoa("/assets/%d/file/hexagons_medieval.png", id))
+	body := ts.body(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the pack texture was not served: status = %d", resp.StatusCode)
+	}
+	if body != "PACK-TEXTURE-BYTES" {
+		t.Errorf("served %q, want the texture from this pack", body)
+	}
+
+	// The lookup walks up through the model's own ancestors, so a texture part-way up
+	// resolves too.
+	resp = ts.get(t, itoa("/assets/%d/file/beside.png", id))
+	if body := ts.body(t, resp); body != "BESIDE-BYTES" {
+		t.Errorf("an ancestor directory's texture was not served: %q", body)
+	}
+
+	// It never leaves the pack. Two ways of asking: a basename that exists in both
+	// packs must resolve to this one, and a basename that exists *only* in the other
+	// pack must not resolve at all.
+	if !strings.Contains(ts.body(t, ts.get(t, itoa("/assets/%d/file/hexagons_medieval.png", id))), "PACK-TEXTURE") {
+		t.Error("the wrong pack's copy was served for a name present in both")
+	}
+	resp = ts.get(t, itoa("/assets/%d/file/only_in_other.png", id))
+	if got := ts.body(t, resp); resp.StatusCode == http.StatusOK || strings.Contains(got, "OTHER-ONLY") {
+		t.Errorf("a texture from another pack was served (status %d, %q)", resp.StatusCode, got)
+	}
+	for _, name := range []string{"secret.png", "../../../../otherpack/secret.png"} {
+		resp := ts.get(t, itoa("/assets/%d/file/%s", id, name))
+		if got := ts.body(t, resp); strings.Contains(got, "OTHER-SECRET-BYTES") {
+			t.Errorf("%s leaked another pack's file", name)
+		}
+	}
+}
+
+// TestModelNonTextureStaysBesideTheModel: the pack-wide lookup is for textures only.
+// A .mtl or a .bin is genuinely relative to its model, and serving a same-named file
+// from elsewhere in the pack would hand the loader the wrong geometry.
+func TestModelNonTextureStaysBesideTheModel(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"pack/models/deep/hero.obj": "v 0 0 0\n",
+		"pack/hero.mtl":             "WRONG-MTL-BYTES",
+		"pack/scene.bin":            "WRONG-BIN-BYTES",
+	})
+	id := ts.assetID(t, "pack/models/deep/hero.obj")
+
+	for _, name := range []string{"hero.mtl", "scene.bin"} {
+		resp := ts.get(t, itoa("/assets/%d/file/%s", id, name))
+		body := ts.body(t, resp)
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("%s was served from elsewhere in the pack (%q)", name, body)
+		}
+		if strings.Contains(body, "WRONG-") {
+			t.Errorf("%s resolved to the wrong file", name)
+		}
 	}
 }

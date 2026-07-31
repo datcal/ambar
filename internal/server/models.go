@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/safepath"
 )
 
@@ -36,6 +37,19 @@ import (
 // Because the URL keeps the model's own basename, relative resolution inside the
 // loaders just works: /assets/12/file/hero.obj resolves `hero.mtl` to
 // /assets/12/file/hero.mtl without the viewer having to rewrite anything.
+//
+// One thing does have to be looser than "beside the model": textures. An FBX records
+// the absolute path the artist had on their own machine —
+//
+//   C:\Users\Kay Lousberg\...\Export Files\Textures\hexagons_medieval.png
+//
+// — which every loader reduces to the basename, and the basename is not beside the
+// model. In this library the file is real; it is four directories up, in the pack's
+// shared `Textures/`. Refusing it means the barrel renders untextured, so a texture
+// that is not beside its model is looked up within the model's own *pack*: each
+// directory from the model up to the pack root, plus a `Textures/` beside each. Still
+// bounded (a fixed handful of stat calls, never a walk), still inside one pack, still
+// through safepath.
 
 // modelCompanionExts are the files a model may pull in. Kept as an allow-list
 // rather than a deny-list: this route reads arbitrary names out of a model file,
@@ -44,6 +58,15 @@ var modelCompanionExts = map[string]bool{
 	// Geometry and scene files.
 	"obj": true, "mtl": true, "fbx": true, "gltf": true, "glb": true, "bin": true,
 	// Textures.
+	"png": true, "jpg": true, "jpeg": true, "webp": true, "bmp": true, "tga": true,
+	"ktx2": true, "dds": true, "hdr": true, "exr": true,
+}
+
+// companionTextureExts is the subset of the allow-list the pack-wide lookup applies
+// to. Geometry and material files (.mtl, .bin) are genuinely relative to the model and
+// a same-named file elsewhere in the pack would be the wrong file, so those stay
+// strictly beside the model; only textures get the wider search.
+var companionTextureExts = map[string]bool{
 	"png": true, "jpg": true, "jpeg": true, "webp": true, "bmp": true, "tga": true,
 	"ktx2": true, "dds": true, "hdr": true, "exr": true,
 }
@@ -98,9 +121,16 @@ func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
 			// hostile; either way it is logged and refused.
 			s.log.WarnContext(r.Context(), "refusing a model companion outside the library",
 				"asset_id", asset.ID, "requested", name, "error", err)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
 		}
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+		// Not beside the model. For a texture, look through the pack before giving up.
+		found, ok := s.findPackTexture(asset, rel)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		absPath = found
 	}
 
 	file, err := os.Open(absPath)
@@ -167,4 +197,61 @@ func (s *Server) handleAssetFont(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeContent(w, r, path.Base(asset.LibraryPath()), info.ModTime(), file)
+}
+
+// findPackTexture looks for a texture by basename inside the asset's own pack.
+//
+// Called only when the name was not found beside the model. The search is a fixed set
+// of candidates rather than a directory walk: each directory from the model up to the
+// pack root, and a `Textures/` (or `textures/`) beside each of them. That covers how
+// every pack in this library is actually laid out, costs a dozen stat calls at worst,
+// and cannot wander into another pack — the walk stops at the pack root, and every
+// candidate still goes through safepath (invariant 9).
+func (s *Server) findPackTexture(asset index.Asset, rel string) (string, bool) {
+	if !companionTextureExts[strings.ToLower(strings.TrimPrefix(path.Ext(rel), "."))] {
+		return "", false
+	}
+	base := path.Base(rel)
+	if base == "" || base == "." || base == ".." {
+		return "", false
+	}
+
+	// From the model's directory up to (and including) the pack root, expressed
+	// library-relative. A loose asset has no pack directory of its own, in which case
+	// packRoot is empty and this is just the model's own directory.
+	packRoot := strings.Trim(asset.PackRelPath, "/")
+	dir := strings.Trim(path.Dir(asset.LibraryPath()), "/")
+	if dir == "." {
+		dir = ""
+	}
+
+	for {
+		for _, candidate := range []string{base, "Textures/" + base, "textures/" + base} {
+			libRel := candidate
+			if dir != "" {
+				libRel = dir + "/" + candidate
+			}
+			abs, err := safepath.ResolveExisting(s.cfg.LibraryRoot, libRel)
+			if err != nil {
+				continue
+			}
+			if info, err := os.Stat(abs); err != nil || info.IsDir() {
+				continue
+			}
+			return abs, true
+		}
+		if dir == "" || dir == packRoot {
+			return "", false
+		}
+		parent := path.Dir(dir)
+		if parent == "." || parent == "/" || parent == dir {
+			// Above the pack root: stop rather than search the whole library.
+			if packRoot == "" {
+				return "", false
+			}
+			dir = ""
+			continue
+		}
+		dir = parent
+	}
 }
