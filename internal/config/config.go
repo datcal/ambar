@@ -88,11 +88,14 @@ type Config struct {
 
 	Workers int // M2, worker pool
 
-	MaxUploadSize          int64         // M4, web upload cap
+	MaxUploadSize          int64         // M4 web upload cap; 0 means no cap (M16)
 	MaxArchiveUncompressed int64         // M4, zip-bomb defence
 	MaxArchiveEntries      int           // M4, zip-bomb defence (entry count)
 	InboxPollInterval      time.Duration // M4, _inbox polling
-	KeepArchives           bool          // M4, retain originals in _archives/ (§9)
+	// NightlyScanAt is the time of day for the automatic scan, as an offset from midnight
+	// local time. Negative disables it (M16).
+	NightlyScanAt time.Duration
+	KeepArchives  bool // M4, retain originals in _archives/ (§9)
 
 	BackupInterval time.Duration // M11, zero disables the internal scheduler
 	BackupDir      string        // M11
@@ -209,10 +212,14 @@ func Load() (*Config, error) {
 		fail("AMBAR_WORKERS must be at least 1, got %d", c.Workers)
 	}
 
-	if c.MaxUploadSize, err = envInt64("AMBAR_MAX_UPLOAD_SIZE", 104857600); err != nil {
+	// 0 means no cap, which is the default (M16). The old 100 MB ceiling was set when the
+	// upload buffered the whole body through TMPDIR; it now streams straight to _inbox in
+	// constant memory, and on a LAN the packs people actually download are bigger than that.
+	// A cap is still honoured when one is set — for an instance exposed beyond the LAN.
+	if c.MaxUploadSize, err = envInt64("AMBAR_MAX_UPLOAD_SIZE", 0); err != nil {
 		fail("%w", err)
-	} else if c.MaxUploadSize < 1 {
-		fail("AMBAR_MAX_UPLOAD_SIZE must be positive, got %d", c.MaxUploadSize)
+	} else if c.MaxUploadSize < 0 {
+		fail("AMBAR_MAX_UPLOAD_SIZE cannot be negative (0 means no cap), got %d", c.MaxUploadSize)
 	}
 
 	if c.MaxArchiveUncompressed, err = envInt64("AMBAR_MAX_ARCHIVE_UNCOMPRESSED", 21474836480); err != nil {
@@ -238,6 +245,12 @@ func Load() (*Config, error) {
 	}
 
 	// Empty disables the internal scheduler (§13), so zero is legal here.
+	// One scan a night, at 05:00 local by default — early enough to be done before anyone
+	// starts work, and the only scheduled job in the application. "off" disables it.
+	if c.NightlyScanAt, err = envClock("AMBAR_NIGHTLY_SCAN", 5*time.Hour); err != nil {
+		fail("%v", err)
+	}
+
 	if c.BackupInterval, err = envDurationDisableable("AMBAR_BACKUP_INTERVAL", time.Hour); err != nil {
 		fail("%w", err)
 	} else if c.BackupInterval < 0 {
@@ -438,6 +451,28 @@ func envDurationDisableable(key string, def time.Duration) (time.Duration, error
 		return 0, nil
 	}
 	return envDuration(key, def)
+}
+
+// envClock reads a time of day as "HH:MM" and returns it as an offset from midnight.
+//
+// "off", "none" and "" disable the thing it schedules, returning -1 — distinguishable from
+// 00:00, which is a legitimate (if odd) choice of hour.
+func envClock(key string, def time.Duration) (time.Duration, error) {
+	raw, set := os.LookupEnv(key)
+	if !set {
+		return def, nil
+	}
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "", "off", "none", "disabled":
+		return -1, nil
+	}
+
+	parsed, err := time.Parse("15:04", value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be HH:MM (24-hour) or \"off\", got %q", key, raw)
+	}
+	return time.Duration(parsed.Hour())*time.Hour + time.Duration(parsed.Minute())*time.Minute, nil
 }
 
 func mustAbs(path, key string, fail func(string, ...any)) string {

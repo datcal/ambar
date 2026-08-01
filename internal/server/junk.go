@@ -21,6 +21,7 @@ import (
 // a GET). The page reads the cached result and offers a button to run a fresh sweep.
 func (s *Server) handleJunk(w http.ResponseWriter, r *http.Request) {
 	data := s.newPageData(r)
+	data.Nav = "junk"
 	data.Flash = r.URL.Query().Get("msg")
 
 	stored, err := junk.LoadReport(s.cfg.DataRoot)

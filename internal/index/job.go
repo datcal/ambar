@@ -39,9 +39,12 @@ func (ix *Indexer) RegisterScanJob(q *jobs.Queue, onComplete func(context.Contex
 			}
 		}
 
+		// A queued scan reports its progress; the CLI's does not, because there is nobody
+		// polling a terminal. jobs.Reporter throttles the writes and is a no-op outside a job.
 		report, err := ix.Scan(ctx, ScanOptions{
 			DryRun:         p.DryRun,
 			ReadDimensions: p.ReadDimensions,
+			Progress:       q.Reporter(ctx),
 		})
 		if err != nil {
 			return err

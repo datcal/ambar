@@ -1,9 +1,6 @@
 package palette
 
 import (
-	"bytes"
-	"encoding/json"
-	"image/png"
 	"strings"
 	"testing"
 )
@@ -44,48 +41,6 @@ func TestExportGPL(t *testing.T) {
 	}
 }
 
-func TestExportTXT(t *testing.T) {
-	out, err := Export(samplePalette(), "", FormatTXT)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "#8b3a3a\n#000000\n#ffffff\n"
-	if string(out) != want {
-		t.Errorf("TXT = %q, want %q", out, want)
-	}
-}
-
-func TestExportJSONRoundTrips(t *testing.T) {
-	out, err := Export(samplePalette(), "", FormatJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Kind   string   `json:"kind"`
-		Colors []Swatch `json:"colors"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.Kind != KindExact || len(got.Colors) != 3 {
-		t.Fatalf("got kind=%q colors=%d", got.Kind, len(got.Colors))
-	}
-	if got.Colors[0].Count != 10 || got.Colors[0].Ratio != 0.5 {
-		t.Errorf("counts/ratios not retained: %+v", got.Colors[0])
-	}
-}
-
-func TestExportCSS(t *testing.T) {
-	out, err := Export(samplePalette(), "", FormatCSS)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(out)
-	if !strings.Contains(s, "--color-1: #8b3a3a;") || !strings.Contains(s, ":root {") {
-		t.Errorf("unexpected CSS:\n%s", s)
-	}
-}
-
 func TestExportGDScript(t *testing.T) {
 	out, err := Export(samplePalette(), "Pack", FormatGDScript)
 	if err != nil {
@@ -117,25 +72,9 @@ func TestExportTRES(t *testing.T) {
 	}
 }
 
-func TestExportPNGStrip(t *testing.T) {
-	out, err := Export(samplePalette(), "", FormatPNG)
-	if err != nil {
-		t.Fatal(err)
-	}
-	img, err := png.Decode(bytes.NewReader(out))
-	if err != nil {
-		t.Fatalf("decode PNG: %v", err)
-	}
-	b := img.Bounds()
-	if b.Dx() != 3 || b.Dy() != 1 {
-		t.Fatalf("strip is %dx%d, want 3x1", b.Dx(), b.Dy())
-	}
-	r, g, bl, _ := img.At(0, 0).RGBA()
-	if r>>8 != 0x8b || g>>8 != 0x3a || bl>>8 != 0x3a {
-		t.Errorf("first pixel = %d,%d,%d, want 139,58,58", r>>8, g>>8, bl>>8)
-	}
-}
-
+// The four formats these tests used to cover — .txt, .json, .css and .png — were removed with
+// their links in M16, so an old URL for one now takes the ErrUnknownFormat path below. That is
+// the behaviour worth asserting; the exporters themselves are gone.
 func TestExportUnknownFormat(t *testing.T) {
 	if _, err := Export(samplePalette(), "", "xcf"); err == nil {
 		t.Error("expected an error for an unknown format")

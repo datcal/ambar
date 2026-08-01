@@ -21,6 +21,7 @@ import (
 // pack's hash set and every image's perceptual hash is not GET work.
 func (s *Server) handleDupes(w http.ResponseWriter, r *http.Request) {
 	data := s.newPageData(r)
+	data.Nav = "dupes"
 	data.Flash = r.URL.Query().Get("msg")
 
 	stored, err := dupes.LoadReport(s.cfg.DataRoot)

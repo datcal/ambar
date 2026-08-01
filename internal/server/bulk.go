@@ -90,6 +90,10 @@ func (s *Server) handleSaveSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	// The sidebar lists saved searches from a cached snapshot, so a write that the user
+	// is about to look at has to drop it. Without this the search you just pinned would
+	// not appear for up to a minute, which reads as "the button did nothing".
+	s.nav.invalidate()
 	s.redirectWithMessage(w, r, back, fmt.Sprintf("Saved search %q.", name))
 }
 
@@ -105,6 +109,7 @@ func (s *Server) handleDeleteSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	s.nav.invalidate()
 	s.redirectWithMessage(w, r, "/assets", "Deleted saved search.")
 }
 

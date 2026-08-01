@@ -70,18 +70,29 @@ func TestPaletteApproximateBadge(t *testing.T) {
 	}
 }
 
+// A removed format is a 404, not a 500 or an empty file.
+func TestPaletteExportRemovedFormats(t *testing.T) {
+	ts, id := paletteTestServer(t)
+	for _, format := range []string{"txt", "json", "css", "png"} {
+		resp := ts.get(t, itoa("/assets/%d/palette/%s", id, format))
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf(".%s returned %d, want 404", format, resp.StatusCode)
+		}
+	}
+}
+
 func TestPaletteExportFormats(t *testing.T) {
 	ts, id := paletteTestServer(t)
 
+	// Three formats since M16: .gpl for Aseprite/GIMP/Krita, .gd and .tres for Godot. The
+	// other four (.txt, .json, .css, .png) were removed with the links to them, and an old URL
+	// for one now 404s — asserted below.
 	cases := []struct {
 		format      string
 		contentType string
 		wantFrag    string
 	}{
 		{"gpl", "text/plain; charset=utf-8", "GIMP Palette"},
-		{"txt", "text/plain; charset=utf-8", "#8b3a3a\n"},
-		{"json", "application/json", `"kind": "exact"`},
-		{"css", "text/plain; charset=utf-8", "--color-1: #8b3a3a;"},
 		{"gd", "text/plain; charset=utf-8", "Color(0.545, 0.227, 0.227)"},
 		{"tres", "text/plain; charset=utf-8", `type="Gradient"`},
 	}
@@ -102,21 +113,6 @@ func TestPaletteExportFormats(t *testing.T) {
 				t.Errorf("%s body missing %q:\n%s", tc.format, tc.wantFrag, body)
 			}
 		})
-	}
-}
-
-func TestPaletteExportPNGStrip(t *testing.T) {
-	ts, id := paletteTestServer(t)
-	resp := ts.get(t, itoa("/assets/%d/palette/png", id))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
-		t.Errorf("Content-Type = %q, want image/png", ct)
-	}
-	body := ts.body(t, resp)
-	if !strings.HasPrefix(body, "\x89PNG") {
-		t.Errorf("body is not a PNG (prefix %q)", body[:min(4, len(body))])
 	}
 }
 

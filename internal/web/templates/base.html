@@ -3,26 +3,38 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {{/* Read by JS islands that POST outside htmx (the audition quick-tag, §8). */}}
+  {{/* Read by JS islands that POST outside htmx (the browser-rendered model thumbnail
+       upload, M15). */}}
   <meta name="csrf-token" content="{{.CSRF}}">
   <title>{{block "title" .}}Ambar{{end}}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="/static/htmx.min.js" defer></script>
+  {{/* ?v= is the cache buster (M16). Without it the one-hour TTL on /static meant a
+       deployed CSS or JS change did not appear until a manual hard refresh, so a fix
+       looked like it had done nothing. The version is stamped in at link time. */}}
+  <link rel="stylesheet" href="/static/app.css?v={{.Version}}">
+  <script src="/static/htmx.min.js?v={{.Version}}" defer></script>
   {{/* The §8 viewer, as an ES module island. It looks for .viewer and does nothing
        when the page has none, so loading it everywhere costs one cached request. */}}
-  <script src="/static/viewer2d.js" type="module"></script>
+  <script src="/static/viewer2d.js?v={{.Version}}" type="module"></script>
   {{/* §8 audio viewer island; a no-op on pages without #audio-viewer. */}}
-  <script src="/static/audio.js" defer></script>
-  {{/* §8 keyboard audition island; dormant until the grid has audio tiles. */}}
-  <script src="/static/audition.js" defer></script>
+  <script src="/static/audio.js?v={{.Version}}" defer></script>
   {{/* §9.1 select-all-in-a-finding island; does nothing on pages with no findings. */}}
-  <script src="/static/removal.js" defer></script>
+  <script src="/static/removal.js?v={{.Version}}" defer></script>
   {{/* The workspace shell: thumbnail size, panel state. A no-op on document pages. */}}
-  <script src="/static/workspace.js" defer></script>
+  <script src="/static/workspace.js?v={{.Version}}" defer></script>
+  {{/* M16 live background work: the sidebar's scan line and the jobs table. */}}
+  <script src="/static/jobs.js?v={{.Version}}" defer></script>
+  {{/* M16 upload island: drag and drop, progress, destination. Dormant off /upload. */}}
+  <script src="/static/upload.js?v={{.Version}}" defer></script>
+  {{/* M16 search island: completion, recent searches, the / shortcut. */}}
+  <script src="/static/search.js?v={{.Version}}" defer></script>
+  {{/* M16 grid island: hover animation, keyboard navigation, selection across pages. */}}
+  <script src="/static/grid.js?v={{.Version}}" defer></script>
+  {{/* M16 keyboard browsing: j/k between assets. Dormant without the rail's links. */}}
+  <script src="/static/assetnav.js?v={{.Version}}" defer></script>
   {{/* §14 "open in…" path copying; dormant without the panel. */}}
-  <script src="/static/openwith.js" defer></script>
+  <script src="/static/openwith.js?v={{.Version}}" defer></script>
   {{/* Paints colour chips from data-hex (sidebar filter, pack strips, palette). */}}
-  <script src="/static/palette-strip.js" defer></script>
+  <script src="/static/palette-strip.js?v={{.Version}}" defer></script>
 </head>
 {{/*
   §11: configure hx-headers globally so every htmx request carries the CSRF
@@ -44,24 +56,33 @@
     {{if .User}}
       {{/* Search belongs in the toolbar, not inside one page: it is how the library
            is used, so it sits in the same place on every screen. */}}
-      <form method="get" action="/" class="topsearch" role="search">
+      {{/* M16: the placeholder was a five-example syntax lesson in a box too narrow to read
+           it in. The completion list teaches the syntax now — type "t" and see what type:
+           does — so this says what the box is for and gets out of the way. */}}
+      <form method="get" action="/" class="topsearch" role="search" id="search-form"
+            autocomplete="off">
         <input type="search" name="q" value="{{.Search}}"
-               placeholder="Search — wooden sword · type:model · theme:sci-fi · color:#8b3a3a · -style:realistic"
+               placeholder="Search the library — press /"
                autocomplete="off" autocapitalize="none" spellcheck="false"
-               aria-label="Search the library">
+               aria-label="Search the library"
+               role="combobox" aria-expanded="false" aria-controls="search-suggest"
+               data-role="search-input">
         {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
         {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+        <div class="suggest" id="search-suggest" data-role="suggest" hidden></div>
       </form>
     {{end}}
 
+    {{/* M16: four destinations, not six. `duplicates` and `junk` used to sit here *and*
+         in the library sidebar's Tools section *and* in the asset page's own sidebar —
+         three copies of the same links, and this was the only copy with no counts. They
+         live in the sidebar's Maintenance group now, where the counts are. */}}
     <nav class="topnav">
       {{if .User}}
-        <a href="/">library</a>
-        <a href="/upload">upload</a>
-        <a href="/dupes">duplicates</a>
-        <a href="/junk">junk</a>
-        <a href="/settings">settings</a>
-        <a href="/status">status</a>
+        <a href="/" {{if eq .Nav "library"}}aria-current="page"{{end}}>library</a>
+        <a href="/upload" {{if eq .Nav "upload"}}aria-current="page"{{end}}>upload</a>
+        <a href="/status" {{if eq .Nav "status"}}aria-current="page"{{end}}>status</a>
+        <a href="/settings" {{if eq .Nav "settings"}}aria-current="page"{{end}}>settings</a>
         <span class="who">{{.User.Username}}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">

@@ -125,6 +125,12 @@ func compileTerm(ctx context.Context, t Term, alias string, r TagResolver, sr Sw
 			val = term.Date
 		}
 		return negate(fmt.Sprintf("%s.%s %s ?", alias, col, term.Op), term.Neg), []any{val}, nil
+	case DimensionsTerm:
+		// Both columns are NULL for anything without pixels (audio, fonts), and NULL never
+		// equals a number, so those fall out without a special case.
+		return negate(fmt.Sprintf("(%s.width = ? AND %s.height = ?)", alias, alias), term.Neg),
+			[]any{term.W, term.H}, nil
+
 	case ColorTerm:
 		return colourBoxExpr(alias, term.R, term.G, term.B, term.Tolerance, term.Neg)
 	case PaletteNearTerm:
@@ -186,6 +192,13 @@ func hasExpr(alias, flag string) string {
 		return fmt.Sprintf("coalesce(%s.frame_count, 0) > 1", alias)
 	case "semitransparent":
 		return fmt.Sprintf("coalesce(%s.has_semitransparent, 0) = 1", alias)
+	case "provenance":
+		// Provenance lives on the pack (§9), so this is the one has: flag that joins. It
+		// replaced the /provenance backlog page in M16: `-has:provenance` is that list, except
+		// it lands in the grid where every asset can be fixed on its own detail page — which
+		// matters because a pack is often a single loose PNG rather than a folder.
+		return fmt.Sprintf(
+			"%s.pack_id IN (SELECT id FROM packs WHERE provenance_state = 'complete')", alias)
 	}
 	return "0 = 1"
 }

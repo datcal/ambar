@@ -27,8 +27,9 @@
     );
     if (!pending.length || typeof THREE === "undefined") return;
 
-    // How many to render per page load. Enough that a page of models fills in while
-    // you look at it, small enough that nothing stutters.
+    // Fallback cap, used only when the browser has no IntersectionObserver and there is
+    // therefore no way to tell what the reader has actually looked at. With one, every
+    // tile scrolled past is rendered and this number is not consulted (M17).
     var BUDGET = 12;
     var SIZE = 512;
 
@@ -274,9 +275,17 @@
 
     // Only what has been seen. An IntersectionObserver keeps a 500-model page from
     // rendering anything the user never scrolled to.
-    var budget = BUDGET;
+    //
+    // M17: no per-page-load cap any more. There was one — twelve — and the arithmetic
+    // was against it: 244 models in this library still had no thumbnail, a page shows a
+    // hundred tiles, so filling one page took about twenty visits. "Çoğu model dosyasının
+    // görüntüsü yok" was that cap, not a failure to render. Everything you actually
+    // scroll past now gets its turn, still strictly one at a time through the single
+    // WebGL context, so the queue is a background trickle rather than a burst.
     if (typeof IntersectionObserver === "undefined") {
-        queue = pending.slice(0, budget);
+        // No observer: fall back to a fixed slice, because without visibility
+        // information "everything" would mean every tile on the page at once.
+        queue = pending.slice(0, BUDGET);
         next();
         return;
     }
@@ -284,9 +293,8 @@
     var observer = new IntersectionObserver(
         function (entries) {
             entries.forEach(function (entry) {
-                if (!entry.isIntersecting || budget <= 0) return;
+                if (!entry.isIntersecting) return;
                 observer.unobserve(entry.target);
-                budget -= 1;
                 queue.push(entry.target);
                 next();
             });

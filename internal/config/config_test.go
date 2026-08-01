@@ -68,8 +68,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Workers != 2 {
 		t.Errorf("Workers = %d, want 2", cfg.Workers)
 	}
-	if cfg.MaxUploadSize != 104857600 {
-		t.Errorf("MaxUploadSize = %d, want 104857600", cfg.MaxUploadSize)
+	// M16: no cap by default. The 100 MB ceiling existed because the upload buffered the
+	// whole body through TMPDIR; it streams now, and on a LAN the packs people download are
+	// bigger than that.
+	if cfg.MaxUploadSize != 0 {
+		t.Errorf("MaxUploadSize = %d, want 0 (no cap)", cfg.MaxUploadSize)
 	}
 	if cfg.MaxArchiveUncompressed != 21474836480 {
 		t.Errorf("MaxArchiveUncompressed = %d, want 21474836480", cfg.MaxArchiveUncompressed)
@@ -126,7 +129,7 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		{"non-numeric workers", "AMBAR_WORKERS", "many", "must be an integer"},
 		{"zero workers", "AMBAR_WORKERS", "0", "at least 1"},
 		{"negative workers", "AMBAR_WORKERS", "-1", "at least 1"},
-		{"zero upload size", "AMBAR_MAX_UPLOAD_SIZE", "0", "must be positive"},
+		{"negative upload size", "AMBAR_MAX_UPLOAD_SIZE", "-1", "cannot be negative"},
 		{"zero archive cap", "AMBAR_MAX_ARCHIVE_UNCOMPRESSED", "0", "must be positive"},
 		{"bad duration", "AMBAR_INBOX_POLL_INTERVAL", "30 seconds", "must be a duration"},
 		{"poll too fast", "AMBAR_INBOX_POLL_INTERVAL", "10ms", "at least 1s"},

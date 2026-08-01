@@ -9,10 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
-	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/safepath"
 )
 
@@ -163,6 +161,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := s.newPageData(r)
+	data.Nav = "jobs"
 	data.Jobs = recent
 	data.JobStats = &jobStats
 	data.DeriveStats = &deriveStats
@@ -170,32 +169,8 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "jobs.html", http.StatusOK, data)
 }
 
-// handleScan starts a library scan.
-//
-// This is what invariant 8 requires: the handler enqueues and returns immediately
-// rather than walking twenty thousand files inside an HTTP request. §12 wanted scan
-// runnable from the UI, and the job queue is what finally makes that legal.
-func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
-	var username string
-	if u, ok := auth.UserFromContext(r.Context()); ok {
-		username = u.Username
-	}
-
-	id, err := index.EnqueueScan(r.Context(), s.jobs, index.ScanJobPayload{ReadDimensions: true})
-	switch {
-	case errors.Is(err, jobs.ErrDuplicate):
-		// Already running. Not an error worth showing as one.
-		s.log.InfoContext(r.Context(), "scan requested but one is already pending")
-	case err != nil:
-		s.log.ErrorContext(r.Context(), "could not enqueue a scan", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	default:
-		s.log.InfoContext(r.Context(), "scan enqueued from the UI", "job_id", id, "user", username)
-	}
-
-	http.Redirect(w, r, "/jobs", http.StatusSeeOther)
-}
+// The old handleScan lived here and redirected to /jobs. M16 replaced it with handleScanNow
+// (jobstatus.go), which acknowledges in place and leaves the user on the page they were on.
 
 // handleRetryFailed requeues failed work.
 //

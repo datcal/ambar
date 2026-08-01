@@ -7,8 +7,11 @@
 package model
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -60,11 +63,102 @@ func process(srcPath, destGLB string) (Info, error) {
 	info := extract(doc)
 
 	if destGLB != "" {
+		embed(doc, filepath.Dir(srcPath))
 		if err := gltf.SaveBinary(doc, destGLB); err != nil {
 			return Info{}, fmt.Errorf("write preview.glb: %w", err)
 		}
 	}
 	return info, nil
+}
+
+// embed makes the document self-contained, which "normalise everything to preview.glb"
+// (§6) always meant and this package did not do.
+//
+// The encoder writes a BIN chunk only when the first buffer has no URI, and a .gltf's
+// first buffer always has one — the name of the .bin beside it. So SaveBinary wrote a
+// 1.4 KB glb still pointing at a 202 KB file and helpfully copied that file into the
+// derivative directory, where nothing serves it. Every glTF in the library opened to an
+// empty stage (M17).
+//
+// Clearing the URI is the whole fix for geometry: the decoder has already read the
+// bytes into Data. Later buffers, which are rare, become base64 data URIs. Images are
+// read from beside the model and inlined the same way.
+//
+// What this cannot do is find a texture that is not beside the model — an FBX-exported
+// pack keeps them in a shared Textures/ directory several levels up, and resolving that
+// needs the pack boundary, which this package does not know. Those keep their URI and
+// are the viewer's problem, which is why the viewer loads originals through the
+// companion route and its pack-wide lookup. A best-effort pass: anything unresolvable
+// is left exactly as it was rather than failing the derive.
+func embed(doc *gltf.Document, srcDir string) {
+	for i, buf := range doc.Buffers {
+		if buf.URI == "" || len(buf.Data) == 0 {
+			continue
+		}
+		if i == 0 {
+			// Becomes the GLB's BIN chunk. Worth doing even for a buffer that was
+			// already a base64 data URI: the chunk is the same bytes without the
+			// third they gain from base64.
+			buf.URI = ""
+		} else if !buf.IsEmbeddedResource() {
+			buf.EmbeddedResource()
+		}
+	}
+
+	for _, img := range doc.Images {
+		if img.URI == "" || strings.HasPrefix(img.URI, "data:") {
+			continue
+		}
+		data, mime, ok := readLocalAsset(srcDir, img.URI)
+		if !ok {
+			continue
+		}
+		img.URI = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+	}
+}
+
+// readLocalAsset reads a file a model refers to by relative URI, refusing to leave the
+// model's own directory.
+//
+// Invariant 9 in miniature: the name comes out of a file in the library, which is data
+// rather than input we control, so it is unescaped, cleaned, and rejected if it climbs
+// out — no absolute paths, no "..", no URLs.
+func readLocalAsset(srcDir, uri string) ([]byte, string, bool) {
+	name, err := url.PathUnescape(uri)
+	if err != nil || name == "" {
+		return nil, "", false
+	}
+	if strings.Contains(name, "://") || filepath.IsAbs(name) || strings.HasPrefix(name, "/") {
+		return nil, "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || strings.HasPrefix(clean, "..") {
+		return nil, "", false
+	}
+	data, err := os.ReadFile(filepath.Join(srcDir, clean))
+	if err != nil {
+		return nil, "", false
+	}
+	mime := imageMIME(filepath.Ext(clean))
+	if mime == "" {
+		return nil, "", false
+	}
+	return data, mime, true
+}
+
+// imageMIME maps the texture formats glTF allows to their media types. An allow-list:
+// a model naming a .exe as its base-colour texture gets nothing inlined.
+func imageMIME(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	default:
+		return ""
+	}
 }
 
 // readDocument loads a model into a glTF document, converting OBJ on the way.

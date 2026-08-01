@@ -280,6 +280,15 @@ func runServe(args []string) error {
 		log.Info("watching _inbox for archives", "interval", cfg.InboxPollInterval)
 	}
 
+	// One scan a night, in the small hours (M16). Nothing else is scheduled: invariant 3 says
+	// the application never removes anything on its own, and this is the only kind of
+	// background work that cannot break it.
+	if cfg.NightlyScanAt >= 0 {
+		go runNightlyScan(ctx, queue, cfg.NightlyScanAt, log)
+	} else {
+		log.Info("nightly scan disabled")
+	}
+
 	// Serve in the background so the main goroutine can wait on the signal.
 	serveErr := make(chan error, 1)
 	go func() {

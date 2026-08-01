@@ -18,9 +18,9 @@
   {{end}}
 
   <div class="actions-row">
-    <form method="post" action="/scan" class="inline">
+    <form method="post" action="/scan" class="inline" data-role="scan-form">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit">Scan the library</button>
+      <button type="submit" class="primary">Scan the library</button>
     </form>
 
     {{if and .JobStats (or .JobStats.Failed (and .DeriveStats .DeriveStats.Failed))}}
@@ -48,13 +48,19 @@
     </div>
   {{end}}
 
+  {{/* Live (M16): jobs.js polls while anything is running and reloads this page when the queue
+       goes idle, because what you came here for is the *result* — what failed and what it said.
+       The progress column is the other half: a scan of twenty thousand files used to say
+       "running" for four minutes. */}}
   {{if .Jobs}}
-    <div class="tablewrap">
+    <div class="tablewrap" data-role="jobs-table"
+         data-working="{{if .JobStats}}{{if .JobStats.Pending}}true{{else}}false{{end}}{{else}}false{{end}}">
       <table class="grid">
         <thead>
           <tr>
             <th scope="col">Job</th>
             <th scope="col">State</th>
+            <th scope="col">Progress</th>
             <th scope="col" class="num">Tries</th>
             <th scope="col" class="num">Took</th>
             <th scope="col">Created</th>
@@ -66,6 +72,16 @@
             <tr>
               <td><code>{{.Type}}</code> <span class="dir">#{{.ID}}</span></td>
               <td><span class="state state-{{.State}}">{{.State}}</span></td>
+              <td>
+                {{if ge .Percent 0}}
+                  <span class="jobprogress" title="{{.ProgressDone}} of {{.ProgressTotal}}{{with .ProgressNote}} · {{.}}{{end}}">
+                    <span class="jobprogress-bar" data-percent="{{.Percent}}"></span>
+                    <span class="jobprogress-text">{{.Percent}}%</span>
+                  </span>
+                {{else if .ProgressNote}}
+                  <span class="hint">{{.ProgressNote}}</span>
+                {{else}}—{{end}}
+              </td>
               <td class="num">{{.Attempts}}</td>
               <td class="num">{{if .StartedAt}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td>
               <td>{{jobAge .CreatedAt}}</td>
@@ -78,10 +94,7 @@
   {{else}}
     <div class="card">
       <p>No background work to show.</p>
-      <p class="hint">
-        Scanning and preview generation both run here. Start a scan with the button
-        above, or from the command line with <code>ambar scan</code>.
-      </p>
+      <p class="hint">Scanning and preview generation both run here.</p>
     </div>
   {{end}}
 </div>

@@ -26,7 +26,9 @@
     <a href="/dupes">duplicates</a>
     <a href="/trash">trash</a>
     {{if .JunkRunning}}
-      <span class="hint">A scan is running — watch <a href="/jobs">background work</a>, then reload.</span>
+      {{/* M16: no longer "then reload" — the sidebar's line is live, and this page's own
+           status comes from the same poller. */}}
+      <span class="hint" data-role="scan-line">A sweep is running…</span>
     {{end}}
   </div>
 

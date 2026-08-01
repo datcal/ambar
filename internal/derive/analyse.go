@@ -72,6 +72,31 @@ const (
 	// Few enough colours to be a hand-picked palette rather than a photograph.
 	pixelArtMaxColors = 256
 
+	// Below this, colour count decides alone and the transition test is skipped.
+	//
+	// This exists because the transition test has a blind spot that measurement on a
+	// real library exposed: it cannot tell a one-pixel step between two *adjacent*
+	// palette entries from a one-pixel antialiasing blend. Shaded pixel art is full of
+	// the former — a skin ramp steps by 15-40 per channel, well under hardEdgeThreshold
+	// — so every shaded sprite scored as "soft" and was smoothly resized.
+	//
+	// Measured on the real library (see TestPixelArtDetection's shaded cases):
+	//
+	//	card-template-icon.png    5 colours   softRatio 0.676   unmistakably pixel art
+	//	ui_top_background.png    15 colours   softRatio 0.459   unmistakably pixel art
+	//	ui-right.aseprite        19 colours   softRatio 0.447   unmistakably pixel art
+	//	npc12.png (sprite sheet) 28 colours   softRatio 0.643   unmistakably pixel art
+	//	Win_loose.png            41 colours   softRatio 0.534   unmistakably pixel art
+	//	TileSet_V2.png           65 colours   softRatio 0.597   unmistakably pixel art
+	//	antialiased vector shape 120 colours  softRatio 0.542   genuinely smooth
+	//
+	// The threshold sits in the gap between the two populations. It is deliberately
+	// nearer the sprites than the vector shape, because the two errors do not cost the
+	// same: treating smooth art as pixel art gives a slightly aliased thumbnail, while
+	// treating pixel art as smooth destroys the artwork — which §6 calls "the single
+	// most annoying failure of every existing tool".
+	pixelArtCertainColors = 96
+
 	// Of the transitions in the image, fewer than this fraction may be gradual.
 	// Measured: a flat-palette sprite scores about 0.0, an antialiased vector shape
 	// about 0.54, and a photograph close to 1.0.
@@ -141,16 +166,28 @@ func Analyse(img image.Image) Analysis {
 
 	a.SoftTransitionRatio, a.TransitionSamples = measureTransitions(img, step)
 
-	// Both signals must agree. Colour count alone would catch a flat vector icon;
-	// transition sharpness alone would catch a two-tone photograph.
-	if a.TransitionSamples < minTransitions {
-		// Too few transitions to measure. Colour count decides, and the answer is
-		// inconsequential: an image this uniform is either tiny (returned untouched by
-		// Fit) or flat enough that both filters agree.
-		a.IsPixelArt = a.ColorCount <= pixelArtMaxColors
-	} else {
-		a.IsPixelArt = a.ColorCount <= pixelArtMaxColors &&
-			a.SoftTransitionRatio < pixelArtMaxSoftRatio
+	switch {
+	case a.ColorCount > pixelArtMaxColors:
+		// A hand-picked palette this large is a photograph or a render.
+		a.IsPixelArt = false
+
+	case a.ColorCount <= pixelArtCertainColors:
+		// Colour count alone is conclusive down here, and the transition test must not
+		// get a veto: it cannot distinguish a one-pixel step between adjacent palette
+		// entries from a one-pixel antialiasing blend, so it rejects shaded pixel art.
+		// See the pixelArtCertainColors comment for the measurements.
+		a.IsPixelArt = true
+
+	case a.TransitionSamples < minTransitions:
+		// Too few transitions to measure, so the count decides on its own. An image
+		// this uniform is either tiny (returned untouched by Fit) or flat enough that
+		// both resize filters agree.
+		a.IsPixelArt = true
+
+	default:
+		// The band where the two populations overlap: enough colours that a smooth
+		// gradient is plausible, so edge sharpness breaks the tie.
+		a.IsPixelArt = a.SoftTransitionRatio < pixelArtMaxSoftRatio
 	}
 	return a
 }

@@ -91,6 +91,18 @@ type ScanOptions struct {
 	DryRun bool
 	// ReadDimensions reads image headers for width and height (§5 step 4).
 	ReadDimensions bool
+
+	// Progress is called as the scan works through the library, so the UI can say
+	// "2431 / 20000 files" instead of "running" for four minutes (M16). Nil is fine and is
+	// what the CLI passes; the queue's jobs.Reporter throttles the writes.
+	Progress func(done, total int64, note string)
+}
+
+// report calls the progress hook if there is one.
+func (o ScanOptions) report(done, total int64, note string) {
+	if o.Progress != nil {
+		o.Progress(done, total, note)
+	}
 }
 
 // ScanReport is the outcome of one scan, and what the CLI prints.
@@ -197,7 +209,12 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 
 	now := ix.now().Unix()
 
-	for _, f := range walked.Files {
+	total := int64(len(walked.Files))
+	for i, f := range walked.Files {
+		// Hashing is the slow part, and it is in this loop, so this is where the number the
+		// operator is waiting on lives.
+		opts.report(int64(i), total, "checking files")
+
 		key := libraryPath(f.PackRelPath, f.RelPath)
 		seen[key] = true
 
@@ -251,6 +268,14 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 	}
 
 	// --- phase 3: absent rows, and the moves hiding among them ---
+
+	// Each phase says what it is doing, because the file count only describes phase 2. On a
+	// library where nothing changed, phase 2 is over in a moment and the remaining seconds are
+	// spent here and in regrouping — which used to be reported as "running" and nothing else.
+	// Zero total, not total/total: this phase has no count of its own, and reporting 100% while
+	// it is still working — move detection hashes files, so it is where the seconds go on a
+	// library where nothing changed — would be a bar that lies.
+	opts.report(0, 0, "matching moved files")
 
 	var absent []existingAsset
 	for key, prior := range existing {
@@ -353,12 +378,14 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 	// One transaction for all asset writes. §4 routes every write through the
 	// single writer connection, so there is no concurrency to lose here, and a
 	// 20k scan must not become 20k transactions.
+	opts.report(0, 0, "writing the index")
 	if err := ix.applyUpdates(ctx, updates); err != nil {
 		return nil, err
 	}
 
 	// Grouping is derived from rel_path alone, so it costs no file reads and must run
 	// after reconciliation has settled every path (§5.1).
+	opts.report(0, 0, "grouping format variants")
 	groupStats, err := ix.Regroup(ctx)
 	if err != nil {
 		return nil, err

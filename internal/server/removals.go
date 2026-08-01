@@ -183,6 +183,10 @@ func (s *Server) handleRemovalApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Asset counts are about to change, and the sidebar shows them from a cached
+	// snapshot (sidebar.go).
+	s.nav.invalidate()
+
 	msg := fmt.Sprintf("Removing %d item(s) in the background. Files move to the trash, where they can be restored.",
 		len(plan.Ops))
 	http.Redirect(w, r, "/trash?msg="+url.QueryEscape(msg), http.StatusSeeOther)
@@ -240,6 +244,7 @@ func (s *Server) renderRemovalError(w http.ResponseWriter, r *http.Request, err 
 // to get it back.
 func (s *Server) handleTrash(w http.ResponseWriter, r *http.Request) {
 	data := s.newPageData(r)
+	data.Nav = "trash"
 	data.Flash = r.URL.Query().Get("msg")
 	data.TrashDir = s.cfg.TrashDir
 	data.TrashRetention = s.cfg.TrashRetention
@@ -283,6 +288,7 @@ func (s *Server) handleTrashRestore(w http.ResponseWriter, r *http.Request) {
 		msg = "Nothing to restore in that batch."
 	default:
 		msg = fmt.Sprintf("Restored %d item(s).", restored)
+		s.nav.invalidate()
 		if len(failures) > 0 {
 			msg += fmt.Sprintf(" %d could not be restored — see the batch for details.", len(failures))
 		}

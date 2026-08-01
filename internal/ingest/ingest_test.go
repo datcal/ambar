@@ -64,7 +64,7 @@ func TestIngestExtractsAndRecordsProvenance(t *testing.T) {
 		"pack/sub/b.png": "b",
 	})
 
-	res, err := ig.Ingest(ctx, InboxDir+"/foo.zip", "https://kenney.itch.io/foo")
+	res, err := ig.Ingest(ctx, InboxDir+"/foo.zip", "https://kenney.itch.io/foo", "")
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestIngestQuarantinesHostileArchive(t *testing.T) {
 		"../evil.txt": "pwned",
 	})
 
-	res, err := ig.Ingest(ctx, InboxDir+"/bad.zip", "")
+	res, err := ig.Ingest(ctx, InboxDir+"/bad.zip", "", "")
 	if err != nil {
 		t.Fatalf("ingest returned error instead of quarantining: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestIngestNotKeepingArchivesRemovesInput(t *testing.T) {
 	ctx := context.Background()
 	writeZip(t, filepath.Join(root, InboxDir, "foo.zip"), map[string]string{"x/y.png": "y"})
 
-	if _, err := ig.Ingest(ctx, InboxDir+"/foo.zip", ""); err != nil {
+	if _, err := ig.Ingest(ctx, InboxDir+"/foo.zip", "", ""); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, InboxDir, "foo.zip")); !os.IsNotExist(err) {
@@ -167,7 +167,7 @@ func TestIngestNotKeepingArchivesRemovesInput(t *testing.T) {
 func TestIngestRefusedWhenReadonly(t *testing.T) {
 	ig, _, root := newIngester(t, true, true)
 	writeZip(t, filepath.Join(root, InboxDir, "foo.zip"), map[string]string{"a.png": "a"})
-	_, err := ig.Ingest(context.Background(), InboxDir+"/foo.zip", "")
+	_, err := ig.Ingest(context.Background(), InboxDir+"/foo.zip", "", "")
 	if !errors.Is(err, ErrReadonly) {
 		t.Errorf("err = %v, want ErrReadonly", err)
 	}

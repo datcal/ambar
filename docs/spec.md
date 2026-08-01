@@ -3,6 +3,11 @@
 > Build specification. Hand this to a coding agent one milestone at a time, not all at once.
 > `ambar` is used throughout as the binary name, config prefix, and Godot plugin folder name.
 > Rename freely.
+>
+> **Revised 2026-08-01, after M16.** §8, §10, §12, §13, §15 and §17 now describe what is built
+> rather than what was planned, and where a decision was reversed the reversal is stated with
+> its reason. `docs/decisions.md` carries the reasoning and the measurements at length; read it
+> before revisiting anything here that looks arbitrary.
 
 ## 0. Settled decisions
 
@@ -20,6 +25,10 @@ to deviate, say so explicitly rather than quietly doing something else.
   HTTP. Remote access is Tailscale's problem, not the application's.
 - **Originals are never modified, moved, or renamed.** Human-readable paths are a hard
   requirement.
+- **The interface is part of the product, not a skin on it.** Added after M16, because the
+  first version was correct and unpleasant: prose where a control belonged, a viewer that ate
+  the scroll wheel, sorting with no stated order, a "Load more" button where a page number was
+  wanted. None of that showed up as a bug. It showed up as people not using the thing.
 
 ### Non-goals
 
@@ -466,15 +475,41 @@ This is why the tool exists. It has to beat folders or there is no point.
 Each viewer must be good enough that you never open the file externally to decide whether
 to use the asset.
 
+**M16 rewrote this section against the real library rather than against an idea of one.**
+What follows is what exists. Where something was reversed or dropped it says so, because a
+specification that still describes an abandoned idea is worse than one that admits it. The
+measurements behind each change are in `docs/decisions.md`.
+
 ### 2D
 
-- Zoom and pan. **`image-rendering: pixelated`** above 1× when `is_pixel_art`, smooth
-  otherwise. Fit / 100% / 200% / 400% / 800% presets plus wheel zoom.
-- Background toggle: checkerboard, black, white, mid-grey, custom. You cannot evaluate a
-  sprite's edges without this.
-- Channel isolation: R, G, B, A separately. Essential for channel-packed PBR maps.
-- **Tiling preview**: repeat 3×3 to check seamlessness. Cheap to build, saves real time.
-- Pixel colour picker readout, dimensions display.
+- **Zoom and pan.** Fit / 100% / 200% / 400% / 800% presets, `0` fits, drag pans, and zoom
+  keeps the point under the cursor fixed.
+- **The wheel scrolls the page. It does not zoom.** This reverses the original line, and the
+  reason is what the page is: the palette, the tags, the provenance and the format variants
+  all live *below* the image, and a viewer that swallows the wheel makes them reachable only
+  by grabbing the scrollbar. **Ctrl/⌘+wheel zooms**, and a **Wheel zoom** toggle makes
+  plain-wheel zooming sticky for anyone who wants it back. Remembered per browser.
+- **The image is centred on the stage, exactly.** Stated as a requirement because it was
+  wrong for months and the bug is easy to reintroduce: CSS centring by `translate: -50% -50%`
+  composed with CSS zoom by `transform: scale()` produces an offset of `(scale−1)·size/2`, so
+  every 2D asset drifted right. Centring is computed in one place in JS from the measured
+  stage rectangle, and panning is an offset added to it.
+- **Pixels / Smooth is a switch, not a guess.** `is_pixel_art` (§6) is a heuristic and,
+  measured against this library, it rejected shaded sprites — so it no longer decides what
+  you see. Pixels is the default, because in a library of itch and CraftPix packs smoothing
+  is the exception, and it means nearest-neighbour **snapped to whole-number zoom factors**.
+  That snapping is what "looks like Aseprite" actually requires: a 3.7× nearest upscale of a
+  32×32 sprite has rows one pixel taller than their neighbours, which reads as broken art.
+- **Background toggle**: checkerboard, mid-grey, black, white. "You cannot evaluate a
+  sprite's edges without this" is still true. A custom colour was not built and has not been
+  missed.
+- **Spritesheet mode**: grid overlay, frame stepping, play/pause at the stored fps, editable
+  frame geometry.
+- **Deferred rather than dropped**: channel isolation (R/G/B/A separately) and the 3×3 tiling
+  preview. Both are texture-workflow tools and this library is overwhelmingly sprites and
+  packs; build them when a PBR set arrives that needs them. The pixel colour-picker readout
+  lost its argument to the palette panel below, which answers the same question exactly and
+  for the whole image at once.
 
 #### Palette panel
 
@@ -498,42 +533,44 @@ transparent black. Count semi-transparent pixels separately and store
 `has_semitransparent` — in pixel art these are usually an authoring mistake and worth
 surfacing.
 
-Sorting, user-switchable:
+**The panel is a row of circles.** One filled circle per colour, largest share first, click to
+copy, hover for the hex and the percentage. That is the whole default state: no table, no
+prose, no controls beyond a **Details** button. The colours are the interface, and a
+twelve-colour sprite should read as twelve dots in one glance rather than as a paragraph of
+hex values you have to parse.
 
-- **By frequency**, most-used first — answers "what is the dominant colour".
-- **Perceptually**, hue then lightness — reveals the ramp structure, which is how pixel
-  artists actually think about a palette. Group colours into probable ramps by clustering on
-  hue and ordering within each cluster by lightness.
-- A **greyscale toggle** that desaturates the swatches, for checking whether the value
-  structure reads.
+**Details** opens the working surface underneath, and everything the original specification
+asked for lives there:
 
-Per swatch, display hex, RGB, HSL, pixel count, and percentage of visible pixels.
+- Sorting, user-switchable — **by frequency**, most-used first, and **perceptually**, hue then
+  lightness, which reveals the ramp structure that is how pixel artists actually think about a
+  palette. Plus a **greyscale toggle** for checking whether the value structure reads.
+- Per swatch: hex, RGB, pixel count and percentage of visible pixels.
 
 #### Copy and export
 
-- **Click a swatch to copy.** This is the primary interaction and must be one click with
-  visible confirmation. Copy format is a user preference: `#RRGGBB`, `RRGGBB`,
-  `rgb(r, g, b)`, `r, g, b`, and **`Color(0.545, 0.227, 0.227)`** for pasting straight into
-  GDScript.
-- Shift-click or a modifier copies a whole selected range.
-- **Export the full palette** in formats that matter to this workflow:
-  - GIMP `.gpl` — the widest-supported interchange format; Aseprite imports it directly.
-  - PNG strip, one swatch per pixel and a scaled version — the de facto pixel-art palette
-    exchange format, and what Aseprite and Lospec consume.
-  - Plain hex list `.txt`, one per line.
-  - JSON, with counts and ratios retained.
-  - CSS custom properties.
-  - A GDScript `const` array of `Color` values, and a Godot `.tres` `Gradient`.
-- Pack-level and asset-group-level palettes: the union across all member images, with
-  per-colour usage counts. "This pack uses 47 colours, here they are."
+- **Click a swatch to copy.** The primary interaction, one click, with visible confirmation.
+  Copy format is a preference in the Details panel: `#RRGGBB`, `RRGGBB`, `rgb(r, g, b)`,
+  `r, g, b`, and **`Color(0.545, 0.227, 0.227)`** for pasting straight into GDScript.
+- **Export the full palette** in the three formats this workflow uses:
+  - GIMP `.gpl` — the widest-supported interchange format; Aseprite and Krita import it directly.
+  - A GDScript `const` array of `Color` values.
+  - A Godot `.tres` `Gradient`.
 
-**Deployment gotcha to handle explicitly:** `navigator.clipboard` is unavailable in
-non-secure contexts, so plain-HTTP LAN access (`http://nas:8973`) breaks clipboard copy in
-most browsers, while Tailscale HTTPS and Cloudflare both work. Implement a
-`document.execCommand('copy')` / hidden-textarea-selection fallback rather than letting the
-single most-used interaction in this panel silently fail on the LAN.
-- Spritesheet mode: grid overlay, frame stepping, play/pause at stored fps, editable frame
-  geometry.
+  `.txt`, `.json`, `.css` and a PNG strip were specified and built, then removed in M16. They
+  existed because they were easy to write rather than because a game palette gets exported to
+  CSS, and seven links in a row made the useful three harder to find. Old URLs 404 rather than
+  serving a format nobody maintains.
+- **Pack-level and library-level colour data stays** and drives the sidebar colour filter and
+  `color:` search. The dedicated `/palettes` comparison page that displayed it was removed:
+  "does this tileset sit next to that character set" turns out to be answered by clicking a
+  colour in the sidebar, which is the version people reach for.
+
+**Deployment gotcha, handled:** `navigator.clipboard` is unavailable in non-secure contexts, so
+plain-HTTP LAN access (`http://meshnas.local:8973`) breaks clipboard copy in most browsers while
+Tailscale HTTPS works. There is a `document.execCommand('copy')` hidden-textarea fallback, because
+the single most-used interaction in this panel must not silently fail on the LAN — which is where
+it is used from every day.
 
 ### 3D
 
@@ -543,22 +580,36 @@ single most-used interaction in this panel silently fail on the LAN.
 - Overlays: triangle and vertex counts, bounding box in metres, material list, texture list
   with resolutions.
 - Animation panel: clip list, play/pause/scrub, speed.
-- **Scale reference**: a 1.8 m human-height marker, so authored-at-wrong-scale assets are
-  obvious immediately.
+- **Scale reference**: a human-height marker, so authored-at-wrong-scale assets are obvious
+  immediately. It is labelled "1.8 m human" rather than "1.8 m", because a bare number in a
+  toolbar answers no question anyone was asking.
 
 ### Audio
 
 - Canvas waveform from stored peaks, click to seek, space to play.
-- **Keyboard audition mode.** Arrow keys move to next/previous result and play immediately;
-  a single keystroke tags. Auditioning 400 impact sounds with a mouse is unbearable, and
-  this is the difference between using the library and avoiding it.
 - Loop toggle, visual markers at detected loop points.
 - Display sample rate, bit depth, channels, duration, peak level.
+- **Keyboard audition mode was removed in M16.** Not a judgement on the feature — stepping
+  through 400 impact sounds with the arrow keys is genuinely better than clicking — but its
+  only entry point was a sidebar "Tools" block that was deleted as clutter, and a mode nobody
+  can reach is not a feature. The per-tile audio preview in the grid stayed. If it comes back
+  it belongs on the grid itself, keyed to the selection, with no block to enable first.
 
 ### Grid
 
-Virtualised or paginated; must stay responsive at 20k+ rows. Configurable thumbnail size.
-Hover plays animated previews. Multi-select with shift/ctrl. Full keyboard navigation.
+- **Numbered pagination**, not "Load more". `1 2 3 … next`, a page-size choice (100 by
+  default), and a "showing 1–100 of 6,490" line. The original spec said "virtualised or
+  paginated" and the first implementation chose an infinite cursor; the person using it asked
+  for the other one, and the reason is good: *"deterministik olsun."* Page 3 of a sort is a
+  place you can return to, link to, and reason about. The cursor path stays underneath for the
+  API, where a stable cursor is the right answer.
+- **Sort is explicit and visible**: newest first, oldest first, name, size, and file date, with
+  the current order named in the control rather than implied. A grid with no stated order is a
+  pile.
+- Must stay responsive at 20k+ rows. Configurable thumbnail size. Hover plays animated
+  previews. Full keyboard navigation. Tiles carry their own actions — open in Aseprite, Blender
+  or Godot, copy the path — because the thing you want to do with an asset you have just
+  recognised should not require a page load first.
 
 ## 9. Provenance and licensing
 
@@ -698,7 +749,7 @@ Both paths keep every path in the library valid and working while reclaiming the
 default to `reflink` where supported, and present linking as the recommended choice ahead of
 removal. Linking is still only ever triggered by an explicit selection.
 
-## 10. API and Godot plugin
+## 10. API and editor plugins
 
 ### HTTP API
 
@@ -724,37 +775,58 @@ restart.
 
 ### Godot 4 editor plugin — `addons/ambar/`
 
-- Editor dock: search box, tag filter chips, thumbnail grid, detail panel. Preview downloaded
-  glb in Godot's own viewport rather than reimplementing a viewer.
-- **One configured base URL** in Editor Settings, plus an API token. Tailscale MagicDNS means
-  the same hostname works at home and away, so there is deliberately no LAN/remote fallback
-  logic to get wrong.
-- **"Add to Project"**: download into `res://assets/<kind>/<pack-slug>/<filename>`, preserving
-  relative structure for multi-file assets — a model and its textures must land together with
-  intact relative paths or materials break. Then `EditorFileSystem.scan()` /
-  `reimport_files()`.
-- **Apply Godot import presets automatically.** Write the `.import` file before triggering
-  reimport. Pixel art: `filter=nearest`, `mipmaps=false`, `fix_alpha_border=true`. Normal
-  maps: correct `compress/normal_map` mode. SFX: no loop. Music: loop on. This removes a
-  recurring manual chore and is much of the argument for the plugin existing.
-- **Project identity is a UUID, never a filesystem path.** On first use in a project, the
-  plugin generates a UUID and writes `res://.ambar/project.json`, which is committed to git.
-  The Godot project lives on developer machines, not on the NAS, and two people will have it
-  checked out at different paths — keying `project_uses` on a path would register the same
-  project twice and split the credits list in half. The server stores the UUID; the path is
-  at most a display hint.
-- **Write `res://.ambar/manifest.json`** mapping `asset_id → {res_path, sha256, source_url,
-  license, author, attribution_text}`. Commit it to git. It is the input to credits generation
-  and the answer to "where did this file come from" two years from now. Because it is shared
-  through git, the manifest is also how each person's editor knows what the other already
-  imported — treat it as shared state and merge additively, never rewrite the whole file from
-  one client's view of the world.
-- `project_uses` is deduplicated on `(project_id, asset_id, res_path)`, so two people
-  importing the same asset independently produces one row, not two.
-- POST each addition to `/projects/{project}/uses`. Tolerate being offline: queue and retry.
-- Badges in the grid: "already in project" from the manifest, "outdated" when the library
-  sha256 differs from the imported copy.
-- A "Generate CREDITS.md" action writing the file into the project.
+Rewritten in M16 and **verified in Godot 4.7.1**, after the first version was installed and the
+report was "hiçbir şey olmadı" — nothing happened. Four of the five bullets below changed as a
+result, and the reasons are worth keeping.
+
+- **A main-screen tab, not a dock.** `_has_main_screen()` puts "Ambar" beside 2D, 3D and Script,
+  which is where a library belongs and what was actually asked for. A dock tab in
+  `DOCK_SLOT_LEFT_UR` is easy to never notice.
+- **Settings live in the plugin's own UI, in two files.** `res://ambar.cfg` holds the base URL and
+  is committed, because the server address is a fact about the studio and everyone should get it
+  by checking the project out; `user://ambar_token.cfg` holds the API token and is not, for the
+  same reason §11 gives. They were in Editor Settings under `ambar/base_url`, which nobody finds
+  among four hundred preferences, so the default hostname stayed and every request went nowhere.
+  There is a **Save and test** button that says what came back.
+- **"Import"**: download into `res://assets/<kind>/<pack-slug>/<filename>`, preserving relative
+  structure for multi-file assets — a model and its textures must land together with intact
+  relative paths or materials break. Then rescan the editor filesystem.
+- **Set import defaults, do not write `.import` files.** The original bullet said to write them by
+  hand before triggering a reimport; Godot owns those files, keys them to its own version, and
+  overwrites or errors on a partial one. The supported mechanism is `importer_defaults/texture`
+  plus `rendering/textures/canvas_textures/default_texture_filter`, set once for the project by a
+  **Set pixel-art import defaults** button: lossless, no mipmaps, nearest filtering, no automatic
+  switch to VRAM compression.
+- **Project identity is a UUID, never a filesystem path.** On first use the plugin generates one
+  into `res://.ambar/project.json` and commits it. Two people have the project checked out at
+  different paths; keying `project_uses` on a path registers the same project twice and splits
+  the credits list in half.
+- **`res://.ambar/manifest.json`** maps `asset_id → {res_path, sha256, filename, pack}` and is
+  committed. It is the input to credits generation, the answer to "where did this file come from"
+  two years from now, and — because it travels through git — how each person's editor knows what
+  the others already imported. Merge additively; never rewrite the whole file from one client's
+  view of the world.
+- `project_uses` is deduplicated on `(project_id, asset_id, res_path)`, so two people importing
+  the same asset independently produces one row, not two.
+- POST each addition to `/projects/{project}/uses`, and **tolerate being offline**: the manifest is
+  committed, so a later reconcile can replay it. The import reports "the server was not told"
+  rather than failing.
+- **Every failure comes back as a sentence.** "HTTP 401" in a panel nobody has open is how "the
+  plugin does nothing" happens; "unauthorised — the API token is missing or wrong (Settings → API
+  tokens in Ambar)" is a thing somebody can act on.
+- Badges in the grid: "already in project" from the manifest, "outdated" when the library sha256
+  differs from the imported copy. A **Generate CREDITS.md** action writes the file into the project.
+
+**Testing an editor plugin is not optional and does not need a display.** The actual cause of
+"nothing happened" was a GDScript *parse* error — `var data := f()` where `f` has no declared
+return type — which fails the compile of every script that preloads that file, leaving an addon
+that is enabled and inert with the only evidence in the Output panel. `godot --headless --editor
+--quit` surfaces exactly that in about twenty seconds, and `godot --headless --script` can drive
+the API client against a running server. Both belong in the loop before a plugin ships.
+
+**Other engines.** The API is the integration surface, and nothing in it is Godot-specific: an
+Unreal plugin would speak the same endpoints, keep the same UUID-in-a-committed-file identity, and
+write the same manifest. Not built yet.
 
 ## 11. Auth and security
 
@@ -804,6 +876,15 @@ What does need care is concurrency:
   `missing_since` and **never hard-deleted**, because a NAS share can be temporarily
   unmounted and destroying the index over that would be catastrophic; changed hashes flagged
   for review. Runnable from the UI and on a schedule.
+- **One scheduled job, and it runs at night.** `AMBAR_NIGHTLY_SCAN` defaults to 05:00 local
+  and is the *only* thing the application starts on a timer. "Sürekli arkada bir şey
+  çalışmasın" is a hard requirement on a box that also serves files, not a preference: a
+  background walk during the working day is indistinguishable from the NAS being broken.
+  Set it to `off` to disable it entirely.
+- **Re-scanning from the UI happens in place.** The button starts the job and the page stays
+  where it is, showing progress and phase ("checking files", "matching moved files", "writing
+  the index") and, when idle, when the last scan finished. A button that navigates you
+  somewhere else to watch a spinner is a button people stop pressing.
 - **`ambar verify`** — re-hash all or a sample; detect bit rot and truncated files.
 - **`ambar rebuild-index`** — drop and reconstruct the DB from the filesystem and sidecars.
   This must actually work. Test it.
@@ -817,6 +898,13 @@ What does need care is concurrency:
 - Graceful shutdown: finish or requeue in-flight jobs, close the DB cleanly.
 - Worker concurrency configurable, defaulting **low**. This is a NAS with a weak CPU running
   other services; derivative generation must not starve them or freeze the UI.
+- **Idle must mean idle.** The complaint that opened M16's CPU work was "çok fazla CPU
+  harcıyor, neden?" and the answer was not the workers — it was every page rebuilding the
+  faceted sidebar (six aggregate queries over 6,500 assets, ~157 ms of them in one colour
+  query) on every request, including navigation between two grid pages. It is cached with
+  stale-while-revalidate behind a single-flight guard now. The rule this leaves behind: an
+  aggregate over the whole library belongs in a cache with an explicit invalidation, never in
+  a request path, and page rendering must not carry columns the page does not display.
 
 ## 13. Configuration
 
@@ -831,9 +919,15 @@ AMBAR_BASE_URL=http://nas:8080
 AMBAR_TRUSTED_PROXIES=                          # empty = ignore forwarded headers
 AMBAR_REAL_IP_HEADER=
 AMBAR_WORKERS=2
-AMBAR_MAX_UPLOAD_SIZE=104857600
+AMBAR_MAX_UPLOAD_SIZE=0                         # 0 = no cap (default); upload streams to disk
 AMBAR_MAX_ARCHIVE_UNCOMPRESSED=21474836480
+AMBAR_MAX_ARCHIVE_ENTRIES=200000
+AMBAR_MAX_IMAGE_PIXELS=50000000
+AMBAR_KEEP_ARCHIVES=true
 AMBAR_INBOX_POLL_INTERVAL=30s
+AMBAR_NIGHTLY_SCAN=05:00                        # local time; "off" disables it
+AMBAR_IGNORE_GLOBS=                             # empty = the §5.1 defaults
+AMBAR_LIBRARY_BUCKETS=                          # empty = the §17 defaults
 AMBAR_BACKUP_INTERVAL=1h                        # empty disables the internal scheduler
 AMBAR_BACKUP_DIR=/data/backups
 AMBAR_BACKUP_KEEP=48                            # rotate, oldest first
@@ -842,8 +936,18 @@ AMBAR_TRASH_RETENTION=                          # empty (default) = never auto-p
 AMBAR_DEDUPE_LINK_MODE=reflink                  # reflink | hardlink | off
 AMBAR_ASEPRITE_BIN=                             # optional, bind-mounted
 AMBAR_BLENDER_BIN=                              # optional, or runtime-downloaded
+AMBAR_LOCAL_LIBRARY_PATH=                       # where the library is mounted on the *client*,
+                                                # for the ambar:// open-in-app helper
+AMBAR_COOKIE_SECURE=                            # empty = infer from AMBAR_BASE_URL
 AMBAR_SESSION_SECRET=
 ```
+
+**On the upload cap.** It was 100 MB, and it was wrong the moment somebody dragged a real
+itch.io pack onto the page. The number existed because the first implementation buffered the
+whole request body through `TMPDIR` before it knew what it had; the upload streams straight
+into `_inbox` in constant memory now, so the ceiling protected nothing and blocked the normal
+case. Default is no cap. A cap is still honoured when set, which is what an instance exposed
+beyond the LAN should do.
 
 Ship a `docker-compose.yml`: library bind-mounted, data volume on a local NAS volume, worker
 count and poll interval commented.
@@ -869,21 +973,30 @@ Ship something usable early. Do not build all of it before first run.
 | **M11.5** | Palette extraction, palette panel, copy and export formats. Small, self-contained, and immediately useful every day. Fold it in earlier if it is wanted sooner — it depends only on M2. |
 | **M12** | Junk view (`__MACOSX`, empty dirs, orphaned derivatives) — reporting only, manual selection. Low risk, high volume, immediate payoff. |
 | **M13** | Duplicates: exact-hash detection, pack similarity and subset detection, advisory keep-policy annotations, trash staging, preview, reflink/hardlink dedupe, script export. Ship the safety invariants and their tests in the same milestone as the removal path, never after it. |
+| **M14** | Fonts: specimen rendering, per-family grouping, the licence questions fonts raise more sharply than anything else in the library. |
+| **M15** | Workspace: saved searches, the removal list as a persistent selection rather than a one-shot form. |
+| **M16** | **The review milestone.** The library was loaded with a real 6,500-asset collection and handed to the people who use it, and most of what came back was not a missing feature — it was the design. Rewritten: the visual language, the shell and its navigation, the 2D viewer, the asset page, the grid (pagination and sort), search autocomplete, upload, background-job visibility, the `ambar://` open-in-app helper, and the Godot plugin. Removed: `/palettes`, `/provenance`, four palette export formats, the sidebar Tools block. Measured and fixed: NAS CPU. Nothing here was speculative; every item traces to somebody trying to use the thing. |
 
-## 15. Decisions to confirm before writing code
+## 15. Decisions that were open before the code existed
 
-Come back with a recommendation on each rather than guessing:
+All five are settled; kept as a record of what was decided and why, because each of them still
+constrains the codebase. `docs/decisions.md` has the reasoning at length.
 
-1. FTS5 availability in the current `modernc.org/sqlite`. If problematic, the fallback is
-   `mattn/go-sqlite3` with the `sqlite_fts5` build tag, which costs CGO and the static
-   binary. Flag this in M0 — it changes the Dockerfile.
-2. `templ` versus `html/template`. Type safety and refactoring versus a codegen step.
-   Recommend one and justify it.
-3. Where the JS islands come from: a build step for three.js, or vendored ES modules served
-   directly? Prefer no bundler if the ergonomics hold.
-4. Whether `phash` near-duplicate detection is cheap enough for M2 or belongs in M11.
-5. Spritesheet grid detection: propose the scoring heuristic before implementing, including
-   how the user corrects a wrong guess.
+1. **FTS5 works in `modernc.org/sqlite`.** Verified in M0 before anything was built on it, which
+   is the only reason there was never a Dockerfile crisis. No CGO, as invariant 6 requires.
+2. **`html/template`, not `templ`.** No codegen step, no second toolchain in the image, and the
+   templates stay readable to anybody who knows Go. The type safety was not worth the build.
+3. **Vendored ES modules, no bundler.** three.js is served directly from `/static/vendor`. The
+   ergonomics held, and a CSP of `default-src 'self'` with no `unsafe-inline` is far easier to
+   keep honest without a build step in the way.
+4. **`phash` landed in M13 with the duplicates work, not in M2.** It is cheap to compute at derive
+   time but expensive to *use*: clustering is quadratic, so it is capped by a configurable image
+   count and skipped with an explicit message above it rather than quietly running for an hour.
+   And near-duplicate findings are review-only — "these two sprites are 94% alike" is a question
+   for a human, never grounds for the application to propose a removal (§9.1 rule 3).
+5. **Spritesheet grid detection** scores candidate cell sizes against transparent gutters and
+   repeated content, proposes the best, and shows a confirmation UI where the geometry is editable
+   — a wrong guess is corrected in place, never silently applied.
 
 ## 16. Quality bar
 
@@ -898,6 +1011,18 @@ Come back with a recommendation on each rather than guessing:
   bug to fix, not a handled case.
 - **Originals are never modified.** Add a test that hashes the entire library before and
   after a full ingest-and-scan cycle and asserts nothing changed.
+- **Measure before optimising, and measure the real library.** Every performance claim in
+  `docs/decisions.md` has a number next to it, and the numbers repeatedly contradicted the
+  guess: the CPU complaint was the sidebar, not the workers; 98 ms of a 112 ms query was
+  Go-side, and 55% of *that* was a JSON column the grid never displays. A 6,500-asset copy of
+  the real library is the fixture; a synthetic one hides exactly the cases that matter.
+- **Anything with a runtime outside Go gets exercised in that runtime before it ships.** The
+  Godot plugin was written twice, and the second version was still broken in a way no Go test
+  could see — a parse error that left the addon enabled and inert. `godot --headless --editor
+  --quit` finds it in twenty seconds without a display. The same applies to the `ambar://`
+  helper (run it against stub applications) and to the rendered pages
+  (`firefox --headless --screenshot`, twice, because the first capture races image decoding).
+  "Verified" means it ran, not that it reads correctly.
 - Deletion invariants get dedicated tests, written before the delete path ships: that the
   last copy of a hash can never be removed, that `project_uses`-referenced files are always
   blocked, that format variants are never proposed as duplicates, that a move is never
@@ -931,28 +1056,49 @@ Default to read-write.
 
 ### Library top-level layout
 
+The layout that emerged in use, which is not quite the one first sketched:
+
 ```
-/volume2/game/assets/
+/mnt/game-assets/            (or /volume2/game/assets on the NAS itself)
     2d/          <pack>/ ...
     3d/          <pack>/ ...
-    mix/         <pack>/ ...
-    audio/       <pack>/ ...
-    _inbox/
-    _archives/
-    _quarantine/
+    aseprite/    <pack>/ ...
+    fonts/       <pack>/ ...
+    sounds/      <pack>/ ...
+    raw/         packs that are a bit of everything, and old downloads
+    _inbox/      drop zone: anything landing here is ingested
+    _archives/   the original zips, kept
+    _quarantine/ archives that failed extraction
 ```
+
+`sounds` rather than `audio`, and `raw` promoted from "the untidy corner" to the honest
+destination for a pack that does not sort cleanly.
+
+The bucket list (`AMBAR_LIBRARY_BUCKETS`, defaulting to `2d 3d mix raw audio`) names only the
+directories whose *children* are packs. `sounds`, `aseprite` and `fonts` hold loose files
+rather than pack directories, so they are correctly detected as packs in their own right and
+must **not** be added to the list — doing so would scatter their contents into the synthetic
+standalone pack. Add a name to the list the day it grows pack subdirectories, and not before.
+This is the one place the code knows anything about the human layout, and it is configuration
+precisely so §17's "must not depend on this layout" stays true.
 
 Packs are extracted from their archive and dropped into whichever bucket fits. These
 directories are for the human browsing over SMB; the application derives nothing essential
 from them and **must not depend on this layout**. Pack detection is marker-based and
 depth-agnostic (§5.1), so the buckets can be renamed or abandoned later without a migration.
 
-The existing `raw/` directory and the packs currently sitting at the library root are simply
-another such bucket until they are moved. Do not require them to be tidied before M1.
+**Upload asks rather than guesses.** Dragging a zip onto the web UI proposes a destination —
+by reading the archive's contents and picking the bucket that holds two thirds of them, or
+`raw/` when nothing dominates — and then lets it be changed, including to a folder created on
+the spot. A single level, deliberately: "sadece 2d olsun", not `2d/characters/humans`. The
+proposal is a convenience; the human makes the call, which is the same principle §9.1 applies
+to removal.
 
-Underscore-prefixed directories are reserved and never treated as buckets or packs.
-
-
+Underscore-prefixed directories are reserved and never treated as buckets or packs. That is
+also the security boundary for ingest: a destination arriving from the browser is resolved to
+an absolute path and confirmed to sit under `_inbox` before anything is moved, because a
+prefix check alone accepts `_inbox/../2d/pack` and would move a library file — violating
+invariant 1 by way of a text field.
 
 Run as the NAS user that owns the library, never as root. Files extracted from `_inbox` by a
 root container are owned by root and cannot be edited or deleted over SMB afterwards.

@@ -28,10 +28,15 @@ import (
 
 // openApp is an application the UI offers to launch.
 type openApp struct {
-	// Key is what the helper matches on.
+	// Key is what the helper matches on, and what the button's styling is keyed on.
 	Key string
 	// Label is what the button says.
 	Label string
+	// Short is the two-or-three character mark shown on a grid tile, where there is no room
+	// for a word. Not the vendor's logo: shipping those would mean either an external request
+	// (which §11's CSP forbids) or redistributing a trademark. The app's own colour plus its
+	// initials is recognisable at 20px and is honestly ours.
+	Short string
 	// URL is the ambar:// link.
 	//
 	// template.URL rather than string because html/template only trusts a known set of
@@ -70,6 +75,21 @@ var appsForExt = map[string][]struct{ key, label string }{
 	"otf":      {{"fonts", "Font viewer"}},
 }
 
+// appShort is the mark each app gets on a grid tile. Two or three characters, because the tile
+// is a picture and the buttons are not the point of it.
+var appShort = map[string]string{
+	"aseprite": "Ase",
+	"blender":  "Bl",
+	"godot":    "Gd",
+	"krita":    "Kr",
+	"gimp":     "Gi",
+	"audio":    "Au",
+	"tiled":    "Ti",
+	"editor":   "Img",
+	"fonts":    "Aa",
+	"reveal":   "⤢",
+}
+
 // openAppsFor builds the launch links for one asset's local path.
 //
 // localPath is the path as the operator's machine sees it — the same string the copy
@@ -94,11 +114,26 @@ func openAppsFor(ext, localPath string) []openApp {
 		out = append(out, openApp{
 			Key:   e.key,
 			Label: e.label,
-			URL: template.URL("ambar://open?app=" + url.QueryEscape(e.key) +
-				"&path=" + url.QueryEscape(localPath)),
+			Short: appShort[e.key],
+			URL: template.URL("ambar://open?app=" + queryEscapeStrict(e.key) +
+				"&path=" + queryEscapeStrict(localPath)),
 		})
 	}
 	return out
+}
+
+// queryEscapeStrict percent-escapes for a query string with spaces as %20 rather than "+".
+//
+// url.QueryEscape produces "+", which is correct for form encoding and wrong here in a way that
+// only shows up on real filenames: the library holds directories like "2 Objects", so the link
+// carried "2+Objects", and the helper's decoder turned every "+" back into a space — which means
+// a file genuinely named "sprite+outline.png" opened as "sprite outline.png" and failed. %20 is
+// unambiguous in both directions.
+//
+// html/template also escapes "+" to "&#43;" inside an href, which is harmless but made the link
+// unreadable when debugging exactly this.
+func queryEscapeStrict(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
 // handleOpenHelper serves the helper script for a platform (M15).
@@ -137,40 +172,126 @@ func linuxHelper() string {
 	return `#!/bin/sh
 # ambar-open — turn an ambar:// link into a launched application.
 #
-# Ambar runs on a server, so it cannot open Aseprite on your machine. This script
-# can: it registers itself as the handler for the ambar:// scheme, and Ambar's
-# "Open in…" buttons then work like any other application link.
+# Ambar runs on a server, so it cannot open Aseprite on your machine. This script can: it
+# registers itself as the handler for the ambar:// scheme, and Ambar's "Open in…" buttons then
+# work like any other application link.
 #
-# Install:
-#   1. Put this file somewhere permanent and make it executable:
-#        install -Dm755 ambar-open-linux.sh ~/.local/bin/ambar-open
-#   2. Register it:
-#        ~/.local/bin/ambar-open --install
+#   Install:   sh ambar-open-linux.sh --install
+#   Check:     ambar-open --check
+#   Try one:   ambar-open --test 'ambar://open?app=aseprite&path=/mnt/game-assets/x.png'
 #
-# Uninstall: remove ~/.local/share/applications/ambar-open.desktop and re-run
-#   update-desktop-database ~/.local/share/applications
+# --install copies this script to ~/.local/bin/ambar-open and registers *that* copy, so you can
+# delete the download afterwards. Then it verifies the registration and prints what it found.
 #
-# Edit the case block below to point each app key at the command you actually use.
+# If a launch opens your application with no file in it, the scheme is not registered and your
+# browser asked you to pick an application instead — so it handed the raw ambar:// URL to that
+# application, which cannot open it. --check is how you tell the difference.
+#
+# Apps are resolved in this order: a command on PATH, then a Flatpak, then xdg-open. Override any
+# of them in ~/.config/ambar-open.conf, which survives re-downloading this script:
+#
+#   ASEPRITE_CMD="flatpak run org.aseprite.Aseprite"
+#   BLENDER_CMD="/opt/blender/blender"
 
 set -eu
 
 self=$(readlink -f "$0")
+target="$HOME/.local/bin/ambar-open"
+desktop="$HOME/.local/share/applications/ambar-open.desktop"
+
+# --- installation ------------------------------------------------------------------
 
 if [ "${1:-}" = "--install" ]; then
-    dir="$HOME/.local/share/applications"
-    mkdir -p "$dir"
-    cat > "$dir/ambar-open.desktop" <<DESKTOP
+    mkdir -p "$(dirname "$target")" "$(dirname "$desktop")"
+    if [ "$self" != "$target" ]; then
+        cp "$self" "$target"
+        chmod 755 "$target"
+        echo "installed: $target"
+    fi
+
+    cat > "$desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Ambar open handler
-Exec=$self %u
+Exec=$target %u
 NoDisplay=true
+Terminal=false
 MimeType=x-scheme-handler/ambar;
 DESKTOP
-    update-desktop-database "$dir" 2>/dev/null || true
+
+    update-desktop-database "$(dirname "$desktop")" 2>/dev/null || true
     xdg-mime default ambar-open.desktop x-scheme-handler/ambar 2>/dev/null || true
-    echo "registered: ambar:// links now run $self"
-    exit 0
+    exec "$target" --check
+fi
+
+# --check reports whether the registration actually took. It is a separate step because the two
+# ways this fails — nothing registered, or something else registered — look identical from a
+# browser, which just asks you to pick an application either way.
+if [ "${1:-}" = "--check" ]; then
+    status=0
+    [ -x "$target" ] || { echo "missing: $target is not installed or not executable" >&2; status=1; }
+    [ -f "$desktop" ] || { echo "missing: $desktop" >&2; status=1; }
+
+    handler=$(xdg-mime query default x-scheme-handler/ambar 2>/dev/null || true)
+    case $handler in
+        ambar-open.desktop) echo "ok: ambar:// is handled by $target" ;;
+        "")  echo "not registered: nothing handles ambar:// yet" >&2; status=1 ;;
+        *)   echo "registered to something else: $handler" >&2; status=1 ;;
+    esac
+
+    # Firefox keeps its own handler list and only consults it after the first prompt; if it has
+    # already remembered a wrong choice, this is where that gets fixed.
+    echo "if your browser still asks which application to use, clear ambar in its"
+    echo "settings (Firefox: Settings → General → Applications) and click a link again"
+    exit $status
+fi
+
+# --- resolving applications ---------------------------------------------------------
+
+# shellcheck source=/dev/null
+[ -f "$HOME/.config/ambar-open.conf" ] && . "$HOME/.config/ambar-open.conf"
+
+# resolve echoes the command for an app key: an override, a binary on PATH, a Flatpak, or empty.
+resolve() {
+    override=$1
+    binary=$2
+    flatpak_id=$3
+
+    if [ -n "$override" ]; then
+        echo "$override"
+        return
+    fi
+    if command -v "$binary" >/dev/null 2>&1; then
+        echo "$binary"
+        return
+    fi
+    if command -v flatpak >/dev/null 2>&1 && [ -n "$flatpak_id" ] &&
+        flatpak info "$flatpak_id" >/dev/null 2>&1; then
+        echo "flatpak run $flatpak_id"
+        return
+    fi
+    echo ""
+}
+
+command_for() {
+    case $1 in
+        aseprite) resolve "${ASEPRITE_CMD:-}" aseprite org.aseprite.Aseprite ;;
+        blender)  resolve "${BLENDER_CMD:-}"  blender  org.blender.Blender ;;
+        godot)    resolve "${GODOT_CMD:-}"    godot    org.godotengine.Godot ;;
+        krita)    resolve "${KRITA_CMD:-}"    krita    org.kde.krita ;;
+        gimp)     resolve "${GIMP_CMD:-}"     gimp     org.gimp.GIMP ;;
+        audio)    resolve "${AUDIO_CMD:-}"    audacity org.audacityteam.Audacity ;;
+        tiled)    resolve "${TILED_CMD:-}"    tiled    org.mapeditor.Tiled ;;
+        *)        echo "" ;;
+    esac
+}
+
+# --- the link ----------------------------------------------------------------------
+
+dry_run=""
+if [ "${1:-}" = "--test" ]; then
+    dry_run=1
+    shift
 fi
 
 url=${1:-}
@@ -184,8 +305,8 @@ IFS='&'
 for pair in $query; do
     key=${pair%%=*}
     value=${pair#*=}
-    # Percent-decoding, the portable way.
-    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/+/ /g; s/%\(..\)/\\x\1/g')")
+    # %XX only: Ambar encodes spaces as %20, so a literal "+" in a filename stays a "+".
+    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/%\(..\)/\\x\1/g')")
     case $key in
         app) app=$value ;;
         path) path=$value ;;
@@ -193,11 +314,16 @@ for pair in $query; do
 done
 unset IFS
 
-[ -n "$path" ] || { echo "no path in the link" >&2; exit 2; }
+[ -n "$path" ] || {
+    echo "no path in the link: $url" >&2
+    echo "if your application opened with nothing in it, it was handed this URL directly" >&2
+    echo "instead of the file — run: ambar-open --check" >&2
+    exit 2
+}
 
-# An smb:// URL is not a path any application can open. Mount it once (in your file
-# manager or with gio mount) and point AMBAR_LOCAL_LIBRARY_PATH at the mount point
-# instead — then these links carry a real path.
+# An smb:// URL is not a path any application can open. Mount it once (in your file manager or
+# with gio mount) and point AMBAR_LOCAL_LIBRARY_PATH at the mount point instead — then these
+# links carry a real path.
 case $path in
     smb://*|afp://*)
         echo "this link carries a network URL rather than a mounted path: $path" >&2
@@ -206,19 +332,37 @@ case $path in
         ;;
 esac
 
-case $app in
-    aseprite) exec aseprite "$path" ;;
-    blender)  exec blender "$path" ;;
-    godot)    exec godot "$path" ;;
-    krita)    exec krita "$path" ;;
-    gimp)     exec gimp "$path" ;;
-    audio)    exec audacity "$path" ;;
-    tiled)    exec tiled "$path" ;;
-    editor)   exec xdg-open "$path" ;;
-    fonts)    exec xdg-open "$path" ;;
-    reveal)   exec xdg-open "$(dirname "$path")" ;;
-    *)        exec xdg-open "$path" ;;
-esac
+if [ "$app" = "reveal" ]; then
+    target_path=$(dirname "$path")
+    [ -n "$dry_run" ] && { echo "would run: xdg-open $target_path"; exit 0; }
+    exec xdg-open "$target_path"
+fi
+
+# The file has to be there. Without this the launch "works" and the application opens empty,
+# which is indistinguishable from the scheme not being registered — the one confusion this
+# script exists to remove.
+[ -e "$path" ] || {
+    echo "not found on this machine: $path" >&2
+    echo "AMBAR_LOCAL_LIBRARY_PATH describes how the library is mounted here; check it" >&2
+    exit 4
+}
+
+cmd=$(command_for "$app")
+if [ -z "$cmd" ]; then
+    # The override variables are upper case, so name the right one — telling somebody to set
+    # "aseprite_CMD" when the script reads ASEPRITE_CMD is worse than saying nothing.
+    upper=$(printf '%s' "$app" | tr '[:lower:]' '[:upper:]')
+    echo "no command found for '$app'; falling back to xdg-open" >&2
+    echo "set ${upper}_CMD in ~/.config/ambar-open.conf to choose one" >&2
+    [ -n "$dry_run" ] && { echo "would run: xdg-open $path"; exit 0; }
+    exec xdg-open "$path"
+fi
+
+[ -n "$dry_run" ] && { echo "would run: $cmd $path"; exit 0; }
+
+# Unquoted on purpose: an override may be a command *with* arguments ("flatpak run org.x.Y").
+# shellcheck disable=SC2086
+exec $cmd "$path"
 `
 }
 
@@ -262,7 +406,8 @@ IFS='&'
 for pair in $query; do
     key=${pair%%=*}
     value=${pair#*=}
-    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/+/ /g; s/%\(..\)/\\x\1/g')")
+    # %XX only: Ambar encodes spaces as %20, so a literal "+" in a filename stays a "+".
+    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/%\(..\)/\\x\1/g')")
     case $key in
         app) app=$value ;;
         path) path=$value ;;

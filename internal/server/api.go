@@ -41,6 +41,11 @@ type assetJSON struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
 		Slug string `json:"slug"`
+		// No source_url here on purpose: index.Asset does not carry the pack's provenance, and
+		// adding a column to the *list* query to supply it would undo the trimming M16 did to
+		// that query for a field the client does not need. Credits are assembled server-side —
+		// only the server knows the licences — and the plugin's manifest keeps the pack name,
+		// which is enough to reconcile from.
 	} `json:"pack"`
 	Path string `json:"path"`
 
