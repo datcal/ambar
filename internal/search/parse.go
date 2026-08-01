@@ -108,6 +108,33 @@ type FieldTerm struct {
 	Date   int64 // unix seconds, when IsDate
 }
 
+// DimensionsTerm is a pixel size: `32x32`, typed bare, or `dim:32x32`.
+//
+// Exact rather than a range. "32x32" in a sprite library is a category — the tile grid you
+// are working in — not an approximation, and `width:>=32 width:<=48` already covers the
+// range case.
+type DimensionsTerm struct {
+	base
+	W, H int
+}
+
+// parseDimensions reads "32x32", "32X32" or "32×32". Zero is refused: a 0-pixel asset is not
+// a thing anyone searches for, and accepting it would turn a stray "0x0" into a filter that
+// silently matches nothing.
+func parseDimensions(text string) (w, h int, ok bool) {
+	lower := strings.ToLower(strings.ReplaceAll(text, "×", "x"))
+	left, right, found := strings.Cut(lower, "x")
+	if !found {
+		return 0, 0, false
+	}
+	w, errW := strconv.Atoi(left)
+	h, errH := strconv.Atoi(right)
+	if errW != nil || errH != nil || w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
 // ColorTerm is `color:#8b3a3a` — assets containing that colour (§7).
 //
 // The match is a box in RGB rather than a perceptual distance: the query is "this
@@ -156,6 +183,15 @@ var numericFields = map[string]string{
 	"colors": "color_count",
 	"frames": "frame_count",
 	"fps":    "fps",
+
+	// M16: these were in futureFields, parsing so a query would not error and then
+	// contributing nothing — so `tris:<5000` quietly returned everything, which is worse
+	// than an error. Their columns landed with M5 (audio) and M6 (models); the filters
+	// only ever needed connecting.
+	"tris":      "tri_count",
+	"verts":     "vert_count",
+	"materials": "material_count",
+	"duration":  "duration_ms",
 }
 
 // dateFields maps a date query field to its column.
@@ -163,11 +199,13 @@ var dateFields = map[string]string{
 	"added": "first_seen_at",
 }
 
-// futureFields are §7 fields whose columns arrive in later milestones. They parse
-// so a query written today does not error, but they contribute nothing until the
-// milestone that adds the column (tris/verts → M6, duration → M5, acquired → M4).
+// futureFields are §7 fields whose columns do not exist yet. They parse so a query written
+// today does not error, but they contribute nothing.
+//
+// `acquired` is the last one: provenance records an acquisition date on the *pack*, and
+// filtering assets by it needs a join this compiler does not do yet.
 var futureFields = map[string]bool{
-	"tris": true, "verts": true, "duration": true, "acquired": true,
+	"acquired": true,
 }
 
 var knownKinds = map[string]bool{
@@ -178,6 +216,9 @@ var knownKinds = map[string]bool{
 
 var knownHasFlags = map[string]bool{
 	"alpha": true, "animation": true, "semitransparent": true, "semitransparency": true,
+	// M16: has:provenance means the pack's licence and source are both recorded, so
+	// -has:provenance is the capture backlog §9 asks for.
+	"provenance": true,
 }
 
 // Parse turns a raw query string into a Query. It never returns an error for
@@ -289,11 +330,26 @@ func classify(tk token, q *Query) (Term, string) {
 
 	key, value, hasColon := strings.Cut(text, ":")
 	if !hasColon {
+		// A bare "32x32" is a size, not a word. Nobody types that hoping to match a
+		// filename, and "which of these are 32 by 32" is the most common question in a
+		// library of sprites — asking for width:32 height:32 to answer it is a syntax
+		// tax on the thing people search for most.
+		if w, h, ok := parseDimensions(text); ok {
+			return DimensionsTerm{base{neg}, w, h}, ""
+		}
 		return WordTerm{base{neg}, strings.ToLower(text)}, ""
 	}
 	key = strings.ToLower(key)
 
 	switch key {
+	case "dim", "dims", "px":
+		// The explicit form of the same thing, for a query built by a link rather than by
+		// hand. `size:` cannot be it: that has meant file bytes since M1.
+		if w, h, ok := parseDimensions(value); ok {
+			return DimensionsTerm{base{neg}, w, h}, ""
+		}
+		return nil, fmt.Sprintf("%q is not a pixel size — try dim:32x32", text)
+
 	case "kind", "type":
 		v := strings.ToLower(value)
 		if v == "" {

@@ -1,12 +1,7 @@
 package palette
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"strings"
 )
 
@@ -14,32 +9,25 @@ import (
 // this workflow, not a demo: .gpl is what Aseprite imports, the PNG strip is what
 // Lospec consumes, .gd and .tres paste straight into Godot.
 const (
-	FormatGPL      = "gpl"  // GIMP palette
-	FormatTXT      = "txt"  // plain hex list, one per line
-	FormatJSON     = "json" // swatches with counts and ratios retained
-	FormatCSS      = "css"  // CSS custom properties
+	// Three formats, for the two tools this library is used with (M16): .gpl is read by
+	// Aseprite, GIMP and Krita; .gd and .tres are Godot's.
+	//
+	// .txt, .json, .css and .png went with the links to them. They existed because they were
+	// easy to write, not because anyone exports a game palette to CSS — and each one was a
+	// line in a row of seven that made the useful three harder to find.
+	FormatGPL      = "gpl"  // GIMP palette, also read by Aseprite and Krita
 	FormatGDScript = "gd"   // GDScript const array of Color
 	FormatTRES     = "tres" // Godot Gradient resource
-	FormatPNG      = "png"  // 1px-per-swatch strip
 )
 
 // SupportedFormats lists every export format, for the UI and for validation.
-var SupportedFormats = []string{
-	FormatGPL, FormatPNG, FormatTXT, FormatJSON, FormatCSS, FormatGDScript, FormatTRES,
-}
+var SupportedFormats = []string{FormatGPL, FormatGDScript, FormatTRES}
 
 // ContentType is the MIME type an exported palette should be served with.
-func ContentType(format string) string {
-	switch format {
-	case FormatPNG:
-		return "image/png"
-	case FormatJSON:
-		return "application/json"
-	default:
-		// Everything else is text the browser should download, not render.
-		return "text/plain; charset=utf-8"
-	}
-}
+//
+// All three remaining formats are text the browser should download rather than render; the
+// handler sets Content-Disposition: attachment either way (§11).
+func ContentType(string) string { return "text/plain; charset=utf-8" }
 
 // Export renders a palette in the given format. name labels the palette inside
 // formats that carry one (GIMP, GDScript). It returns ErrUnknownFormat for anything
@@ -48,18 +36,10 @@ func Export(p Palette, name, format string) ([]byte, error) {
 	switch format {
 	case FormatGPL:
 		return exportGPL(p.Swatches, name), nil
-	case FormatTXT:
-		return exportTXT(p.Swatches), nil
-	case FormatJSON:
-		return exportJSON(p)
-	case FormatCSS:
-		return exportCSS(p.Swatches), nil
 	case FormatGDScript:
 		return exportGDScript(p.Swatches, name), nil
 	case FormatTRES:
 		return exportTRES(p.Swatches), nil
-	case FormatPNG:
-		return exportPNG(p.Swatches)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownFormat, format)
 	}
@@ -92,39 +72,6 @@ func gplName(name string) string {
 		return "Ambar palette"
 	}
 	return name
-}
-
-func exportTXT(sw []Swatch) []byte {
-	var b strings.Builder
-	for _, s := range sw {
-		b.WriteString(s.Hex)
-		b.WriteByte('\n')
-	}
-	return []byte(b.String())
-}
-
-func exportJSON(p Palette) ([]byte, error) {
-	// A stable object shape: kind so a consumer knows whether the counts are exact,
-	// and the swatches with counts and ratios retained (§8).
-	out := struct {
-		Kind   string   `json:"kind"`
-		Colors []Swatch `json:"colors"`
-	}{Kind: p.Kind, Colors: p.Swatches}
-	data, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(data, '\n'), nil
-}
-
-func exportCSS(sw []Swatch) []byte {
-	var b strings.Builder
-	b.WriteString(":root {\n")
-	for i, s := range sw {
-		fmt.Fprintf(&b, "  --color-%d: %s;\n", i+1, s.Hex)
-	}
-	b.WriteString("}\n")
-	return []byte(b.String())
 }
 
 func exportGDScript(sw []Swatch, name string) []byte {
@@ -179,28 +126,4 @@ func exportTRES(sw []Swatch) []byte {
 	}
 	b.WriteString(")\n")
 	return []byte(b.String())
-}
-
-// exportPNG writes a 1px-tall strip, one pixel per swatch. This is the de facto
-// pixel-art palette exchange format — what Aseprite and Lospec read (§8).
-func exportPNG(sw []Swatch) ([]byte, error) {
-	if len(sw) == 0 {
-		// A 1x1 transparent pixel rather than a zero-dimension image, which some
-		// decoders reject.
-		img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, img); err != nil {
-			return nil, err
-		}
-		return buf.Bytes(), nil
-	}
-	img := image.NewNRGBA(image.Rect(0, 0, len(sw), 1))
-	for i, s := range sw {
-		img.Set(i, 0, color.NRGBA{R: uint8(s.R), G: uint8(s.G), B: uint8(s.B), A: 0xff})
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }

@@ -153,11 +153,20 @@ func TestObjViewerNeedsNoBlender(t *testing.T) {
 // /assets/{id}/preview.glb. That held for glTF, which derive really does normalise —
 // but a browser-rendered thumbnail also sets state 'ok', and it produces no .glb at
 // all. Every .fbx therefore got a URL that 404s, and a 3D page that opened to an empty
-// stage with no error anywhere.
+// stage with no error anywhere. M14 fixed that by checking the disk.
 //
-// The source is now decided by what exists on disk, so the two cases cannot be
-// confused: preview.glb when there is one, the original file otherwise.
-func TestModelViewerSourceFollowsWhatIsOnDisk(t *testing.T) {
+// M17 went further and stopped using preview.glb at all, because checking the disk was
+// not enough either: the preview.glb derive wrote for a .gltf was itself broken. A
+// .gltf names its geometry (.bin) and its textures as separate files, and the encoder
+// carried those names into the "normalised" glb — 1,396 bytes pointing at a 202 KB
+// buffer that no route serves. The file existed, so the check passed, and all 442 glTF
+// assets in the library opened to an empty stage.
+//
+// The rule now is one line with no disk in it: three.js reads the original, through the
+// companion route, which resolves the .bin, the .mtl and textures kept in the pack's
+// shared Textures/ directory. preview.glb is self-contained again (see internal/model)
+// and remains the API's normalised artifact, but the page does not depend on it.
+func TestModelViewerLoadsTheOriginal(t *testing.T) {
 	ts := newTestServer(t)
 	ts.createUser(t, testUsername, testPassword)
 	ts.login(t, testUsername, testPassword)
@@ -169,7 +178,7 @@ func TestModelViewerSourceFollowsWhatIsOnDisk(t *testing.T) {
 	glbID := ts.assetID(t, "pack/models/crate.glb")
 
 	// Both are marked derived — the .glb by derive, the .fbx by a thumbnail upload —
-	// but only the .glb has a preview.glb beside it.
+	// and one of them has a preview.glb beside it. Neither fact may change the answer.
 	for _, id := range []int64{fbxID, glbID} {
 		if _, err := ts.db.Writer.Exec(
 			`UPDATE assets SET derive_state = 'ok' WHERE id = ?`, id); err != nil {
@@ -183,7 +192,8 @@ func TestModelViewerSourceFollowsWhatIsOnDisk(t *testing.T) {
 		id   int64
 		want string
 	}{
-		{"a normalised preview is used when it exists", glbID, itoa("/assets/%d/preview.glb", glbID)},
+		{"a model with a derived preview still loads its original",
+			glbID, itoa("/assets/%d/file/crate.glb", glbID)},
 		{"an fbx is loaded from the library, not from a preview that was never written",
 			fbxID, itoa("/assets/%d/file/barrel.fbx", fbxID)},
 	}

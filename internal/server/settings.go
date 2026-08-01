@@ -30,6 +30,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 // renderSettings draws the page with an optional error and flash.
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status int, formError, flash string) {
 	data := s.newPageData(r)
+	data.Nav = "settings"
 	data.UserError = formError
 	data.Flash = flash
 

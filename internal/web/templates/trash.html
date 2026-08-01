@@ -16,7 +16,7 @@
 
   {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
   {{if .RemovalRunning}}
-    <p class="hint">A removal is running — watch <a href="/jobs">background work</a>, then reload.</p>
+    <p class="hint" data-role="scan-line">A removal is running…</p>
   {{end}}
 
   <p class="resultcount">
@@ -27,7 +27,7 @@
   <div class="actions-row">
     <form method="post" action="/trash/purge" class="inline">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit"{{if not .Trash}} disabled{{end}}>Purge batches older than the retention window</button>
+      <button type="submit" class="danger"{{if not .Trash}} disabled{{end}}>Purge older batches</button>
     </form>
     <span class="hint">
       {{if .TrashRetention}}
@@ -93,7 +93,7 @@
         </div>
         {{if .Restorable}}
           <div class="actions-row">
-            <button type="submit">Restore the ticked items</button>
+            <button type="submit" class="primary">Restore the ticked items</button>
             <span class="hint">
               Restoring never overwrites: a path that has since been re-created is reported and
               left here.

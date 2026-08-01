@@ -18,7 +18,11 @@ static func _ensure_dir() -> void:
 
 ## uuid returns the project's UUID, generating and persisting one on first use.
 static func uuid() -> String:
-	var data := _read_json(PROJECT_FILE)
+	# `var x = ` rather than `:=` throughout this file, and that is the whole reason the plugin
+	# did nothing: _read_json returns an untyped value, GDScript cannot infer a type from it, and
+	# a *parse* error in one file fails the compile of everything that preloads it — so plugin.gd
+	# never loaded and Godot showed an enabled addon with no effect. Verified in 4.7.1.
+	var data = _read_json(PROJECT_FILE)
 	if data is Dictionary and data.has("uuid") and String(data["uuid"]) != "":
 		return String(data["uuid"])
 	var id := _generate_uuid()
@@ -28,7 +32,7 @@ static func uuid() -> String:
 
 
 static func name_hint() -> String:
-	var data := _read_json(PROJECT_FILE)
+	var data = _read_json(PROJECT_FILE)
 	if data is Dictionary and data.has("name"):
 		return String(data["name"])
 	return _project_name()
@@ -37,7 +41,7 @@ static func name_hint() -> String:
 ## record adds an entry to the manifest, merging additively (§10: "treat it as
 ## shared state and merge additively, never rewrite the whole file").
 static func record(asset_id: int, entry: Dictionary) -> void:
-	var manifest := _read_json(MANIFEST_FILE)
+	var manifest = _read_json(MANIFEST_FILE)
 	if not manifest is Dictionary:
 		manifest = {}
 	manifest[str(asset_id)] = entry
@@ -47,7 +51,7 @@ static func record(asset_id: int, entry: Dictionary) -> void:
 
 ## manifest returns the current asset_id → entry map (string keys).
 static func manifest() -> Dictionary:
-	var m := _read_json(MANIFEST_FILE)
+	var m = _read_json(MANIFEST_FILE)
 	return m if m is Dictionary else {}
 
 

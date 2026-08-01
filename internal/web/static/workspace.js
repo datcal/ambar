@@ -48,18 +48,8 @@
         }
     });
 
-    // Eagle's shortcut, because muscle memory is worth honouring: ⌘/Ctrl +/- resizes
-    // the tiles rather than the whole page.
-    document.addEventListener("keydown", function (event) {
-        if (!(event.ctrlKey || event.metaKey)) return;
-        var delta = 0;
-        if (event.key === "=" || event.key === "+") delta = 2;
-        else if (event.key === "-" || event.key === "_") delta = -2;
-        else return;
-
-        event.preventDefault();
-        var next = Math.min(26, Math.max(4, parseFloat(slider.value) + delta));
-        slider.value = String(next);
-        slider.dispatchEvent(new Event("input"));
-    });
+    // There used to be a Ctrl/⌘ +/- shortcut here that resized the tiles.
+    // Removed in M16: it took over the browser's own zoom on the busiest page in the
+    // application, it was documented nowhere but in this comment, and the slider it
+    // duplicated is two centimetres away.
 })();

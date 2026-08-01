@@ -94,8 +94,12 @@ func TestParseWarnings(t *testing.T) {
 		{"color:notacolour", 1},
 		{"color:#8b3a3a~wide", 1},
 		{"palette-near:notanid", 1},
-		{"tris:<5000", 1},
-		{"duration:>1000", 1},
+		// tris: and duration: used to live here for the same reason color: did — they
+		// parsed and filtered nothing. M16 connected them to the columns M5 and M6 added,
+		// so a malformed one is what warns now.
+		{"tris:manythousands", 1},
+		{"duration:soon", 1},
+		{"dim:32", 1},
 		{"width:notanumber", 1},
 		{"has:teleport", 1},
 	}

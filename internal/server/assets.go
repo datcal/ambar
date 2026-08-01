@@ -6,6 +6,7 @@ import (
 	"github.com/datcal/ambar/internal/derive"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,12 +22,24 @@ import (
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
+	// The grid pages by number since M16, so a `cursor` in the URL is either a bookmark
+	// from before that or someone editing the query string. Either way the honest answer is
+	// the first page of the same view rather than silently ignoring the parameter.
+	if q.Get("cursor") != "" {
+		http.Redirect(w, r, pageURL(r, 1), http.StatusSeeOther)
+		return
+	}
+
 	opts := index.ListOptions{
 		Query:          strings.TrimSpace(q.Get("q")),
 		Kind:           q.Get("kind"),
 		Dir:            q.Get("dir"),
-		Cursor:         q.Get("cursor"),
 		IncludeMissing: q.Get("missing") == "1",
+		Sort:           index.ParseSort(q.Get("sort")),
+		Limit:          pageSizeParam(q.Get("per")),
+		// Always at least 1: the zero value means "cursor mode" to ListGroups, which is
+		// the API's paging, not the grid's.
+		Page: pageParam(q.Get("page")),
 	}
 	if raw := q.Get("pack"); raw != "" {
 		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
@@ -37,7 +50,8 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	// Groups, not individual files: §5.1's collapsing is what makes the grid usable.
 	page, err := s.index.ListGroups(r.Context(), opts)
 	if err != nil {
-		// A malformed cursor is the user's URL being wrong, not a server fault.
+		// A malformed cursor is the user's URL being wrong, not a server fault. (The grid
+		// no longer sends cursors, but a bookmark from before M16 might.)
 		if strings.Contains(err.Error(), "cursor") {
 			http.Redirect(w, r, "/assets", http.StatusSeeOther)
 			return
@@ -47,23 +61,20 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats, err := s.index.Stats(r.Context())
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "asset stats failed", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
 	data := s.newPageData(r)
 	data.Workspace = true
+	data.Nav = "library"
 	data.Page = page
-	data.Stats = &stats
 	data.Search = opts.Query
 	data.Kind = opts.Kind
 	data.IncludeMissing = opts.IncludeMissing
-	data.NextURL = nextPageURL(r, page.NextCursor)
+	data.Sort = string(opts.Sort)
+	data.SortOptions = index.SortOrders()
+	data.PageSizes = pageSizes
+	data.PageURL = func(n int) string { return pageURL(r, n) }
 	// Does this page hold a model with no thumbnail? If so the browser is asked to
 	// render one (M15), and only then is three.js worth loading here.
+	s.markModelThumbs(page.Groups)
 	for _, g := range page.Groups {
 		if g.Primary.NeedsBrowserThumb() {
 			data.NeedsModelThumbs = true
@@ -72,37 +83,39 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	data.Flash = q.Get("msg")
 
-	// §7 faceted sidebar: the tags present in this result set. A failure here is
-	// not fatal — the grid is still useful without the facets.
-	if facets, err := s.index.Facets(r.Context(), opts, index.DefaultFacetLimit); err != nil {
-		s.log.ErrorContext(r.Context(), "facets failed", "error", err)
-	} else {
-		data.Facets = facets
-	}
-
-	// M15: the library's dominant colours, so colour search is clickable. Not fatal.
-	if colours, err := s.index.LibraryColours(r.Context(), 18); err != nil {
-		s.log.ErrorContext(r.Context(), "loading library colours failed", "error", err)
-	} else {
-		data.Colours = colours
-	}
-
-	// M14 folder tree. Depth-limited: a vendor pack can nest ten levels of format
-	// folders, and a sidebar that renders all of them is a scrollbar rather than
-	// navigation. A failure is not fatal — the grid works without the tree.
-	if tree, err := s.index.Tree(r.Context(), index.DefaultTreeDepth); err != nil {
-		s.log.ErrorContext(r.Context(), "building the folder tree failed", "error", err)
-	} else {
-		data.Tree = index.Flatten(tree, opts.Dir)
-		data.TreeTotal = tree.Assets
-	}
 	data.Dir = opts.Dir
 
-	// §7 saved searches, shown as pinnable shortcuts.
-	if searches, err := s.saved.List(r.Context()); err != nil {
-		s.log.ErrorContext(r.Context(), "listing saved searches failed", "error", err)
-	} else {
-		data.SavedSearches = searches
+	// Per-tile launch links and local paths (M16), when the operator has told us how the
+	// library is mounted on their machine. String work only — no filesystem, no queries — so
+	// a hundred tiles cost nothing measurable.
+	if s.cfg.LocalLibraryPath != "" {
+		data.TileApps = make(map[int64][]openApp, len(page.Groups))
+		data.TilePaths = make(map[int64]string, len(page.Groups))
+		for _, g := range page.Groups {
+			primary := g.Primary
+			local, ok := localPathFor(s.cfg.LocalLibraryPath, primary.LibraryPath())
+			if !ok {
+				continue
+			}
+			data.TilePaths[primary.ID] = local.Path
+			data.TileApps[primary.ID] = openAppsFor(primary.Ext, local.Path)
+		}
+	}
+
+	// The shared sidebar: counts, colours, the folder tree, saved searches, the last
+	// scan. Cached, because the asset page renders the same thing now — see sidebar.go.
+	s.applySidebar(r.Context(), &data, opts.Dir)
+
+	// §7's facets describe *this* result set, so a filtered view has to compute its own — but
+	// an unfiltered browse is the same for everybody and came with the cached snapshot
+	// (applySidebar). That matters because Facets was measured at 55 ms, the most expensive
+	// thing left on the request path, and "browsing with no filter" is most page views.
+	if isFiltered(opts) {
+		if facets, err := s.index.Facets(r.Context(), opts, index.DefaultFacetLimit); err != nil {
+			s.log.ErrorContext(r.Context(), "facets failed", "error", err)
+		} else {
+			data.Facets = facets
+		}
 	}
 
 	s.render(w, r, "assets.html", http.StatusOK, data)
@@ -120,21 +133,34 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	data := s.newPageData(r)
 	data.Workspace = true
+	data.Nav = "library"
 	data.Asset = &asset
 	data.Flash = r.URL.Query().Get("msg")
 
-	// Which file the 3D viewer loads. A derived, normalised preview.glb when one was
-	// actually produced (deriveModel does that for glTF), otherwise the original
-	// through the companion route — which is how .obj and .fbx are viewed at all.
+	// M16: the same sidebar as the grid. Opening an asset used to replace the library
+	// navigation with a handful of prose links, so the kinds, colours, tags and folders
+	// vanished exactly when you wanted to jump sideways. The current folder follows the
+	// asset, so the tree opens where the file lives.
+	s.applySidebar(r.Context(), &data, libraryDir(asset.LibraryPath()))
+
+	// Which file the 3D viewer loads: the original, through the companion route, for
+	// every format three.js can read directly.
 	//
-	// Decided here rather than on the row: `derive_state = 'ok'` says a preview of some
-	// kind exists, and since M15 that can be a browser-rendered thumbnail. Trusting it
-	// to mean "a glb exists" pointed every FBX at a 404 and left the stage empty.
+	// M17 stopped preferring the derived preview.glb, which is what made 442 glTF
+	// assets open to an empty stage. A .gltf is a JSON file that names its geometry
+	// (`.bin`) and its textures as separate files, and the "normalised" glb inherited
+	// those names — 1,396 bytes of JSON pointing at a 202 KB buffer that no route
+	// serves, because the companion route lives under /assets/{id}/file/ and a relative
+	// URI beside preview.glb does not land there.
+	//
+	// The companion route is the better answer regardless: it resolves the `.bin`, the
+	// `.mtl` and the textures, including the pack-wide texture lookup that finds the
+	// shared Textures/ directory these packs actually use. Embedding could fix the
+	// buffer but not a texture four directories up. preview.glb remains what §6 asks
+	// for — a normalised artifact for API consumers — and is now written self-contained
+	// (see internal/model), but the viewer no longer depends on it.
 	if format := asset.ViewerFormat(); format != "" {
 		data.ViewerSrc = asset.ViewerFile()
-		if s.derivativeExists(asset.SHA256, derive.FileModelPreview) {
-			data.ViewerSrc = fmt.Sprintf("/assets/%d/preview.glb", asset.ID)
-		}
 	}
 
 	// M14 "open in…": the path as the operator's own machine sees it, when they have
@@ -161,6 +187,32 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		if variants, err := s.index.Variants(r.Context(), group.ID); err == nil {
 			data.Variants = variants
 		}
+
+		// Previous/next in the browse order (M16). The filters travel in the query
+		// string, so J and K walk the search you came from; with none, the whole
+		// library. Positioned by the group's primary, because that is what the grid
+		// ordered — opening a .psd variant should not put you somewhere else in the
+		// sequence than opening its .png.
+		browse := browseOptions(r)
+		if prev, next, err := s.index.Neighbours(r.Context(), browse, group.Primary.Filename, group.ID); err != nil {
+			s.log.ErrorContext(r.Context(), "finding neighbours failed", "asset_id", asset.ID, "error", err)
+		} else {
+			data.PrevAsset, data.NextAsset = prev, next
+		}
+		data.BrowseQuery = browseQueryString(browse)
+	}
+
+	// The licence and source link, editable here (M16). Both are pack-level, which the
+	// panel says out loud; a failure loading them only costs the panel.
+	if licenses, err := s.prov.Licenses(r.Context()); err != nil {
+		s.log.ErrorContext(r.Context(), "listing licences failed", "error", err)
+	} else {
+		data.Licenses = licenses
+	}
+	if prov, err := s.prov.Get(r.Context(), asset.PackID); err != nil {
+		s.log.ErrorContext(r.Context(), "loading provenance failed", "pack_id", asset.PackID, "error", err)
+	} else {
+		data.Prov = &prov
 	}
 
 	// Tags (§7): direct and inherited. A failure here should not blank the page.
@@ -267,14 +319,98 @@ func (s *Server) lookupAsset(w http.ResponseWriter, r *http.Request) (index.Asse
 	return asset, true
 }
 
-// nextPageURL preserves the current filters while advancing the cursor, so paging
-// through a filtered search does not silently drop the filter.
-func nextPageURL(r *http.Request, cursor string) string {
-	if cursor == "" {
+// isFiltered reports whether these options narrow the library at all.
+func isFiltered(opts index.ListOptions) bool {
+	return opts.Query != "" || opts.Kind != "" || opts.Dir != "" || opts.PackID != 0 || opts.IncludeMissing
+}
+
+// browseOptions reads the filters an asset page was reached with.
+//
+// The detail page has always been reachable by a bare /assets/{id}, and it still is — this
+// only picks up context when the grid passes it along, so previous/next follows the result
+// set you were looking at rather than jumping into the whole library.
+func browseOptions(r *http.Request) index.ListOptions {
+	q := r.URL.Query()
+	opts := index.ListOptions{
+		Query:          strings.TrimSpace(q.Get("q")),
+		Kind:           q.Get("kind"),
+		Dir:            q.Get("dir"),
+		IncludeMissing: q.Get("missing") == "1",
+	}
+	if raw := q.Get("pack"); raw != "" {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			opts.PackID = id
+		}
+	}
+	return opts
+}
+
+// browseQueryString renders those filters back, so the previous/next links and the "back to
+// results" link carry them too.
+func browseQueryString(opts index.ListOptions) string {
+	v := url.Values{}
+	if opts.Query != "" {
+		v.Set("q", opts.Query)
+	}
+	if opts.Kind != "" {
+		v.Set("kind", opts.Kind)
+	}
+	if opts.Dir != "" {
+		v.Set("dir", opts.Dir)
+	}
+	if opts.PackID != 0 {
+		v.Set("pack", strconv.FormatInt(opts.PackID, 10))
+	}
+	if opts.IncludeMissing {
+		v.Set("missing", "1")
+	}
+	if len(v) == 0 {
 		return ""
 	}
+	return "?" + v.Encode()
+}
+
+// pageSizes are the choices the grid offers. §8 wants the grid responsive at 20,000
+// assets, and MaxPageSize caps anything larger than the top choice here.
+var pageSizes = []int{100, 200, 500}
+
+// pageSizeParam reads `per`, falling back to the default rather than erroring.
+func pageSizeParam(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return index.DefaultPageSize
+	}
+	for _, allowed := range pageSizes {
+		if n == allowed {
+			return n
+		}
+	}
+	return index.DefaultPageSize
+}
+
+// pageParam reads `page`. Anything unparseable or below 1 is page 1: a bad page number in
+// a URL should show you the library, not an error.
+func pageParam(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 1 {
+		return 1
+	}
+	return n
+}
+
+// pageURL rebuilds the current URL at another page, keeping every filter, the sort and the
+// page size. Page 1 drops the parameter so the canonical URL of a search stays clean.
+func pageURL(r *http.Request, n int) string {
 	q := r.URL.Query()
-	q.Set("cursor", cursor)
+	q.Del("cursor")
+	if n <= 1 {
+		q.Del("page")
+	} else {
+		q.Set("page", strconv.Itoa(n))
+	}
+	if len(q) == 0 {
+		return r.URL.Path
+	}
 	return r.URL.Path + "?" + q.Encode()
 }
 
@@ -314,6 +450,29 @@ func libraryDir(libPath string) string {
 // The derivative cache is keyed by content hash (§6), so this is a stat rather than a
 // query — and it is the only honest answer to "was a glb actually written", which the
 // derive_state column cannot give.
+// markModelThumbs asks the filesystem which model tiles actually have a picture.
+//
+// A model is the one kind whose derive can succeed without producing an image: glTF and
+// OBJ normalise to a preview.glb and nothing else, while a browser-rendered thumbnail
+// writes the image first and only then records success. `derive_state` cannot tell the
+// two apart, so the grid believed 254 model tiles had a thumbnail, rendered an <img> at
+// a URL that 404s, and — because the same field also gates the browser renderer — never
+// asked anyone to fix it. Blank forever, which is what "listeleniyor ve görüntü yok"
+// describes.
+//
+// One stat per model row on the page, and only for models. §8's rule about aggregates
+// belonging in a cache is about queries over the whole library; this is a handful of
+// stats against the local data volume, and unlike a cached column it cannot go stale —
+// invariant 2, in the small.
+func (s *Server) markModelThumbs(groups []index.Group) {
+	for i := range groups {
+		if !groups[i].Primary.IsModel() {
+			continue
+		}
+		groups[i].Primary.ThumbOnDisk = s.derivativeExists(groups[i].Primary.SHA256, derive.FileThumb)
+	}
+}
+
 func (s *Server) derivativeExists(sha256hex, name string) bool {
 	relDir, err := derive.Dir(sha256hex)
 	if err != nil {

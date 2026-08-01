@@ -1,22 +1,81 @@
-/* M0 baseline styling. Deliberately small: the real UI arrives with the grid in
-   M1, and there is no point styling pages that do not exist yet.
+/* Ambar's stylesheet. Dark by default — §6 composites thumbnails over mid-grey "so
+   alpha-heavy sprites are visible in a dark UI", so that is the assumed direction. No
+   inline styles anywhere, which keeps the CSP at default-src 'self' with no
+   'unsafe-inline'.
 
-   Dark by default — §6 mentions compositing thumbnails over mid-grey "so
-   alpha-heavy sprites are visible in a dark UI", so that is the assumed
-   direction. No inline styles anywhere, which keeps the CSP at
-   default-src 'self' with no 'unsafe-inline'. */
+   M16 rebuilt the token layer. What was here before had grown one variable per need
+   rather than one per *role*: a single --accent was the link colour, the button fill,
+   the focus ring, the active-tab marker and the highlight, so nothing could be
+   emphasised relative to anything else, and every button on every page shouted equally
+   loudly. The roles below exist so that "primary action", "current page" and "this is a
+   link" can look different from each other, and so a destructive action can look
+   dangerous. See docs/decisions.md → "M16 — the visual language". */
 
 :root {
-  --bg: #16181c;
-  --surface: #1e2128;
-  --border: #2c313a;
-  --text: #e4e6eb;
-  --muted: #9aa3b2;
-  --accent: #6ea8fe;
-  --error: #ff8a8a;
-  --error-bg: #3a1f22;
-  --radius: 6px;
+  color-scheme: dark;
+
+  /* Surfaces, back to front. Four steps rather than two: a card inside a panel inside
+     the page needs to separate without a border on every edge. */
+  --bg: #101216;
+  --surface: #171a20;
+  --surface-2: #1d2128;
+  --surface-3: #242a34;
+  --border: #292f3a;
+  --border-strong: #3a4252;
+
+  /* Text roles. The old --muted (#9aa3b2 on #1e2128) sat at about 4.3:1 — under AA for
+     body text, and it was used for whole paragraphs. Now: --text for content, --text-2
+     for secondary prose that must still be read comfortably, --muted for labels and
+     metadata only. */
+  --text: #e9ebf0;
+  --text-2: #bcc3d0;
+  --muted: #98a1b0;
+
+  /* Accent roles. */
+  --link: #7cb3ff;
+  --brand: #4f86e8;
+  --brand-hover: #5f93ee;
+  --on-brand: #0a1120;
+  --active: #9cc6ff;
+  --focus: #7cb3ff;
+
+  --danger: #ff8080;
+  --danger-fill: #b03a35;
+  --danger-fill-hover: #c04440;
+  --danger-bg: #3a1e21;
+  --ok: #7ec894;
+  --ok-bg: #1d3a28;
+  --warn: #e2b45c;
+  --warn-bg: #34290f;
+
+  /* Kept so nothing that still says --accent or --error breaks. */
+  --accent: var(--link);
+  --error: var(--danger);
+  --error-bg: var(--danger-bg);
+
+  /* One spacing scale, so gaps stop being invented per component. */
+  --s1: 0.25rem;
+  --s2: 0.4rem;
+  --s3: 0.6rem;
+  --s4: 0.9rem;
+  --s5: 1.3rem;
+  --s6: 2rem;
+
+  --radius: 7px;
+  --radius-sm: 4px;
+  --radius-pill: 999px;
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale. Body sits at 15px; the steps below are the only sizes in the file. */
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.82rem;
+  --fs-md: 0.9rem;
+  --fs-lg: 1.05rem;
+  --fs-xl: 1.25rem;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.45);
 
   /* The workspace shell (M14). Panel widths and the grid tile size are set here so
      workspace.js can change them at runtime through the CSSOM — never through an
@@ -35,7 +94,8 @@ body {
   flex-direction: column;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* --- chrome --- */
@@ -44,8 +104,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.7rem 1.2rem;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -61,24 +121,28 @@ body {
 .topbar nav, .topnav {
   display: flex;
   align-items: center;
-  gap: 0.9rem;
+  gap: var(--s1);
 }
 
-.who { color: var(--muted); font-size: 0.9rem; }
+.who {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  padding-left: var(--s3);
+}
 
 main {
   flex: 1;
   width: 100%;
   max-width: 60rem;
   margin: 0 auto;
-  padding: 2rem 1.2rem;
+  padding: var(--s6) var(--s5);
 }
 
 .footer {
-  padding: 0.8rem 1.2rem;
+  padding: var(--s3) var(--s5);
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
 }
 
 /* --- blocks --- */
@@ -87,43 +151,67 @@ main {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.6rem;
+  padding: var(--s5);
 }
 
 .card.narrow { max-width: 24rem; margin: 3rem auto; }
 
-h1 { margin: 0 0 1rem; font-size: 1.25rem; }
+/* Type scale. Headings were 1.25rem and 1rem against 15px body text, which is barely a
+   hierarchy at all; panel headings were 0.72rem uppercase grey, which is a different
+   system again. Three levels, each clearly a level. */
+h1 {
+  margin: 0 0 var(--s4);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
 
-.hint { color: var(--muted); font-size: 0.87rem; }
+h2 {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-lg);
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+
+h3 { margin: 0 0 var(--s2); font-size: var(--fs-md); font-weight: 620; }
+
+p { margin: 0 0 var(--s4); }
+p:last-child { margin-bottom: 0; }
+
+/* .hint is metadata, not prose: one line under a control. Anything longer belongs in a
+   tooltip or in /settings — see the M16 note in docs/decisions.md. */
+.hint { color: var(--text-2); font-size: var(--fs-sm); }
 
 code {
   font-family: var(--mono);
-  font-size: 0.87em;
-  background: #00000040;
+  font-size: 0.88em;
+  background: #ffffff10;
+  color: var(--text);
   padding: 0.1em 0.35em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .error {
-  background: var(--error-bg);
+  background: var(--danger-bg);
   border: 1px solid #6b3336;
+  border-left: 3px solid var(--danger);
   border-radius: var(--radius);
-  color: var(--error);
-  padding: 0.6rem 0.8rem;
-  margin: 0 0 1rem;
-  font-size: 0.9rem;
+  color: #ffbcbc;
+  padding: var(--s3) var(--s4);
+  margin: 0 0 var(--s4);
+  font-size: var(--fs-md);
 }
 
 .facts {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.35rem 1rem;
-  margin: 1.2rem 0 0;
-  font-size: 0.9rem;
+  gap: var(--s1) var(--s4);
+  margin: var(--s4) 0 0;
+  font-size: var(--fs-md);
 }
 
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; }
+.facts dd { margin: 0; color: var(--text); }
 
 /* --- forms --- */
 
@@ -131,106 +219,185 @@ form.inline { display: inline; }
 
 label {
   display: block;
-  margin: 0.9rem 0 0.3rem;
-  font-size: 0.85rem;
-  color: var(--muted);
+  margin: var(--s4) 0 var(--s1);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
 }
 
 input[type="text"],
-input[type="password"] {
+input[type="password"],
+input[type="url"],
+input[type="number"],
+input[type="search"],
+select {
   width: 100%;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--text);
   font: inherit;
+  font-size: var(--fs-md);
 }
 
+input::placeholder { color: var(--muted); }
+
+input:hover, select:hover { border-color: #495264; }
+
+/* One focus ring for everything, drawn outside the element so it never shifts layout. */
 input:focus-visible,
+select:focus-visible,
 button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-button {
-  margin-top: 1.2rem;
-  padding: 0.5rem 1rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: #10131a;
+/* Four button roles, and only four.
+
+   The default is *secondary*: a neutral, outlined control. Before M16 the bare element
+   was a filled accent button with `margin-top: 1.2rem`, which had two consequences —
+   every button on every page carried maximum emphasis, so nothing stood out, and the
+   stray top margin knocked buttons out of alignment inside every flex row it appeared
+   in (the tag-add form is the clearest example). Emphasis is now opt-in:
+
+     button              secondary — the common case
+     button.primary      the one action a page is for
+     button.linkish      quiet, inline, reads as text
+     button.danger       irreversible; §9.1's purge is the only true one         */
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
   font: inherit;
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1.35;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 
-button:hover { filter: brightness(1.08); }
+button:hover,
+.button:hover {
+  background: #2c333f;
+  border-color: #49536580;
+  filter: none;
+}
+
+button:active, .button:active { transform: translateY(0.5px); }
+
+button:disabled,
+button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button:disabled:hover { background: var(--surface-3); }
+
+/* An <a class="button"> is always a page's own call to action — "Download original",
+   "Browse assets" — so it carries the primary fill without needing a second class. */
+button.primary,
+.button {
+  background: var(--brand);
+  border-color: transparent;
+  color: var(--on-brand);
+  font-weight: 600;
+}
+
+button.primary:hover,
+.button:hover { background: var(--brand-hover); }
+
+/* …except when it is explicitly quiet (the M15 "open in" links). */
+.button.button-quiet {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 500;
+}
+.button.button-quiet:hover { background: var(--surface-3); }
+
+/* Destructive: it must not be reachable by muscle memory alone, so it looks different
+   rather than merely being labelled differently. */
+button.danger {
+  background: var(--danger-fill);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+button.danger:hover { background: var(--danger-fill-hover); }
 
 button.linkish {
   margin: 0;
   padding: 0;
   background: none;
   border: none;
-  color: var(--muted);
+  color: var(--text-2);
   font-weight: 400;
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
-button.linkish:hover { color: var(--text); filter: none; }
+button.linkish:hover { color: var(--text); background: none; filter: none; }
 
-a { color: var(--accent); }
+/* Login and the settings forms have a bare submit as a direct form child, and they used
+   to lean on the removed global margin for their breathing room. */
+.card.narrow form > button { margin-top: var(--s5); width: 100%; }
+
+a { color: var(--link); text-underline-offset: 2px; }
+a:hover { color: var(--active); }
 
 /* --- asset browsing (M1) --- */
 
-.stack { display: flex; flex-direction: column; gap: 1.1rem; }
+.stack { display: flex; flex-direction: column; gap: var(--s5); }
 
-.searchbar { display: flex; gap: 0.5rem; align-items: center; }
-
-.searchbar input[type="search"] {
-  flex: 1;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.searchbar button { margin: 0; }
-.searchbar .clear { font-size: 0.85rem; color: var(--muted); }
-
-.kinds { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-
+/* `.searchbar` and `.kinds` were the M1 in-page search row and kind chips. Search moved
+   into the toolbar and kinds moved into the sidebar in M14, so both selectors were dead
+   weight; removed in M16. `.chip` is still used by the tag facets. */
 .chip {
-  padding: 0.15rem 0.55rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.8rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
   text-decoration: none;
 }
 
-.chip:hover { color: var(--text); }
-.chip-on { border-color: var(--accent); color: var(--accent); }
+.chip:hover { color: var(--text); border-color: #49536580; }
+.chip-on { border-color: var(--active); color: var(--active); background: #7cb3ff1a; }
 
-.resultcount { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.clear { font-size: var(--fs-sm); color: var(--text-2); }
 
+.resultcount { color: var(--text-2); font-size: var(--fs-md); margin: 0; }
+
+/* A note is a message *about* the page, so it reads at content size rather than in
+   metadata grey — the old #9aa3b2 at 0.87rem was a paragraph nobody could read. */
 .note {
   margin: 0;
-  padding: 0.6rem 0.8rem;
+  padding: var(--s3) var(--s4);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.87rem;
+  border-left: 3px solid var(--link);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-md);
 }
 
-.note-warn { border-left-color: #d9a441; }
+.note-warn { border-left-color: var(--warn); background: var(--warn-bg); color: #f0d9a8; }
 
 /* Wide content scrolls inside its own box rather than making the page scroll. */
 .tablewrap {
@@ -242,13 +409,13 @@ a { color: var(--accent); }
 .grid {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   background: var(--surface);
 }
 
 .grid th,
 .grid td {
-  padding: 0.45rem 0.7rem;
+  padding: var(--s2) var(--s3);
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -257,9 +424,9 @@ a { color: var(--accent); }
 .grid thead th {
   position: sticky;
   top: 0;
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -274,47 +441,40 @@ a { color: var(--accent); }
 .dir {
   display: block;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   font-family: var(--mono);
 }
 
 .kind {
   font-family: var(--mono);
-  font-size: 0.78rem;
-  color: var(--muted);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
 }
 
 .badge {
-  margin-left: 0.4rem;
-  padding: 0.05rem 0.35rem;
-  border-radius: 3px;
+  display: inline-block;
+  margin-left: var(--s2);
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-sm);
   background: #ffffff14;
-  color: var(--muted);
-  font-size: 0.7rem;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
-.badge-warn { background: #d9a4412e; color: #e0b563; }
+.badge-warn { background: var(--warn-bg); color: var(--warn); }
 
 .more { text-align: center; padding: 0.4rem 0; }
 
-.breadcrumb { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.breadcrumb { margin: 0; color: var(--text-2); font-size: var(--fs-md); }
 
-.actions { margin: 1.3rem 0 0; }
+.actions { margin: var(--s5) 0 0; display: flex; flex-wrap: wrap; gap: var(--s2); }
 
-.button {
-  display: inline-block;
-  padding: 0.45rem 0.9rem;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: #10131a;
-  font-weight: 600;
-  font-size: 0.9rem;
-  text-decoration: none;
-}
-
-.button:hover { filter: brightness(1.08); }
+/* `.button` used to be redefined here, after the element rules, with its own padding and
+   fill. It is one control with one look now; see the button roles above. */
 
 .hash { word-break: break-all; white-space: normal; }
 
@@ -409,28 +569,50 @@ a { color: var(--accent); }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.7rem;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
 }
 
-.viewer-group { display: flex; gap: 0.2rem; }
+/* A segmented group: buttons that belong to one question (zoom, background, rendering)
+   sit flush against each other so they read as a set rather than as four decisions. */
+.viewer-group { display: inline-flex; }
 
-.viewer-toolbar button {
-  margin: 0;
+.viewer-group button { border-radius: 0; margin-left: -1px; }
+.viewer-group button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); margin-left: 0; }
+.viewer-group button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.viewer-group button:only-child { border-radius: var(--radius-sm); }
+
+/* The toolbar control: the same object as a secondary button, one step smaller. Defined
+   once here and reused by the palette and audio toolbars, which each used to
+   carry their own near-identical copy. */
+.viewer-toolbar button,
+.palette-controls button,
+.audio-controls button,
+.sheet-controls button {
   padding: 0.2rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 400;
-  cursor: pointer;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
-.viewer-toolbar button:hover { color: var(--text); filter: none; }
-.viewer-toolbar button.on { border-color: var(--accent); color: var(--accent); }
+.viewer-toolbar button:hover,
+.palette-controls button:hover,
+.audio-controls button:hover,
+.sheet-controls button:hover { color: var(--text); background: #2f3744; }
+
+/* Pressed state, one definition. It used to be the same blue as every link, so "this is
+   on" and "this is clickable" looked identical. */
+.viewer-toolbar button.on,
+.palette-controls button.on,
+.audio-controls button.on {
+  background: #7cb3ff26;
+  border-color: var(--active);
+  color: var(--active);
+  z-index: 1;
+}
 
 .viewer-status {
   margin-left: auto;
@@ -462,13 +644,19 @@ a { color: var(--accent); }
      would otherwise start on its own. */
   user-select: none;
   -webkit-user-drag: none;
-  transform-origin: 0 0;
-  /* The transform is set by viewer2d.js; without a base position the origin maths
-     would be relative to a moving box. */
+  /* Anchored at the stage's top-left with an unscaled origin, because viewer2d.js
+     computes the centring itself.
+
+     There used to be `left: 50%; top: 50%; translate: -50% -50%` here, and it was a
+     real bug rather than a style choice: the `translate` property is applied *before*
+     the `transform` property and is therefore not scaled, while the image is. The
+     result was a constant offset of (scale - 1) × size / 2 — every asset sat right of
+     and below centre, by an amount that grew with the zoom, and the cursor-anchored
+     wheel zoom drifted for the same reason. */
   position: absolute;
-  left: 50%;
-  top: 50%;
-  translate: -50% -50%;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
   max-width: none;
   max-height: none;
 }
@@ -511,32 +699,31 @@ a { color: var(--accent); }
 .errorcell {
   max-width: 28rem;
   white-space: normal;
-  color: var(--error);
-  font-size: 0.8rem;
+  color: var(--danger);
+  font-size: var(--fs-sm);
 }
-
-h2 { font-size: 1rem; margin: 0 0 0.6rem; }
 
 /* --- tags (§7) --- */
 .tags {
   list-style: none;
-  margin: 0 0 0.8rem;
+  margin: 0 0 var(--s3);
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: var(--s2);
 }
 .tag {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  font-size: 0.82rem;
+  gap: var(--s1);
+  padding: 0.12rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
 }
-.tag a { font-family: var(--mono); text-decoration: none; color: var(--accent); }
+.tag:hover { border-color: #49536580; }
+.tag a { font-family: var(--mono); text-decoration: none; color: var(--link); }
 .tag a:hover { text-decoration: underline; }
 /* §7: inherited pack tags shown greyed. */
 .tag-inherited { opacity: 0.7; }
@@ -596,16 +783,7 @@ h2 { font-size: 1rem; margin: 0 0 0.6rem; }
 }
 .bulkbar input[type=text] { flex: 1; min-width: 12rem; }
 .tile { position: relative; }
-.tilecheck {
-  position: absolute;
-  top: 0.4rem;
-  left: 0.4rem;
-  z-index: 2;
-  background: var(--surface);
-  border-radius: 3px;
-  padding: 0.1rem;
-  line-height: 0;
-}
+/* .tilecheck is defined once, with the selection styles further down. */
 
 /* --- audio viewer (§8) --- */
 .audio { margin-bottom: 1rem; }
@@ -625,51 +803,20 @@ h2 { font-size: 1rem; margin: 0 0 0.6rem; }
   gap: 0.6rem;
   margin-top: 0.5rem;
 }
-.audio-controls button {
-  padding: 0.3rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--text);
-  cursor: pointer;
-}
-.audio-controls button.on { border-color: var(--accent); color: var(--accent); }
-.audio-time { font-family: var(--mono); color: var(--muted); }
+/* Appearance comes from the shared toolbar-control rule; only the size differs. */
+.audio-controls button { padding: 0.3rem 0.8rem; }
+.audio-time { font-family: var(--mono); color: var(--text-2); }
 
-/* --- keyboard audition (§8) --- */
-.audition {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.7rem;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.audition button[data-role="toggle"] {
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--text);
-  cursor: pointer;
-}
-.audition button.on { border-color: var(--accent); color: var(--accent); }
-.audition-now { font-family: var(--mono); color: var(--accent); min-width: 8rem; }
-.audition-tag input { width: 12rem; }
+/* §8's keyboard audition was removed in M16 with the sidebar's Tools section, which was
+   its only entry point. `kbd` survives it: the viewer's hint line uses it. */
 kbd {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   padding: 0 0.3rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   background: var(--bg);
 }
-.tile.auditioning { outline: 2px solid var(--accent); outline-offset: 2px; }
-.tile.tagged { outline: 2px solid #86c99a; outline-offset: 2px; }
-.tile.tag-failed { outline: 2px solid var(--error); outline-offset: 2px; }
 
 /* --- 3D model viewer (§8) --- */
 .model { margin-bottom: 1rem; }
@@ -734,97 +881,92 @@ kbd {
   gap: 0.4rem 0.8rem;
 }
 .palette-copyfmt {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--muted);
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-}
-.palette-copyfmt select {
-  font: inherit;
-  font-size: 0.8rem;
-  padding: 0.15rem 0.3rem;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-.palette-controls .viewer-group button,
-.palette-controls > button {
+  gap: var(--s1);
   margin: 0;
-  padding: 0.2rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
 }
-.palette-controls .viewer-group button:hover,
-.palette-controls > button:hover { color: var(--text); }
-.palette-controls .viewer-group button.on,
-.palette-controls > button.on { border-color: var(--accent); color: var(--accent); }
+.palette-copyfmt select { width: auto; font-size: var(--fs-sm); padding: 0.15rem 0.3rem; }
 
-.swatches {
+/* The palette controls are toolbar controls; the shared rule above dresses them. */
+
+/* The strip (M16): a palette shown as a palette. The old grid of 6.5rem cells — chip,
+   hex, percentage and two icons each — took a screenful to say what a row of circles says
+   at a glance, and the numbers are one click away under Details. */
+.dots {
   list-style: none;
-  margin: 0.9rem 0 0;
+  margin: var(--s4) 0 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
-  gap: 0.4rem;
-}
-.swatches li { margin: 0; }
-
-.swatch {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  margin: 0;
-  padding: 0.35rem 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
+  flex-wrap: wrap;
+  gap: var(--s2);
 }
-.swatch:hover { border-color: var(--accent); }
-.swatch.copied { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.dots li { margin: 0; }
 
-.swatch-chip {
-  flex: 0 0 auto;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 4px;
-  /* A subtle inset border so a white or near-background swatch is still visible
-     against the card, and a checker underlay is unnecessary since these colours
-     are always fully opaque. */
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+.dot {
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-pill);
+  line-height: 0;
+  cursor: pointer;
 }
-.swatch-meta {
+.dot:hover { background: none; }
+
+.dot-fill {
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-pill);
+  /* An inset ring rather than a border, so a white or near-background colour is still
+     visible against the card without the ring changing the colour's apparent size. These
+     swatches are always fully opaque, so no checker underlay is needed. */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+  transition: transform 0.1s;
+}
+.dot:hover .dot-fill { transform: scale(1.12); }
+.dot:active .dot-fill { transform: scale(1.02); }
+
+/* Copy feedback: the ring, not a colour change — a swatch must never lie about its
+   colour, not even for 600ms. */
+.dot.copied .dot-fill { box-shadow: 0 0 0 2px var(--active), 0 0 0 4px #7cb3ff40; }
+
+/* The same circle at table size, for the Details rows. */
+.dot-sm {
+  width: 1.1rem;
+  height: 1.1rem;
+  transition: none;
+}
+
+/* Greyscale check (§8): desaturate every swatch to read the value structure. */
+.palette.greyscale .dot-fill { filter: grayscale(1); }
+
+.palette-details {
+  margin: var(--s4) 0 0;
+  padding: var(--s4) 0 0;
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  line-height: 1.25;
-  overflow: hidden;
+  gap: var(--s3);
 }
-.swatch-meta code { font-family: var(--mono); font-size: 0.78rem; }
-.swatch-meta small { color: var(--muted); font-size: 0.7rem; }
 
-/* Greyscale check (§8): desaturate every chip to read the value structure. */
-.palette.greyscale .swatch-chip { filter: grayscale(1); }
+/* `display: flex` outranks the `hidden` attribute's `display: none`, so without this the
+   details table was open on first load however the disclosure was set. Caught on a
+   screenshot rather than in review, which is the argument for taking them. */
+.palette-details[hidden] { display: none; }
+.palette-table td { vertical-align: middle; }
+.palette-row-actions { white-space: nowrap; }
 
 .palette-status {
-  margin: 0.6rem 0 0;
+  margin: var(--s3) 0 0;
   min-height: 1.1rem;
   font-family: var(--mono);
-  font-size: 0.8rem;
-  color: var(--accent);
+  font-size: var(--fs-sm);
+  color: var(--active);
 }
-.palette-export { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
-.palette-export a { margin: 0; }
+.palette-export { margin: 0; font-size: var(--fs-sm); color: var(--muted); }
 
 /* --- the removal flow (§9.1, M13) ------------------------------------------- */
 
@@ -840,71 +982,13 @@ kbd {
 tr.favoured { background: #2b5f3a1f; }
 tr.favoured code { font-weight: 600; }
 
-/* --- colour search from the palette panel (§7) ------------------------------- */
+/* The swatch action icons used to be defined twice — once here for §7's colour search
+   and again near the end of the file for M15 — with the second copy silently winning.
+   One definition now, in the palette section below. */
 
-/* Two icons under each swatch: search this colour, copy this colour. Quiet until the
-   swatch is hovered or focused, so the palette still reads as a palette. */
-.swatches li { position: relative; }
-.swatch-actions {
-    display: flex;
-    justify-content: center;
-    gap: 0.15rem;
-    opacity: 0.45;
-}
-.swatches li:hover .swatch-actions,
-.swatch-actions:focus-within { opacity: 1; }
-.swatch-icon {
-    font-size: 0.85rem;
-    line-height: 1;
-    padding: 0.1rem 0.3rem;
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    color: var(--muted);
-    text-decoration: none;
-    cursor: pointer;
-}
-.swatch-icon:hover { color: var(--text); border-color: var(--border); background: #ffffff0f; }
-
-/* --- pack palette consistency view (§7) -------------------------------------- */
-
-.palette-strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-.strip-chip {
-    display: block;
-    text-decoration: none;
-    text-align: center;
-    min-width: 2.6rem;
-}
-.strip-swatch {
-    display: block;
-    height: 1.6rem;
-    border-radius: 3px;
-    border: 1px solid #0006;
-}
-.strip-label { font-size: 0.68rem; opacity: 0.7; }
-.strip-chip:hover .strip-label { opacity: 1; }
-
-/* Three columns where there is room, stacked on a narrow screen. */
-.palette-compare {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-    gap: 1rem;
-    margin-top: 0.8rem;
-}
-.palette-compare h3 { font-size: 0.9rem; margin: 0 0 0.4rem; }
-
-.palette-pick { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: end; }
-
-/* The one-line answer, which is the point of the page. */
-.verdict { font-size: 1.05rem; margin: 0.2rem 0 0.6rem; }
-
+/* The pack-palette comparison view's styles (strips, three-column compare, verdict) lived here
+   until M16, when /palettes was removed. `palette-strip.js` still paints the sidebar's colour
+   chips, which is the part of this that people use. */
 
 /* --- the workspace shell (M14) ----------------------------------------------
 
@@ -925,13 +1009,28 @@ body.app {
   padding: 0.45rem 0.7rem;
   background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   font: inherit;
+  font-size: var(--fs-md);
 }
-.topsearch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.topnav { flex: 0 0 auto; font-size: 0.9rem; }
+.topnav { flex: 0 0 auto; font-size: var(--fs-md); }
+
+/* Toolbar links are navigation, not prose links: they get the pill treatment and a real
+   current-page state, which the flat blue text row never had. */
+.topnav a {
+  padding: 0.28rem 0.6rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  text-decoration: none;
+}
+.topnav a:hover { background: var(--surface-3); color: var(--text); }
+.topnav a[aria-current="page"] {
+  background: #7cb3ff1f;
+  color: var(--active);
+  font-weight: 550;
+}
 
 .workspace {
   flex: 1;
@@ -946,9 +1045,9 @@ body.app {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 1rem 0.9rem 3rem;
+  padding: var(--s4) var(--s3) var(--s6);
   background: var(--surface);
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
 }
 .panel-left { border-right: 1px solid var(--border); }
 .panel-right {
@@ -957,7 +1056,7 @@ body.app {
   background: var(--surface);
   min-height: 0;
   overflow-y: auto;
-  padding: 1rem 0.9rem 3rem;
+  padding: var(--s4) var(--s3) var(--s6);
 }
 
 .workmain {
@@ -970,11 +1069,12 @@ body.app {
 }
 
 /* Panel sections: a heading, a list of links with counts. */
-.panel-section { margin: 0 0 1.3rem; }
-.panel-section > h2 {
-  margin: 0 0 0.5rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+.panel-section { margin: 0 0 var(--s5); }
+.panel-section > h2,
+.rail-section > h2 {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 600;
@@ -984,17 +1084,24 @@ body.app {
 .panel-list a {
   display: flex;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.22rem 0.4rem;
-  border-radius: 4px;
-  color: var(--text);
+  gap: var(--s2);
+  padding: 0.24rem var(--s2);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.panel-list a:hover { background: #ffffff0f; }
-.panel-list a.on { background: #ffffff17; font-weight: 600; }
+.panel-list a:hover { background: var(--surface-3); color: var(--text); }
+/* Current selection: a left marker plus the accent, so it is legible at a glance in a
+   list of thirty folders rather than being a slightly lighter grey. */
+.panel-list a.on {
+  background: #7cb3ff1a;
+  box-shadow: inset 2px 0 0 var(--active);
+  color: var(--active);
+  font-weight: 550;
+}
 .panel-list .n { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
 
 /* The grid toolbar: result count on the left, tile-size slider on the right. */
@@ -1017,15 +1124,8 @@ body.app .thumbgrid {
 
 /* The asset page inside the workspace: the viewer takes the height it can get. */
 .workmain > .stack { max-width: none; }
-.rail-section { margin: 0 0 1.4rem; }
-.rail-section > h2 {
-  margin: 0 0 0.5rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 600;
-}
+/* Section headings are shared with the left panel; see the rule above. */
+.rail-section { margin: 0 0 var(--s5); }
 /* Cards in the rail are already inside a panel; drop the double frame. */
 .panel-right .card {
   background: transparent;
@@ -1053,14 +1153,429 @@ body.app .thumbgrid {
 }
 .rail-head .actions { margin: 0.6rem 0 0; }
 
+/* The rail's folded audit facts (M16). Same disclosure pattern as the folder tree. */
+.more-facts { margin: var(--s4) 0 0; }
+.more-facts summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.more-facts summary::-webkit-details-marker { display: none; }
+.more-facts summary::before { content: "▸"; font-size: 0.7em; }
+.more-facts[open] summary::before { content: "▾"; }
+.more-facts summary:hover { color: var(--text-2); }
+.more-facts .facts { margin-top: var(--s2); }
+
+/* /status' number row (M16). A count is a number, not a definition-list row. */
+.statgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--s3);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stat-n {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label { font-size: var(--fs-sm); color: var(--muted); }
+
+/* The sidebar's own metadata line: "Scanned 12 min ago · 5610 assets" under the scan
+   button. It replaced a two-line paragraph explaining what scanning does. */
+.panel-note {
+  margin: var(--s2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* Tile quick actions (M16): download, copy the local path, open in an application.
+
+   Hidden until the tile is hovered or focused — a hundred tiles with six visible buttons each
+   stops being a grid. Each app button carries that application's own colour with a dark glyph
+   on it, which is the part the operator asked for: the previous "open in" buttons were accent
+   blue on dark blue and could not be read. */
+.tileacts {
+  position: absolute;
+  top: var(--s1);
+  right: var(--s1);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.15rem;
+  max-width: 70%;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.tile:hover .tileacts,
+.tileacts:focus-within { opacity: 1; }
+
+.tileact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.28rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #0b0e13d9;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+.tileact:hover { background: #0b0e13; color: #fff; }
+.tileact.copied { background: var(--ok); color: #0a1a10; }
+
+/* One rule per application, so each is recognisable without a logo. Foreground is chosen for
+   contrast against that colour, not for consistency with the theme — being readable is the
+   whole point of this. */
+/* Also used for the asset page's "Open in" row, where the buttons are full-width words rather
+   than two-letter marks. */
+.appbtn { color: #10131a; border-color: transparent; font-weight: 600; }
+.appbtn:hover { color: #000; filter: brightness(1.1); }
+.app-aseprite { background: #7d929f; }
+.app-blender  { background: #e87d0d; }
+.app-godot    { background: #478cbf; }
+.app-krita    { background: #b4d3e8; }
+.app-gimp     { background: #b39b6e; }
+.app-audio    { background: #9cd0e0; }
+.app-tiled    { background: #d0b45c; }
+.app-editor   { background: #a8b0c0; }
+.app-fonts    { background: #c9c2b4; }
+/* "File manager" is not an application with a colour of its own, and leaving it to inherit
+   .button's brand fill made it look like the primary action on the page. */
+.appbtn.app-reveal { background: var(--surface-3); color: var(--text); font-weight: 500; }
+.appbtn.app-reveal:hover { background: #2f3744; color: var(--text); }
+
+/* Live job progress (M16). The bar's width comes from data-percent through the CSSOM in
+   jobs.js — never an inline style, which the CSP forbids. */
+.jobprogress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 7rem;
+}
+.jobprogress-bar {
+  position: relative;
+  flex: 1;
+  height: 0.35rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.jobprogress-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct, 0%);
+  background: var(--brand);
+}
+.jobprogress-text { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The sidebar's scan line while something is running. */
+.panel-note.is-working { color: var(--active); }
+
+/* --- upload (M16) ------------------------------------------------------------- */
+
+.uploader { display: flex; flex-direction: column; gap: var(--s4); }
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: var(--s6) var(--s5);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.dropzone:hover { border-color: #495264; }
+/* The whole page is the drop target; this is the box saying so. */
+.dropzone.is-over {
+  border-color: var(--active);
+  background: #7cb3ff14;
+}
+.dropzone-title { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
+.dropzone-sub { font-size: var(--fs-sm); color: var(--muted); }
+
+.uploads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+
+.upload {
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.upload-done { border-color: #2f5d3f; }
+
+.upload-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+.upload-name { font-weight: 550; overflow-wrap: anywhere; }
+.upload-status {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.upload-status.is-error { color: var(--danger); }
+
+.upload-track {
+  height: 0.35rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.upload-bar {
+  width: 0;
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.15s linear;
+}
+
+.upload-body { margin-top: var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+.upload-dest, .upload-source { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.upload-dest-label { font-size: var(--fs-sm); color: var(--text-2); }
+.upload-dest select, .upload-newfolder { width: auto; }
+.upload-source input { flex: 1; min-width: 14rem; }
+
+/* The search box's completion panel (M16). A real listbox rather than a <datalist>, which
+   cannot be grouped, annotated or styled. */
+.topsearch { position: relative; }
+
+.suggest {
+  position: absolute;
+  top: calc(100% + var(--s1));
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+
+.suggest-list { list-style: none; margin: 0; padding: var(--s1) 0; }
+
+.suggest-group {
+  padding: var(--s2) var(--s3) var(--s1);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.suggest-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  width: 100%;
+  padding: 0.3rem var(--s3);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+  font-size: var(--fs-md);
+  white-space: normal;
+}
+.suggest-item:hover, .suggest-item.on { background: #7cb3ff1f; }
+.suggest-text { overflow-wrap: anywhere; }
+.suggest-detail {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The pager (M16), replacing "Load more". */
+.pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: var(--s4) 0 0;
+  padding: var(--s3) 0 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.pager-pages { display: flex; align-items: center; gap: 0.15rem; }
+.pager-n {
+  min-width: 1.9rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: var(--radius-sm);
+  text-align: center;
+  text-decoration: none;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.pager-n:hover { background: var(--surface-3); color: var(--text); }
+.pager-n.on {
+  background: #7cb3ff1f;
+  color: var(--active);
+  font-weight: 600;
+}
+.pager-gap { color: var(--muted); padding: 0 0.15rem; }
+.pager-range { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Page size sits at the far right, where the count it changes is. */
+.pager-size { margin-left: auto; }
+.pager-size select, .gridsort select { width: auto; font-size: var(--fs-sm); padding: 0.2rem 0.4rem; }
+
+.gridsort { margin: 0; }
+
+/* Selection (M16): a ticked tile should be obvious at a glance across a screen of a
+   hundred, so it gets a ring rather than only a ticked box in its corner. */
+.tile-selected { outline: 2px solid var(--active); outline-offset: -1px; }
+.tile-selected .tilecheck { background: var(--active); }
+/* Where the keyboard is. Distinct from selection: one is "here", the other is "chosen". */
+.tile-cursor { box-shadow: 0 0 0 2px var(--focus); }
+.selectall { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
+
+/* The checkbox used to sit on top of the artwork's corner. Its own strip keeps it off the
+   picture, which matters most on the small sprites this library is full of. */
+.tilecheck {
+  position: absolute;
+  top: var(--s1);
+  left: var(--s1);
+  z-index: 2;
+  background: #0b0e13cc;
+  border-radius: var(--radius-sm);
+  padding: 0.1rem;
+  line-height: 0;
+}
+
+/* Format variants as one line (M16): chips instead of a headed four-column table. */
+.variants {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.variants-label { color: var(--muted); }
+.variant {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+}
+.variant a { text-decoration: none; }
+.variant-current { border-color: var(--active); }
+.variant-current code { color: var(--active); }
+.variant-missing { opacity: 0.5; }
+.variant-dl { color: var(--muted); }
+.variant-dl:hover { color: var(--link); }
+
+/* Licence and source, in the rail (M16). */
+.prov-form { display: flex; flex-direction: column; gap: var(--s2); }
+.prov-form select, .prov-form input { width: 100%; }
+.prov-actions { display: flex; align-items: center; gap: var(--s3); }
+.prov-actions .hint { text-decoration: none; }
+
+/* Previous / Results / Next, at the top of the rail (M16). */
+.rail-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0 0 var(--s4);
+}
+.rail-nav .button { flex: 0 0 auto; font-size: var(--fs-sm); padding: 0.25rem 0.5rem; }
+.rail-nav-back {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-decoration: none;
+}
+.rail-nav-back:hover { color: var(--link); }
+/* An end of the list: present so the row does not reflow, obviously not pressable. */
+.is-disabled { opacity: 0.35; pointer-events: none; }
+
+/* The rail head: identity, then the sideways jumps that the asset page's own sidebar
+   used to carry before the navigation became shared (M16). */
+.rail-meta { margin: 0 0 var(--s2); font-size: var(--fs-sm); color: var(--text-2); }
+.rail-meta a { color: var(--text-2); }
+.rail-meta a:hover { color: var(--link); }
+.rail-jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  margin: var(--s3) 0 0;
+}
+
 /* Saved searches in the sidebar: name on the left, delete on the right. */
 .saved-row { display: flex; align-items: center; gap: 0.2rem; }
 .saved-row a { flex: 1; min-width: 0; }
 .saved-row form { flex: 0 0 auto; }
 
 /* The viewer fills the centre column instead of sitting in a 60rem box. */
-body.app .viewer, body.app .model { margin-bottom: 1rem; }
-body.app .viewer-stage, body.app .model-stage { min-height: 24rem; }
+body.app .viewer, body.app .model { margin-bottom: 0; }
+
+/* The asset page's column fills the pane, and the viewer takes the height that is left
+   over (M16).
+
+   Before this the stage was a fixed `min(72vh, 46rem)`, so the palette and the tag panel
+   started below the fold on every screen — and the wheel could not scroll the page,
+   because the viewer ate the event. Fixing the wheel was necessary but not sufficient:
+   the two panels you use while looking at a sprite should not need scrolling to reach at
+   all. */
+body.app .asset-page {
+  min-height: 100%;
+  /* The work row keeps its natural height; the viewer absorbs the rest. */
+  justify-content: flex-start;
+}
+
+body.app .asset-page .viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  /* Never collapse to nothing on a short window: below this the page scrolls instead. */
+  min-height: 22rem;
+}
+
+body.app .asset-page .viewer-stage {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+body.app .model-stage { min-height: 24rem; }
 
 /* Visually hidden but present for assistive technology. */
 .sr-only {
@@ -1172,11 +1687,6 @@ body.app .viewer-stage, body.app .model-stage { min-height: 24rem; }
 .colour-chip:hover .colour-swatch,
 .colour-chip:focus-visible .colour-swatch { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* The audition tool, now living in the panel: stack its controls instead of laying
-   them out across a page width it no longer has. */
-.panel .audition { display: flex; flex-direction: column; gap: 0.4rem; margin: 0 0 0.6rem; }
-.panel .audition-tag { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; }
-.panel .audition-tag input { width: 100%; }
 
 
 /* The asset page's working area: palette and tags side by side under the viewer,
@@ -1204,30 +1714,23 @@ body.app .viewer-stage, body.app .model-stage { min-height: 24rem; }
 .sheet-line label { font-size: 0.85rem; color: var(--muted); }
 .sheet-line input[type=number] { width: 4rem; }
 
-/* Two icons under each swatch (M15): search this colour, copy this colour. Quiet
-   until the swatch is hovered or focused, so the palette still reads as a palette. */
-.swatches li { position: relative; }
-.swatch-actions {
-    display: flex;
-    justify-content: center;
-    gap: 0.15rem;
-    opacity: 0.45;
-}
-.swatches li:hover .swatch-actions,
-.swatch-actions:focus-within { opacity: 1; }
+/* The two row icons in the palette's Details table (M16): search this colour, copy this
+   colour. They used to hang under every swatch in the strip, which is why the strip could
+   not be a strip. */
 .swatch-icon {
-    font-size: 0.9rem;
+    font-size: var(--fs-md);
     line-height: 1;
     padding: 0.05rem 0.3rem;
     background: none;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--muted);
     text-decoration: none;
     cursor: pointer;
     font-family: inherit;
 }
-.swatch-icon:hover { color: var(--text); border-color: var(--border); background: #ffffff0f; }
+.swatch-icon:hover { color: var(--text); border-color: var(--border-strong); background: #ffffff0f; }
+.swatch-icon.copied { color: var(--active); border-color: var(--active); }
 
 /* --- the live font specimen (M15) -------------------------------------------- */
 

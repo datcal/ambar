@@ -295,7 +295,11 @@ func TestAssetDetailListsVariants(t *testing.T) {
 	body := ts.body(t, ts.get(t, fmt.Sprintf("/assets/%d", id)))
 
 	// §5.1: "the detail panel lists variants with download links per format".
-	if !strings.Contains(body, "2 formats of this artwork") {
+	//
+	// M16 made this one line of chips rather than a headed table, so the count, the paths
+	// and the primary marker moved into the chips and their tooltips. What is asserted is
+	// unchanged: every format is listed, reachable, and identifiable.
+	if !strings.Contains(body, "2 formats") {
 		t.Error("the detail page does not list the format variants")
 	}
 	if !strings.Contains(body, "PSD/hero.psd") {
@@ -304,9 +308,9 @@ func TestAssetDetailListsVariants(t *testing.T) {
 	if !strings.Contains(body, "primary") {
 		t.Error("the variant list does not mark the primary")
 	}
-	// The framing matters: these are formats of one artwork, not duplicates.
-	if !strings.Contains(body, "One logical asset") {
-		t.Error("the detail page does not explain that variants are not duplicates")
+	psdID := ts.assetID(t, "pack/PSD/hero.psd")
+	if !strings.Contains(body, fmt.Sprintf("/assets/%d/download", psdID)) {
+		t.Error("the variant list has no download link for the PSD")
 	}
 }
 
@@ -435,11 +439,13 @@ func TestScanFromTheUIReturnsImmediately(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	// M16: the button no longer takes you to /jobs. A scan is background work, so pressing it
+	// acknowledges and leaves you where you were — here, the page the form was posted from.
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("status = %d, want 303", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Location"); got != "/jobs" {
-		t.Errorf("Location = %q, want /jobs", got)
+	if got := resp.Header.Get("Location"); got == "/jobs" {
+		t.Error("the scan button still redirects to /jobs")
 	}
 
 	// The scan is queued, not done: nothing is indexed yet, because no worker is

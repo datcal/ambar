@@ -81,6 +81,23 @@ type Job struct {
 	CreatedAt  time.Time
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+
+	// Progress is what a long job reports about itself (M16). Total is 0 when the job has
+	// not said, which is every job type that finishes quickly enough not to need to.
+	ProgressDone  int64
+	ProgressTotal int64
+	ProgressNote  string
+}
+
+// Percent is the completion percentage, or -1 when the job has not reported a total.
+func (j Job) Percent() int {
+	if j.ProgressTotal <= 0 {
+		return -1
+	}
+	if j.ProgressDone >= j.ProgressTotal {
+		return 100
+	}
+	return int(float64(j.ProgressDone) / float64(j.ProgressTotal) * 100)
 }
 
 // Duration is how long the job took, or how long it has been running.
@@ -202,6 +219,29 @@ func (q *Queue) Enqueue(ctx context.Context, jobType string, payload any, opts E
 
 	q.Nudge()
 	return id, nil
+}
+
+// Progress records how far a running job has got.
+//
+// Best-effort by design: a failed progress write must never fail the work it is describing, so
+// the error is returned for logging and callers ignore it. The write is one UPDATE on the
+// single writer connection, which is why callers are expected to throttle — see
+// index.ScanOptions.Progress for the "every 250 files or half a second" rule.
+func (q *Queue) Progress(ctx context.Context, jobID, done, total int64, note string) error {
+	_, err := q.db.Writer.ExecContext(ctx, `
+		UPDATE jobs SET progress_done = ?, progress_total = ?, progress_note = ?, updated_at = ?
+		WHERE id = ? AND state = 'running'`,
+		done, total, note, q.now().Unix(), jobID)
+	if err != nil {
+		return fmt.Errorf("record job progress: %w", err)
+	}
+	return nil
+}
+
+// Active lists the jobs that are running right now, with their progress. This is what the UI
+// polls: a handful of rows, not the 200-row history the jobs page shows.
+func (q *Queue) Active(ctx context.Context) ([]Job, error) {
+	return q.Recent(ctx, StateRunning, 20)
 }
 
 // Nudge wakes a worker. Non-blocking: a full channel already means "there is work".
@@ -357,7 +397,62 @@ func (q *Queue) runHandler(ctx context.Context, handler Handler, job Job) (err e
 			err = fmt.Errorf("handler panicked: %v", rec)
 		}
 	}()
-	return handler(ctx, []byte(job.Payload))
+	// The job's identity travels in the context rather than in the handler signature, so a
+	// handler that wants to report progress can ask for a reporter and every handler that
+	// does not stays exactly as it was.
+	return handler(withJobID(ctx, job.ID), []byte(job.Payload))
+}
+
+// jobIDKey carries the running job's id to its handler.
+type jobIDKey struct{}
+
+func withJobID(ctx context.Context, id int64) context.Context {
+	return context.WithValue(ctx, jobIDKey{}, id)
+}
+
+// JobIDFrom returns the id of the job whose handler is running, if any.
+func JobIDFrom(ctx context.Context) (int64, bool) {
+	id, ok := ctx.Value(jobIDKey{}).(int64)
+	return id, ok
+}
+
+// progressInterval throttles progress writes. Every update is one write on the single writer
+// connection, and a scan that reported every file would spend more time describing itself than
+// walking — while starving the connection every other write shares.
+const progressInterval = 400 * time.Millisecond
+
+// Reporter returns a function a handler can call as often as it likes to report progress.
+//
+// Throttling lives here rather than in each caller: there is one rule, and every long job
+// should get it for free. A completed report (done >= total) always writes, so the last number
+// the UI sees is the real one.
+//
+// Outside a job — a CLI scan, a test — the returned function does nothing, which is what lets
+// the same scan code run in both places.
+func (q *Queue) Reporter(ctx context.Context) func(done, total int64, note string) {
+	id, ok := JobIDFrom(ctx)
+	if !ok {
+		return func(int64, int64, string) {}
+	}
+
+	var (
+		mu   sync.Mutex
+		last time.Time
+	)
+	return func(done, total int64, note string) {
+		mu.Lock()
+		final := total > 0 && done >= total
+		if !final && q.now().Sub(last) < progressInterval {
+			mu.Unlock()
+			return
+		}
+		last = q.now()
+		mu.Unlock()
+
+		if err := q.Progress(ctx, id, done, total, note); err != nil {
+			q.log.DebugContext(ctx, "could not record job progress", "job_id", id, "error", err)
+		}
+	}
 }
 
 // claim atomically takes the next runnable job.
@@ -538,7 +633,8 @@ func (q *Queue) Recent(ctx context.Context, state string, limit int) ([]Job, err
 
 	query := `
 		SELECT id, type, payload_json, state, attempts, last_error, priority,
-		       run_after, created_at, started_at, finished_at
+		       run_after, created_at, started_at, finished_at,
+		       progress_done, progress_total, progress_note
 		FROM jobs`
 	var args []any
 	if state != "" {
@@ -564,7 +660,8 @@ func (q *Queue) Recent(ctx context.Context, state string, limit int) ([]Job, err
 			startedAt, finishedAt sql.NullInt64
 		)
 		if err := rows.Scan(&j.ID, &j.Type, &j.Payload, &j.State, &j.Attempts,
-			&j.LastError, &j.Priority, &runAfter, &createdAt, &startedAt, &finishedAt); err != nil {
+			&j.LastError, &j.Priority, &runAfter, &createdAt, &startedAt, &finishedAt,
+			&j.ProgressDone, &j.ProgressTotal, &j.ProgressNote); err != nil {
 			return nil, err
 		}
 		j.RunAfter = time.Unix(runAfter, 0)

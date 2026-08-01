@@ -1,35 +1,71 @@
-{{define "title"}}Ambar{{end}}
+{{define "title"}}Status — Ambar{{end}}
 
+{{/* /status. The library is the front door (§0: "the whole point is the assets"), so this
+     page is the operational one: is the index healthy, is there work outstanding, where
+     is everything on disk.
+
+     M16 tidied it rather than deleting it. "Signed in as burak" was not status — the
+     username is in the toolbar two centimetres above — and the counts were a definition
+     list with no shape. The numbers read as numbers now, and the paths are reference
+     material rather than the headline. The empty state offers the button instead of
+     telling you to go and find a shell on the NAS. */}}
 {{define "content"}}
-<div class="card">
-  <h1>Ambar</h1>
-  <p>Signed in as <strong>{{.User.Username}}</strong>.</p>
+<div class="stack">
+  <h1>Status</h1>
 
   {{if .Stats}}
     {{if eq .Stats.Assets 0}}
-      <p>The index is empty.</p>
-      <p class="hint">
-        Run <code>ambar scan</code> to index the library at
-        <code>{{.LibraryRoot}}</code>. In the container that is
-        <code>docker exec ambar /ambar scan</code>.
-      </p>
+      <div class="card">
+        <p>The index is empty.</p>
+        <form method="post" action="/scan" class="actions">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <button type="submit" class="primary">Scan the library</button>
+        </form>
+        <p class="hint">Indexes <code>{{.LibraryRoot}}</code> in the background.</p>
+      </div>
     {{else}}
-      <dl class="facts">
-        <dt>Assets</dt><dd>{{.Stats.Assets}}</dd>
-        <dt>Packs</dt><dd>{{.Stats.Packs}}</dd>
-        <dt>Total size</dt><dd>{{bytes .Stats.TotalBytes}}</dd>
-        {{if .Stats.Missing}}<dt>Missing</dt><dd>{{.Stats.Missing}}</dd>{{end}}
-        {{if .Stats.ContentChanged}}<dt>Content changed</dt><dd>{{.Stats.ContentChanged}}</dd>{{end}}
-      </dl>
-      <p class="actions"><a class="button" href="/assets">Browse assets</a></p>
+      <div class="statgrid">
+        <div class="stat">
+          <span class="stat-n">{{.Stats.Assets}}</span>
+          <span class="stat-label">assets</span>
+        </div>
+        <div class="stat">
+          <span class="stat-n">{{.Stats.Packs}}</span>
+          <span class="stat-label">packs</span>
+        </div>
+        <div class="stat">
+          <span class="stat-n">{{bytes .Stats.TotalBytes}}</span>
+          <span class="stat-label">on disk</span>
+        </div>
+        {{if .Stats.Missing}}
+          <div class="stat">
+            <span class="stat-n">{{.Stats.Missing}}</span>
+            <span class="stat-label"><a href="/?missing=1">missing files</a></span>
+          </div>
+        {{end}}
+        {{if .Stats.ContentChanged}}
+          <div class="stat">
+            <span class="stat-n">{{.Stats.ContentChanged}}</span>
+            <span class="stat-label">changed since indexing</span>
+          </div>
+        {{end}}
+      </div>
+
+      <p class="actions">
+        <a class="button" href="/">Browse the library</a>
+        <a class="button button-quiet" href="/jobs">Background work</a>
+      </p>
     {{end}}
   {{end}}
 
-  <dl class="facts">
-    <dt>Version</dt><dd>{{.Version}}</dd>
-    <dt>Library root</dt><dd><code>{{.LibraryRoot}}</code></dd>
-    <dt>Data root</dt><dd><code>{{.DataRoot}}</code></dd>
-    <dt>Health</dt><dd><a href="/api/v1/healthz">/api/v1/healthz</a></dd>
-  </dl>
+  <div class="card">
+    <h2>This deployment</h2>
+    <dl class="facts">
+      <dt>Version</dt><dd><code>{{.Version}}</code></dd>
+      <dt>Library root</dt><dd><code>{{.LibraryRoot}}</code></dd>
+      <dt>Data root</dt><dd><code>{{.DataRoot}}</code></dd>
+      <dt>Health</dt><dd><a href="/api/v1/healthz">/api/v1/healthz</a></dd>
+    </dl>
+  </div>
 </div>
 {{end}}

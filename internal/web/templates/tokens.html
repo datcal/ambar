@@ -30,8 +30,15 @@
         <label><input type="checkbox" name="scope" value="write"> write</label>
         <label><input type="checkbox" name="scope" value="admin"> admin</label>
       </p>
+      {{/* Said here because getting it wrong is silent: a read-only token browses the library
+           perfectly and then fails only at the moment an import is recorded, which is the one
+           thing that makes §9.1's "a project uses this" protection true. */}}
+      <p class="hint">
+        The Godot plugin needs <strong>write</strong> — it records what a project imports.
+        Read alone is enough to browse and download.
+      </p>
       <p><label>Expires (optional)<br><input type="date" name="expires"></label></p>
-      <p><button type="submit">Create token</button></p>
+      <p><button type="submit" class="primary">Create token</button></p>
     </form>
   </div>
 

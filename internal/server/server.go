@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +51,10 @@ type Server struct {
 	projects *projects.Store
 	sidecars *sidecar.Manager
 	jobs     *jobs.Queue
+
+	// The shared library sidebar's cached aggregates (M16). See sidebar.go for why the
+	// cache is not optional.
+	nav *sidebarCache
 
 	// The M13 removal path (§9.1). removals plans and refuses; trash carries plans
 	// out and owns the trash directory. Kept as two fields rather than one so the
@@ -110,6 +115,7 @@ func New(cfg *config.Config, database *db.DB, indexer *index.Indexer, queue *job
 			LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot, Readonly: cfg.LibraryReadonly, Log: log,
 		}),
 		jobs:     queue,
+		nav:      &sidebarCache{},
 		removals: removal.NewPlanner(database, cfg.LibraryRoot, cfg.DataRoot, cfg.TrashDir),
 		trash: removal.NewExecutor(database, cfg.LibraryRoot, cfg.DataRoot, cfg.TrashDir,
 			cfg.DedupeLinkMode, audit.New(database, log), log),
@@ -165,6 +171,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /assets/{id}/tags", auth.RequireUser(http.HandlerFunc(s.handleAssetTagAdd)))
 	mux.Handle("POST /assets/{id}/tags/remove", auth.RequireUser(http.HandlerFunc(s.handleAssetTagRemove)))
 	mux.Handle("GET /api/v1/tags/suggest", auth.RequireUser(http.HandlerFunc(s.handleTagSuggest)))
+	// M16: completion for the toolbar's search box — the query language, the library's own
+	// vocabulary, and filenames.
+	mux.Handle("GET /api/v1/suggest", auth.RequireUser(http.HandlerFunc(s.handleSearchSuggest)))
 	mux.Handle("POST /assets/tags/bulk", auth.RequireUser(http.HandlerFunc(s.handleBulkTag)))
 
 	// Saved searches (§7).
@@ -202,7 +211,10 @@ func (s *Server) routes() http.Handler {
 	// Background work (§12). POST /scan enqueues and returns immediately, which is
 	// what invariant 8 requires of every scan trigger.
 	mux.Handle("GET /jobs", auth.RequireUser(http.HandlerFunc(s.handleJobs)))
-	mux.Handle("POST /scan", auth.RequireUser(http.HandlerFunc(s.handleScan)))
+	// M16: answers in place instead of redirecting to /jobs, and /api/v1/jobs/status is what
+	// the sidebar and the jobs page poll while work is in flight.
+	mux.Handle("POST /scan", auth.RequireUser(http.HandlerFunc(s.handleScanNow)))
+	mux.Handle("GET /api/v1/jobs/status", auth.RequireUser(http.HandlerFunc(s.handleJobStatus)))
 	mux.Handle("POST /jobs/retry-failed", auth.RequireUser(http.HandlerFunc(s.handleRetryFailed)))
 
 	// Junk view (§9.1, M12): reporting only. GET shows the cached report; POST
@@ -211,7 +223,6 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /junk/scan", auth.RequireUser(http.HandlerFunc(s.handleJunkScan)))
 
 	// §7 pack palette consistency: a read-only comparison, so one GET.
-	mux.Handle("GET /palettes", auth.RequireUser(http.HandlerFunc(s.handlePalettes)))
 
 	// Duplicates and the removal path (§9.1, M13). Every destructive route is a
 	// POST behind CSRF, and /removals/plan is the preview step no apply can skip.
@@ -231,13 +242,17 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /upload", auth.RequireUser(http.HandlerFunc(s.handleIngestForm)))
 	mux.Handle("GET /ingest", auth.RequireUser(http.HandlerFunc(s.handleIngestForm)))
 	mux.Handle("POST /ingest/upload", auth.RequireUser(http.HandlerFunc(s.handleUpload)))
+	// M16: the upload lands the bytes, this starts the extraction once the destination has
+	// been chosen. Two steps, because the destination is a question about the real archive.
+	mux.Handle("POST /ingest/start", auth.RequireUser(http.HandlerFunc(s.handleIngestStart)))
 
 	// Provenance and licensing (§9).
-	mux.Handle("GET /provenance", auth.RequireUser(http.HandlerFunc(s.handleProvenanceList)))
-	mux.Handle("POST /provenance/bulk", auth.RequireUser(http.HandlerFunc(s.handleProvenanceBulk)))
 	mux.Handle("GET /packs/{id}/provenance", auth.RequireUser(http.HandlerFunc(s.handlePackProvenanceForm)))
 	mux.Handle("POST /packs/{id}/provenance", auth.RequireUser(http.HandlerFunc(s.handlePackProvenanceSave)))
+	// M16: the two provenance fields that actually get filled in, from the asset page.
+	mux.Handle("POST /assets/{id}/provenance", auth.RequireUser(http.HandlerFunc(s.handleAssetProvenanceSave)))
 
+	// Session-authed, because the status page fetches it from the browser.
 	mux.Handle("GET /api/v1/healthz", auth.RequireUser(http.HandlerFunc(s.handleHealth)))
 
 	// The JSON API (§10), authenticated by a bearer token rather than a session.
@@ -245,6 +260,11 @@ func (s *Server) routes() http.Handler {
 	api := func(pattern string, h http.HandlerFunc) {
 		mux.Handle(pattern, s.tokens.RequireToken(auth.ScopeRead, h))
 	}
+	// M16: /api/v1/healthz is registered above for the browser, but it is also the natural
+	// "can I reach the library" probe for an API client — and it answered 401 to a perfectly
+	// good token, which sent anyone testing the Godot plugin off to re-check their token.
+	// /api/v1/ping is the same report, token-authed.
+	api("GET /api/v1/ping", s.handleHealth)
 	api("GET /api/v1/search", s.handleAPISearch)
 	api("GET /api/v1/assets/{id}", s.handleAPIAsset)
 	api("GET /api/v1/assets/{id}/file", s.handleAssetDownload)
@@ -312,10 +332,20 @@ func (s *Server) staticHandler() http.Handler {
 		panic("static assets missing from embed: " + err.Error())
 	}
 	fileServer := http.FileServer(http.FS(sub))
+
+	// The assets change only when the binary does, and the templates append ?v=<version>
+	// to every reference, so a released build's URLs are unique and can be cached hard.
+	//
+	// A dev or dirty build is being edited right now, and the old one-hour TTL with no
+	// version in the URL meant every CSS change needed a manual hard refresh — the exact
+	// trap that makes a UI change look like it did nothing.
+	cache := "public, max-age=31536000, immutable"
+	if v := s.build.Version; v == "" || v == "dev" || strings.Contains(v, "dirty") {
+		cache = "no-cache"
+	}
+
 	return http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The assets change only when the binary does, so tie caching to the
-		// build rather than guessing at a TTL.
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Cache-Control", cache)
 		fileServer.ServeHTTP(w, r)
 	}))
 }
@@ -343,7 +373,33 @@ type pageData struct {
 	Search         string
 	Kind           string
 	IncludeMissing bool
-	NextURL        string
+
+	// The grid's pager and sort control (M16). PageURL builds a link to another page with
+	// every filter intact; it is a func so the template can ask for an arbitrary number
+	// without the handler precomputing fifty-seven URLs.
+	// Per-tile quick actions (M16), keyed by asset id. Empty when AMBAR_LOCAL_LIBRARY_PATH is
+	// unset, which is what makes the whole row conditional in the template.
+	TileApps  map[int64][]openApp
+	TilePaths map[int64]string
+
+	Sort        string
+	SortOptions []index.SortOrder
+	PageSizes   []int
+	PageURL     func(int) string
+
+	// Previous/next in the browse order, and the filters that define it (M16). Nil at
+	// either end of the list.
+	PrevAsset *index.Neighbour
+	NextAsset *index.Neighbour
+	// BrowseQuery is those filters as a query string, "?q=…", or empty.
+	BrowseQuery string
+
+	// The shared navigation (M16). Nav names the current page so the sidebar and the
+	// toolbar can mark it; the counts come from the cached snapshot in sidebar.go.
+	Nav             string
+	LastScan        *lastScanInfo
+	ActiveJobs      int
+	NeedsProvenance int
 
 	// Tagging (M3).
 	AssetTags     []tags.AssetTag
@@ -351,11 +407,15 @@ type pageData struct {
 	SavedSearches []savedsearch.SavedSearch
 	TagError      string
 	Suggest       []string
-	Flash         string
+	// Suggestions is the search box's grouped completion list (M16).
+	Suggestions []index.Suggestion
+	Flash       string
 
-	// Ingest (M4).
+	// Ingest (M4). Folders are the top-level library directories a pack can be filed into
+	// (M16); MaxUploadSize <= 0 means no cap.
 	Readonly      bool
 	MaxUploadSize int64
+	Folders       []string
 
 	// API tokens (M8).
 	Tokens     []auth.Token
@@ -429,10 +489,6 @@ type pageData struct {
 	Dir       string
 
 	// §7 pack palette consistency.
-	PackPalettes      []index.PackPalette
-	PaletteA          int64
-	PaletteB          int64
-	PaletteComparison *paletteComparison
 
 	Trash          []*removal.Batch
 	TrashBytes     int64
@@ -469,12 +525,16 @@ func parseTemplates() (map[string]*template.Template, error) {
 	}
 
 	pages := []string{"login.html", "index.html", "assets.html", "asset.html", "jobs.html",
-		"ingest.html", "provenance.html", "pack_provenance.html", "tokens.html", "junk.html",
-		"dupes.html", "removal_confirm.html", "trash.html", "palettes.html", "settings.html"}
+		"ingest.html", "pack_provenance.html", "tokens.html", "junk.html",
+		"dupes.html", "removal_confirm.html", "trash.html", "settings.html"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
+		// nav.html carries the library sidebar (M16). It is parsed into every page's set
+		// rather than into the two that use it today, because the whole point of the
+		// change is that navigation does not move when you open something — a page that
+		// wants the sidebar should only have to ask for it.
 		t, err := template.New("base.html").Funcs(funcs).
-			ParseFS(web.FS, "templates/base.html", "templates/"+page)
+			ParseFS(web.FS, "templates/base.html", "templates/nav.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", page, err)
 		}
@@ -541,6 +601,7 @@ func (s *Server) renderPartial(w http.ResponseWriter, r *http.Request, page, blo
 // is — but the numbers are still worth one page.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	data := s.newPageData(r)
+	data.Nav = "status"
 
 	// A failing stats query should not blank the page; the rest of it is
 	// still useful, and the health endpoint is the place that reports trouble.

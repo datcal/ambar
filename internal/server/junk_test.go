@@ -61,9 +61,14 @@ func TestJunkScanEnqueuesJob(t *testing.T) {
 		t.Fatalf("queued junk jobs = %d, want 1", n)
 	}
 
-	// With the sweep queued (no worker runs in the test), the page reports it.
-	if body := ts.body(t, ts.get(t, "/junk")); !strings.Contains(body, "A scan is running") {
-		t.Error("the page should say a scan is running while one is queued")
+	// With the sweep queued (no worker runs in the test), the page reports it. M16 dropped the
+	// "then reload" half of that sentence: the line is live now, fed by /api/v1/jobs/status.
+	body := ts.body(t, ts.get(t, "/junk"))
+	if !strings.Contains(body, "A sweep is running") {
+		t.Error("the page should say a sweep is running while one is queued")
+	}
+	if strings.Contains(body, "then reload") {
+		t.Error("the page still tells the user to reload")
 	}
 }
 

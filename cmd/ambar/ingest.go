@@ -33,6 +33,8 @@ bad archive is moved to _quarantine/ with an error log rather than half-applied.
 
 func runIngest(args []string) error {
 	fs := flag.NewFlagSet("ambar ingest", flag.ContinueOnError)
+	dest := fs.String("into", "",
+		"library folder to extract into (one level, e.g. 2d); empty extracts at the root")
 	source := fs.String("source", "", "source URL to record as provenance (§9)")
 	// parseFlags handles a --source that follows the positional, which is the
 	// natural way to type `ambar ingest foo.zip --source ...`.
@@ -77,7 +79,7 @@ func runIngest(args []string) error {
 	})
 
 	fmt.Printf("ingesting %s\n", relPath)
-	res, err := ingester.Ingest(ctx, relPath, *source)
+	res, err := ingester.Ingest(ctx, relPath, *source, *dest)
 	if err != nil {
 		return err
 	}

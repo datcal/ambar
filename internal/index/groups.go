@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -294,9 +295,81 @@ func (g Group) MultiVariant() bool { return g.VariantCount > 1 }
 
 // GroupPage is one page of groups.
 type GroupPage struct {
-	Groups     []Group
+	Groups []Group
+	// NextCursor is the API's keyset position; empty for the grid's numbered paging.
 	NextCursor string
 	Total      int
+
+	// Page is 1-based, PageSize is how many fit on one, and Sort is the order they came
+	// back in — all three so the UI can render "page 3 of 57" without recomputing them.
+	Page     int
+	PageSize int
+	Sort     SortOrder
+}
+
+// Pages is the total number of pages, at least 1 so an empty library still has a page 1.
+func (p GroupPage) Pages() int {
+	if p.PageSize <= 0 {
+		return 1
+	}
+	return max(1, (p.Total+p.PageSize-1)/p.PageSize)
+}
+
+// HasPrev and HasNext are for the pager's arrows.
+func (p GroupPage) HasPrev() bool { return p.Page > 1 }
+func (p GroupPage) HasNext() bool { return p.Page < p.Pages() }
+
+// PrevPage and NextPage clamp, so a hand-edited page number cannot produce a link to 0.
+func (p GroupPage) PrevPage() int { return max(1, p.Page-1) }
+func (p GroupPage) NextPage() int { return min(p.Pages(), p.Page+1) }
+
+// FirstShown and LastShown are the 1-based range on this page, for "101–200 of 5610".
+func (p GroupPage) FirstShown() int {
+	if p.Total == 0 {
+		return 0
+	}
+	return (p.Page-1)*p.PageSize + 1
+}
+
+func (p GroupPage) LastShown() int {
+	return min(p.Total, p.FirstShown()+len(p.Groups)-1)
+}
+
+// PageNumbers is the list of page links to render, with 0 standing for a gap.
+//
+// A library of 5610 assets is 57 pages, and 57 links is not navigation. This is the usual
+// window: the first page, the last page, the current one with a neighbour either side, and
+// an ellipsis where numbers were skipped.
+func (p GroupPage) PageNumbers() []int {
+	total := p.Pages()
+	if total <= 9 {
+		out := make([]int, 0, total)
+		for i := 1; i <= total; i++ {
+			out = append(out, i)
+		}
+		return out
+	}
+
+	want := map[int]bool{1: true, total: true}
+	for i := p.Page - 1; i <= p.Page+1; i++ {
+		if i >= 1 && i <= total {
+			want[i] = true
+		}
+	}
+
+	out := make([]int, 0, 9)
+	prev := 0
+	for i := 1; i <= total; i++ {
+		if !want[i] {
+			continue
+		}
+		if prev != 0 && i != prev+1 {
+			out = append(out, 0) // a gap
+		}
+		out = append(out, i)
+		prev = i
+	}
+	return out
 }
 
 // ListGroups is the grid query: one row per logical asset rather than per file.
@@ -341,32 +414,62 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 		return nil, fmt.Errorf("count groups: %w", err)
 	}
 
+	// Two paging mechanisms, on purpose (M16):
+	//
+	//   - The API keeps the keyset cursor (§10). It is stateless, stable while the library
+	//     changes under it, and a client walking every asset only ever needs "next".
+	//   - The grid uses an offset, because numbered pages are what it needs and a cursor
+	//     cannot produce them: you cannot jump to page 4, cannot go back, and cannot share
+	//     a URL for where you are.
+	//
+	// The cursor path only supports the default order, which is all the API ever asked for.
+	sort := opts.Sort
+	if sort == "" {
+		sort = SortDefault
+	}
+
+	// Page == 0 is the cursor caller: the API leaves it unset, the grid always sends a
+	// number. The whole mode runs in the keyset's own order, including its first page —
+	// deriving a cursor from a page that was ordered some other way is how a keyset walk
+	// starts repeating and skipping rows, which is exactly what TestGroupPagination caught
+	// the first time this was written.
+	cursorMode := opts.Page == 0
+
+	order := sort.orderBy()
 	pageWhere, pageArgs := where, args
-	if opts.Cursor != "" {
-		filename, id, err := decodeCursor(opts.Cursor)
-		if err != nil {
-			return nil, err
+	offset := 0
+
+	switch {
+	case cursorMode:
+		order = "a.filename ASC, g.id ASC"
+		if opts.Cursor != "" {
+			filename, id, err := decodeCursor(opts.Cursor)
+			if err != nil {
+				return nil, err
+			}
+			pageWhere = append(append([]string{}, where...), `(a.filename, g.id) > (?, ?)`)
+			pageArgs = append(append([]any{}, args...), filename, id)
 		}
-		pageWhere = append(append([]string{}, where...), `(a.filename, g.id) > (?, ?)`)
-		pageArgs = append(append([]any{}, args...), filename, id)
+	case opts.Page > 1:
+		offset = (opts.Page - 1) * limit
 	}
 
 	query := `
-		SELECT g.id, g.pack_id, g.group_key, g.variant_count, ` + assetColumns + `
+		SELECT g.id, g.pack_id, g.group_key, g.variant_count, ` + assetListColumns + `
 		FROM asset_groups g
 		JOIN assets a ON a.id = g.primary_asset_id
 		JOIN packs p ON p.id = g.pack_id
 		WHERE ` + strings.Join(pageWhere, " AND ") + `
-		ORDER BY a.filename, g.id
-		LIMIT ?`
+		ORDER BY ` + order + `
+		LIMIT ? OFFSET ?`
 
-	rows, err := ix.db.Reader.QueryContext(ctx, query, append(pageArgs, limit+1)...)
+	rows, err := ix.db.Reader.QueryContext(ctx, query, append(pageArgs, limit+1, offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
 	defer rows.Close()
 
-	page := &GroupPage{Total: total}
+	page := &GroupPage{Total: total, Page: max(1, opts.Page), PageSize: limit, Sort: sort}
 	for rows.Next() {
 		var g Group
 		scanned, err := scanGroupRow(rows, &g)
@@ -384,9 +487,75 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 	if len(page.Groups) > limit {
 		last := page.Groups[limit-1]
 		page.Groups = page.Groups[:limit]
-		page.NextCursor = encodeCursor(last.Primary.Filename, last.ID)
+		// A cursor is only offered to the caller paging by cursor; handing one to a
+		// numbered pager would invite mixing the two, which skips rows.
+		if cursorMode {
+			page.NextCursor = encodeCursor(last.Primary.Filename, last.ID)
+		}
 	}
 	return page, nil
+}
+
+// Neighbour is the asset on one side of the one you are looking at.
+type Neighbour struct {
+	ID       int64
+	Filename string
+}
+
+// Neighbours returns the groups either side of a given one, in the same order the grid
+// uses, under the same filters.
+//
+// This is what makes the detail page a place you can *browse* rather than a dead end you
+// have to back out of: §8 asks for keyboard navigation, and an asset browser without
+// previous/next is a filesystem with extra steps.
+//
+// The position is given as (filename, groupID) rather than as an offset, so it costs one
+// indexed comparison instead of counting rows — the same keyset the grid pages with. The
+// filters come in as the ordinary ListOptions, so J and K walk the search you came from
+// once the grid passes it along, and the whole library when it does not.
+func (ix *Indexer) Neighbours(ctx context.Context, opts ListOptions, filename string, groupID int64) (prev, next *Neighbour, err error) {
+	where, args := groupFilters(opts)
+
+	compiled, err := ix.compileQuery(ctx, opts.Query, "v")
+	if err != nil {
+		return nil, nil, err
+	}
+	if compiled.SQL != "" {
+		where = append(where, `g.id IN (
+			SELECT v.group_id FROM assets v
+			WHERE v.group_id IS NOT NULL AND `+compiled.SQL+`)`)
+		args = append(args, compiled.Args...)
+	}
+
+	side := func(cmp, direction string) (*Neighbour, error) {
+		query := `
+			SELECT g.primary_asset_id, a.filename
+			FROM asset_groups g
+			JOIN assets a ON a.id = g.primary_asset_id
+			JOIN packs p ON p.id = g.pack_id
+			WHERE ` + strings.Join(where, " AND ") + `
+			  AND (a.filename, g.id) ` + cmp + ` (?, ?)
+			ORDER BY a.filename ` + direction + `, g.id ` + direction + `
+			LIMIT 1`
+
+		row := ix.db.Reader.QueryRowContext(ctx, query, append(append([]any{}, args...), filename, groupID)...)
+		var n Neighbour
+		switch err := row.Scan(&n.ID, &n.Filename); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, nil // an end of the list, not a fault
+		case err != nil:
+			return nil, err
+		}
+		return &n, nil
+	}
+
+	if prev, err = side("<", "DESC"); err != nil {
+		return nil, nil, fmt.Errorf("previous asset: %w", err)
+	}
+	if next, err = side(">", "ASC"); err != nil {
+		return nil, nil, fmt.Errorf("next asset: %w", err)
+	}
+	return prev, next, nil
 }
 
 // groupFilters builds the WHERE clause for group listing.
@@ -425,7 +594,7 @@ func groupFilters(opts ListOptions) ([]string, []any) {
 // §5.1: "The grid shows one entry per group; the detail panel lists variants with
 // download links per format."
 func (ix *Indexer) Variants(ctx context.Context, groupID int64) ([]Asset, error) {
-	rows, err := ix.db.Reader.QueryContext(ctx, `SELECT `+assetColumns+`
+	rows, err := ix.db.Reader.QueryContext(ctx, `SELECT `+assetListColumns+`
 		FROM assets a
 		JOIN packs p ON p.id = a.pack_id
 		WHERE a.group_id = ?`, groupID)

@@ -92,6 +92,16 @@ type Asset struct {
 	// quantized. Both empty until the image is analysed. Parse with Palette().
 	PaletteJSON string
 	PaletteKind string
+
+	// --- filled in by the handler, not by a query (M17) ---
+	// ThumbOnDisk is whether an image thumbnail exists in the derivative directory.
+	//
+	// Not a column, because it is a fact about the filesystem and invariant 2 says the
+	// filesystem is the source of truth; a column would be a second copy to drift. It
+	// matters only for models, where derive can succeed without producing a picture, so
+	// only the handlers that render model tiles pay for the stat — see
+	// (*Server).markModelThumbs.
+	ThumbOnDisk bool
 }
 
 // IsSheet reports whether a frame grid has been proposed or confirmed (§6, §8).
@@ -137,13 +147,33 @@ func (a Asset) ViewerFormat() string {
 }
 
 // NeedsBrowserThumb reports whether the grid should ask the browser to render a
-// thumbnail for this model (M15): a format three.js can read, with no derivative yet.
+// thumbnail for this model (M15): a format three.js can read, with no image yet.
 //
 // Blender would produce a better one — a lit turntable rather than a flat snapshot —
 // but Blender is optional (§6) and a grid full of extension chips is worse than a
 // snapshot.
+//
+// M17: the test is ThumbOnDisk, not HasPreview. `derive_state = 'ok'` means "derive
+// finished", and for a glTF or an OBJ derive finishing means it wrote a preview.glb —
+// geometry, not a picture. So those rows claimed a thumbnail they never had (the tile
+// rendered a 404) *and* were excluded from the browser renderer that would have made
+// one. Measured: 212 of 221 glTF tiles and 42 of 42 OBJ tiles were permanently blank,
+// while every browser-rendered .fbx was fine, because that path writes the image before
+// it sets 'ok'.
 func (a Asset) NeedsBrowserThumb() bool {
-	return a.ViewerFormat() != "" && !a.HasPreview() && !a.Missing()
+	return a.ViewerFormat() != "" && !a.ThumbOnDisk && !a.Missing()
+}
+
+// ShowsThumb reports whether a tile can render an <img> for this asset.
+//
+// For everything but a model, "derive succeeded" and "there is a picture" are the same
+// statement. For a model they are not, so the answer comes from the filesystem — see
+// ThumbOnDisk, which the handler fills in.
+func (a Asset) ShowsThumb() bool {
+	if a.IsModel() {
+		return a.ThumbOnDisk
+	}
+	return a.HasPreview()
 }
 
 // ViewerFile is the companion-route URL for the original model, which is what the
@@ -222,6 +252,27 @@ func (a Asset) HasPreview() bool { return a.DeriveState == "ok" }
 // a browser-rendered thumbnail, which in the 2D viewer looked like the asset itself.
 func (a Asset) Has2DPreview() bool { return a.HasPreview() && !a.IsModel() && !a.IsAudio() }
 
+// ThumbUpscales reports whether the grid will draw this asset's thumbnail larger than
+// the pixels it actually has.
+//
+// The tile is between 4rem and 26rem wide (§8's size slider), so anything whose long
+// edge is under about 256px is always being magnified there. Magnifying without
+// `image-rendering: pixelated` is what made a 32x32 sprite a smudge in the grid, and it
+// is not a question the pixel-art detector should be answering: at these sizes there is
+// no version of "correct" that involves interpolation, whatever the artwork is.
+//
+// Deliberately not applied to large sources. A 2048px texture shown at 176px is being
+// *reduced*, and nearest-neighbour reduction throws away every pixel it does not land
+// on — smooth is right there.
+func (a Asset) ThumbUpscales() bool {
+	const alwaysMagnified = 256
+	long := a.Width
+	if a.Height > long {
+		long = a.Height
+	}
+	return long > 0 && long <= alwaysMagnified
+}
+
 // HasPalette reports whether a non-empty colour palette was extracted (§8).
 func (a Asset) HasPalette() bool {
 	return a.PaletteKind != "" && a.PaletteJSON != "" && a.PaletteJSON != "[]"
@@ -272,8 +323,43 @@ func (a Asset) PaletteSwatches() []AssetSwatch {
 	return out
 }
 
-// Animated reports whether an animated preview was generated.
-func (a Asset) Animated() bool { return a.FrameCount > 1 }
+// Animated reports whether the *source file* is itself an animation — a GIF, an
+// animated WebP, an .aseprite with more than one frame — as against a still image
+// whose pixels happen to divide into a grid.
+//
+// M17: this used to be `FrameCount > 1`, which conflated the two and was wrong for
+// most of the library. `frame_count` is also set by §6's spritesheet grid *detection*,
+// which is a guess about geometry, not a claim that anything moves — and in this
+// library it guessed a 48x40 tileset was an animation of 1,920 frames. Measured:
+// 6,706 assets said "animated" and 795 anim.gif files existed, so nearly six thousand
+// tiles offered a hover animation that 404'd and blanked the image.
+//
+// `frame_source` is what separates them. Empty means the decoder found real frames in
+// the file, which is exactly when derive writes anim.gif — 795 rows, 795 files. Any
+// other value is a grid, detected or confirmed, and belongs to AnimatedPreview below.
+func (a Asset) Animated() bool { return a.FrameCount > 1 && a.FrameSource == "" }
+
+// AnimatedPreview is the URL of a moving preview that should exist for this asset, or
+// "" when there is none to offer.
+//
+// Two cases, and no third: a real animation has anim.gif, and a frame grid a human
+// stood behind has sheet.gif. A *detected* grid deliberately gets nothing — §6 says a
+// guess is never trusted silently, and animating one in the grid is trusting it
+// silently. The confirmation UI on the detail page is where a guess belongs.
+//
+// The caller must still tolerate a 404: confirming a grid does not currently rebuild
+// sheet.gif, so a corrected geometry can leave a stale file or none at all. grid.js
+// falls back to the still frame on error.
+func (a Asset) AnimatedPreview() string {
+	switch {
+	case a.Animated():
+		return fmt.Sprintf("/assets/%d/anim.gif", a.ID)
+	case a.FrameCount > 1 && a.SheetConfirmed():
+		return fmt.Sprintf("/assets/%d/sheet.gif", a.ID)
+	default:
+		return ""
+	}
+}
 
 // LibraryPath is the asset's path relative to AMBAR_LIBRARY_ROOT. This is the
 // value the download handler hands to safepath — never anything from a request.
@@ -310,8 +396,108 @@ type ListOptions struct {
 	// the rows forever regardless.
 	IncludeMissing bool
 
-	Limit  int
+	Limit int
+	// Cursor is the keyset position for the API's `next_cursor` paging (§10). The web
+	// grid uses Page instead — see the Sort and Page notes below.
 	Cursor string
+
+	// Sort names the browse order. Empty means SortDefault.
+	//
+	// This exists because there was exactly one order — filename A→Z across the whole
+	// library — so "what did I download yesterday" was unanswerable in a tool whose
+	// whole job is finding assets, and a sprite from 2d/ interleaved alphabetically with
+	// a wav from sounds/.
+	Sort SortOrder
+
+	// Page is 1-based. Zero and 1 both mean the first page.
+	//
+	// Numbered paging replaced the cursor for the UI in M16, and the two cannot be the
+	// same mechanism: a keyset cursor can only step forward from where you are, so there
+	// was no way back, no way to jump, and no shareable URL for "page 4". Offset paging
+	// costs the database more, but `Total` is already computed for the result count, so
+	// the page count is free, and the offsets stay small because the page size does.
+	Page int
+}
+
+// SortOrder is a browse order for the grid.
+type SortOrder string
+
+// The orders the grid offers. Kept as strings because they travel in URLs.
+const (
+	SortNewest   SortOrder = "added"    // first indexed, newest first
+	SortModified SortOrder = "modified" // file mtime, newest first
+	SortName     SortOrder = "name"
+	SortNameDesc SortOrder = "name-desc"
+	SortLargest  SortOrder = "size"
+	SortKind     SortOrder = "kind"
+	SortPixels   SortOrder = "pixels" // biggest image area first
+
+	// SortDefault is what an unqualified browse gets: most recently indexed first.
+	//
+	// Deliberately not filename order, which is what it used to be. A library grows by
+	// arrival — a pack lands, you look at what landed — and alphabetical order buries
+	// that under whatever happens to start with "a".
+	SortDefault = SortNewest
+)
+
+// orderBy returns the SQL for a sort, always ending in a unique tiebreaker so paging
+// cannot skip or repeat a row when two assets share a value.
+func (s SortOrder) orderBy() string {
+	switch s {
+	case SortModified:
+		return "a.mtime DESC, g.id DESC"
+	case SortName:
+		return "a.filename ASC, g.id ASC"
+	case SortNameDesc:
+		return "a.filename DESC, g.id DESC"
+	case SortLargest:
+		return "a.size DESC, g.id DESC"
+	case SortKind:
+		return "a.kind ASC, a.filename ASC, g.id ASC"
+	case SortPixels:
+		// NULL for anything without dimensions (audio, fonts), which sorts last here
+		// rather than first — an unknown size is not a big one.
+		return "coalesce(a.width, 0) * coalesce(a.height, 0) DESC, g.id DESC"
+	default:
+		return "a.first_seen_at DESC, g.id DESC"
+	}
+}
+
+// Label is how the sort appears in the UI.
+func (s SortOrder) Label() string {
+	switch s {
+	case SortModified:
+		return "File date"
+	case SortName:
+		return "Name A→Z"
+	case SortNameDesc:
+		return "Name Z→A"
+	case SortLargest:
+		return "Largest first"
+	case SortKind:
+		return "Kind, then name"
+	case SortPixels:
+		return "Pixel size"
+	default:
+		return "Recently added"
+	}
+}
+
+// SortOrders lists the orders in the sequence the dropdown shows them.
+func SortOrders() []SortOrder {
+	return []SortOrder{SortNewest, SortModified, SortName, SortNameDesc, SortLargest, SortKind, SortPixels}
+}
+
+// ParseSort maps a URL value to an order, falling back to the default rather than
+// erroring: a hand-edited or stale `sort=` is not worth a 400.
+func ParseSort(raw string) SortOrder {
+	candidate := SortOrder(strings.TrimSpace(strings.ToLower(raw)))
+	for _, s := range SortOrders() {
+		if s == candidate {
+			return s
+		}
+	}
+	return SortDefault
 }
 
 // Page is one page of results.
@@ -334,6 +520,35 @@ const assetColumns = `
 	a.tri_count, a.vert_count, a.bbox_x, a.bbox_y, a.bbox_z, a.material_count,
 	a.frame_w, a.frame_h, a.frame_cols, a.frame_rows, a.frame_source,
 	a.palette_json, a.palette_kind`
+
+// assetListColumns is assetColumns for a *list* of assets — the grid, the variant list —
+// where the palette is never rendered.
+//
+// Same shape, same order, same scanner: the two palette columns are replaced by empty string
+// literals, so nothing about the scanning code has to know which query it is reading. That is
+// the whole trick, and it is why this is two lines rather than a second Asset type.
+//
+// Measured on a 6,495-asset library (122,711 swatches), one page of 100 rows:
+//
+//	47 columns including palette_json   77.7 ms
+//	the same 47 with the palettes empty 34.8 ms
+//	a hand-picked 18 columns            26.0 ms
+//
+// So palette_json alone was 55% of the cost of a page of the grid — up to a few KB of JSON per
+// row, allocated and then thrown away, a hundred times per page view. Trimming the other 27
+// unused columns buys 9 ms more and would need a separate projection type; that trade is not
+// worth it, this one obviously is.
+const assetListColumns = `
+	a.id, a.pack_id, p.name, p.slug, p.library_rel_path, a.rel_path,
+	a.filename, a.ext, a.kind, a.size, a.mtime, a.sha256, a.width, a.height,
+	a.first_seen_at, a.last_verified_at, a.missing_since, a.content_changed_at,
+	a.has_alpha, a.has_semitransparent, a.color_count, a.is_pixel_art, a.phash,
+	a.frame_count, a.fps, a.animation_names,
+	a.derive_state, a.derive_error, a.derive_version,
+	a.duration_ms, a.sample_rate, a.channels, a.bit_depth, a.peak_dbfs, a.is_loopable,
+	a.tri_count, a.vert_count, a.bbox_x, a.bbox_y, a.bbox_z, a.material_count,
+	a.frame_w, a.frame_h, a.frame_cols, a.frame_rows, a.frame_source,
+	'' AS palette_json, '' AS palette_kind`
 
 // List returns one page of assets.
 //
@@ -378,7 +593,7 @@ func (ix *Indexer) List(ctx context.Context, opts ListOptions) (*Page, error) {
 	}
 
 	// One extra row tells us whether another page exists, without a second query.
-	query := `SELECT ` + assetColumns + `
+	query := `SELECT ` + assetListColumns + `
 		FROM assets a
 		JOIN packs p ON p.id = a.pack_id
 		WHERE ` + strings.Join(pageWhere, " AND ") + `

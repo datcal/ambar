@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"io"
 	"os"
@@ -223,7 +224,17 @@ func decodeGIF(absPath string, opts DecodeOptions) (*Source, error) {
 	return src, nil
 }
 
-// decodePSD reads the flattened composite. §6 names github.com/oov/psd for this.
+// decodePSD reads a PSD. §6 names github.com/oov/psd for this.
+//
+// It used to read only the flattened composite (`SkipLayerImage: true`), and for the
+// library that is here that produced a sprite sitting in an opaque white box: vendor PSDs
+// — CraftPix's, for one — ship a filled `Background` layer at the bottom, so the composite
+// Photoshop wrote has no alpha at all. On a checkerboard the result looks broken, and it
+// makes the PSD variant of an asset look like a different, worse image than its PNG.
+//
+// So the layers are read and flattened here instead, skipping a bottom background layer,
+// with the composite kept as the fallback for the files that have no layer data (a PSD
+// saved flattened, or one where the layer section is unreadable).
 func decodePSD(absPath string, opts DecodeOptions) (*Source, error) {
 	f, err := os.Open(absPath)
 	if err != nil {
@@ -233,26 +244,128 @@ func decodePSD(absPath string, opts DecodeOptions) (*Source, error) {
 
 	// psd.Decode has no header-only mode, so the budget is enforced from the parsed
 	// config instead — still before any resize or encode work.
-	img, _, err := psd.Decode(f, &psd.DecodeOptions{SkipLayerImage: true})
+	img, _, err := psd.Decode(f, &psd.DecodeOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("decode PSD %s: %w", filepath.Base(absPath), err)
 	}
-	if img.Picker == nil {
-		return nil, fmt.Errorf("PSD %s has no composite image", filepath.Base(absPath))
+
+	canvas := image.Rect(0, 0, img.Config.Rect.Dx(), img.Config.Rect.Dy())
+	if px := int64(canvas.Dx()) * int64(canvas.Dy()); px > opts.MaxPixels {
+		return nil, fmt.Errorf("%w: PSD is %dx%d, over the pixel limit",
+			ErrUnsupported, canvas.Dx(), canvas.Dy())
 	}
 
-	b := img.Picker.Bounds()
-	if px := int64(b.Dx()) * int64(b.Dy()); px > opts.MaxPixels {
-		return nil, fmt.Errorf("%w: PSD is %dx%d, over the pixel limit", ErrUnsupported, b.Dx(), b.Dy())
-	}
-
-	src := &Source{Frames: []image.Image{img.Picker}}
+	src := &Source{}
 	for _, layer := range img.Layer {
 		if name := strings.TrimSpace(layer.Name); name != "" {
 			src.LayerNames = append(src.LayerNames, name)
 		}
 	}
+
+	if flat := flattenPSD(img.Layer, canvas); flat != nil {
+		src.Frames = []image.Image{flat}
+		return src, nil
+	}
+
+	if img.Picker == nil {
+		return nil, fmt.Errorf("PSD %s has neither layers nor a composite image", filepath.Base(absPath))
+	}
+	src.Frames = []image.Image{img.Picker}
+	src.Notes = append(src.Notes, "PSD has no usable layer data; the flattened composite was used")
 	return src, nil
+}
+
+// flattenPSD draws the visible layers over each other, bottom to top, and returns nil when
+// there is nothing to draw.
+//
+// Deliberately simple: source-over with the layer's opacity, no blend modes, no clipping
+// groups, no adjustment layers. That is the same compromise the Aseprite decoder documents
+// — enough for the sprite work this library holds, and honest about what it skips rather
+// than pretending to be Photoshop. A file that needs real blending still has its own
+// composite, and opening it in Photoshop is one copy away.
+func flattenPSD(layers []psd.Layer, canvas image.Rectangle) image.Image {
+	out := image.NewNRGBA(canvas)
+	drawn := false
+
+	var walk func(ls []psd.Layer, depth int)
+	walk = func(ls []psd.Layer, depth int) {
+		for i := range ls {
+			layer := &ls[i]
+			if !layer.Visible() {
+				continue
+			}
+			if layer.Folder() {
+				// A group's own opacity is not applied to its children here; see the note
+				// above about what this flattener deliberately does not do.
+				walk(layer.Layer, depth+1)
+				continue
+			}
+			if !layer.HasImage() || layer.Picker == nil {
+				continue
+			}
+			// The bottom-most opaque layer that covers the whole canvas is a background,
+			// and it is the reason the composite has no alpha. Skipping it is the whole
+			// point of flattening here.
+			if depth == 0 && i == 0 && isPSDBackground(layer, canvas) {
+				continue
+			}
+			drawLayerOver(out, layer)
+			drawn = true
+		}
+	}
+	walk(layers, 0)
+
+	if !drawn {
+		return nil
+	}
+	return out
+}
+
+// isPSDBackground reports whether the bottom-most layer is a filled backdrop rather than
+// artwork: it covers the whole canvas and is fully opaque across it.
+//
+// Measured rather than guessed from the name or from the channel list. The real files
+// showed why both shortcuts fail: CraftPix's backdrop is a 1920x1080 leftover behind a
+// 32x32 sprite — so its rect proves nothing on its own — and it carries a transparency
+// channel like every other PSD layer, so "has no alpha channel" rejected it. What actually
+// distinguishes a backdrop is that you cannot see through it.
+//
+// A false positive is cheap: skipping the only layer leaves nothing drawn, and decodePSD
+// falls back to the flattened composite.
+func isPSDBackground(layer *psd.Layer, canvas image.Rectangle) bool {
+	if !layer.Rect.Union(canvas).Eq(layer.Rect) {
+		return false // does not cover the canvas
+	}
+	if layer.Opacity < 0xff {
+		return false
+	}
+
+	// Sample rather than read every pixel: a 1920x1080 backdrop behind a 32x32 sprite
+	// would otherwise cost two million reads to answer a yes/no question.
+	const samples = 32
+	stepX := max(1, canvas.Dx()/samples)
+	stepY := max(1, canvas.Dy()/samples)
+	for y := canvas.Min.Y; y < canvas.Max.Y; y += stepY {
+		for x := canvas.Min.X; x < canvas.Max.X; x += stepX {
+			if _, _, _, a := layer.Picker.At(x, y).RGBA(); a < 0xffff {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// drawLayerOver composites one layer onto dst with its opacity.
+func drawLayerOver(dst *image.NRGBA, layer *psd.Layer) {
+	if layer.Opacity == 0 {
+		return
+	}
+	if layer.Opacity == 0xff {
+		draw.Draw(dst, layer.Rect, layer.Picker, layer.Rect.Min, draw.Over)
+		return
+	}
+	mask := image.NewUniform(color.Alpha{A: layer.Opacity})
+	draw.DrawMask(dst, layer.Rect, layer.Picker, layer.Rect.Min, mask, image.Point{}, draw.Over)
 }
 
 // decodeKRA pulls Krita's pre-rendered composite out of the archive.

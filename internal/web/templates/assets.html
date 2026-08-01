@@ -1,172 +1,6 @@
-{{define "sidebar"}}
-  {{/* Order follows how the library is actually used: an action you need constantly,
-       then kinds, then colours, then tags — and the folder tree last and *closed*,
-       because "whole library" is the default view and folders are for when you
-       deliberately want to go somewhere. */}}
-
-  <section class="panel-section">
-    <form method="post" action="/scan" class="panel-action">
-      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit">Re-scan library</button>
-    </form>
-    <p class="hint">Indexes new files and notices removals. <a href="/jobs">Background work</a>.</p>
-  </section>
-
-  {{if .Stats}}
-    <section class="panel-section">
-      <h2>Kinds</h2>
-      <ul class="panel-list">
-        <li>
-          <a class="{{if and (not .Kind) (not .Dir)}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
-            <span>whole library</span><span class="n">{{.Stats.Assets}}</span>
-          </a>
-        </li>
-        {{range .Stats.ByKind}}
-          <li>
-            <a class="{{if eq $.Kind .Kind}}on{{end}}"
-               href="/?kind={{.Kind}}{{if $.Search}}&amp;q={{$.Search}}{{end}}">
-              <span>{{.Kind}}</span><span class="n">{{.Count}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-    </section>
-  {{end}}
-
-  {{/* §7: "palette mismatch is the main thing that makes such a game look
-       incoherent". The library's own dominant colours, as a filter — this is where
-       colour search stops being a syntax you have to remember. */}}
-  {{if .Colours}}
-    <section class="panel-section">
-      <h2>Colours</h2>
-      <ul class="colour-filter">
-        {{range .Colours}}
-          <li>
-            <a class="colour-chip" data-hex="{{.Hex}}"
-               href="/?q=color%3A{{.HexQuery}}~24{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
-               title="{{.Hex}} — {{.Assets}} asset(s)">
-              <span class="colour-swatch" aria-hidden="true"></span>
-              <span class="sr-only">{{.Hex}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-      <p class="hint">Click a colour to find assets containing it. <a href="/palettes">Compare packs</a>.</p>
-    </section>
-  {{end}}
-
-  {{if .Facets}}
-    <section class="panel-section">
-      <h2>Tags</h2>
-      <ul class="panel-list">
-        {{range .Facets}}
-          <li>
-            <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
-              <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-    </section>
-  {{end}}
-
-  <section class="panel-section">
-    <h2>Filters</h2>
-    <ul class="panel-list">
-      <li><a href="/?q=has%3Aalpha{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>has alpha</span></a></li>
-      <li><a href="/?q=style%3Apixel-art{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>pixel art</span></a></li>
-      <li><a href="/?q=has%3Aanimation{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>animated</span></a></li>
-      <li><a href="/?q=has%3Asource-file"><span>has editable source</span></a></li>
-      {{if .Stats}}{{if .Stats.Missing}}
-        <li>
-          <a class="{{if .IncludeMissing}}on{{end}}"
-             href="/?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">
-            <span>missing files</span><span class="n">{{.Stats.Missing}}</span>
-          </a>
-        </li>
-      {{end}}{{end}}
-      <li><a href="/provenance"><span>needs provenance →</span></a></li>
-    </ul>
-  </section>
-
-  {{/* Closed unless you are browsing inside it. <details> does this natively, so
-       there is no JavaScript and no state to keep on the server. */}}
-  <section class="panel-section">
-    <details class="folders"{{if .Dir}} open{{end}}>
-      <summary><h2>Folders</h2></summary>
-      <ul class="panel-list tree">
-        <li>
-          <a class="{{if not .Dir}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
-            <span>whole library</span><span class="n">{{.TreeTotal}}</span>
-          </a>
-        </li>
-        {{range .Tree}}
-          <li data-depth="{{.Depth}}">
-            <a class="{{if .Selected}}on{{end}}"
-               href="/?dir={{.Path}}{{if $.Search}}&amp;q={{$.Search}}{{end}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
-               title="{{.Path}}">
-              <span>{{if .HasChildren}}{{if .Open}}▾{{else}}▸{{end}} {{end}}{{.Name}}</span>
-              <span class="n">{{.Assets}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-      {{if not .Tree}}
-        <p class="hint">Nothing indexed yet. Run <code>ambar scan</code>.</p>
-      {{end}}
-    </details>
-  </section>
-
-  {{if .SavedSearches}}
-    <section class="panel-section">
-      <h2>Saved searches</h2>
-      <ul class="panel-list">
-        {{range .SavedSearches}}
-          <li class="saved-row">
-            <a href="/?q={{.Query}}"><span>{{.Name}}</span></a>
-            <form method="post" action="/searches/{{.ID}}/delete" class="tag-remove">
-              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
-              <button type="submit" aria-label="Delete saved search {{.Name}}" title="Delete">×</button>
-            </form>
-          </li>
-        {{end}}
-      </ul>
-    </section>
-  {{end}}
-
-  {{if .Search}}
-    <section class="panel-section">
-      <h2>Pin this search</h2>
-      <form method="post" action="/searches" class="save-search">
-        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-        <input type="hidden" name="q" value="{{.Search}}">
-        {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
-        <input type="text" name="name" placeholder="name it" aria-label="Saved search name">
-        <button type="submit">Save</button>
-      </form>
-    </section>
-  {{end}}
-
-  {{/* §8's keyboard audition, out of the middle of the grid where it was in the way
-       and into the panel where a tool belongs. Dormant until the results hold audio. */}}
-  <section class="panel-section">
-    <h2>Tools</h2>
-    <div class="audition" id="audition" hidden data-tag-url-template="/assets/ID/tags">
-      <button type="button" data-role="toggle">▶ Audition audio (a)</button>
-      <span class="audition-now" data-role="now"></span>
-      <label class="audition-tag">quick-tag (<kbd>t</kbd>)
-        <input type="text" data-role="quicktag" placeholder="namespace:name" autocomplete="off">
-      </label>
-      <span class="hint">↑/↓ next·prev · space play/pause · esc exit</span>
-    </div>
-    <ul class="panel-list">
-      <li><a href="/dupes"><span>duplicates</span></a></li>
-      <li><a href="/junk"><span>junk</span></a></li>
-      <li><a href="/trash"><span>trash</span></a></li>
-      <li><a href="/palettes"><span>pack palettes</span></a></li>
-    </ul>
-  </section>
-{{end}}
+{{/* The sidebar is shared with every other workspace page — see nav.html. It used to
+     be defined here, which is why the asset page had to grow its own copy. */}}
+{{define "sidebar"}}{{template "library-nav" .}}{{end}}
 
 {{define "title"}}Library — Ambar{{end}}
 
@@ -207,6 +41,26 @@
       </p>
       <div class="gridbar-right">
         {{if or .Search .Kind .IncludeMissing .Dir}}<a class="clear" href="/">clear filters</a>{{end}}
+
+        {{/* Sort (M16). There used to be exactly one order — filename A→Z over the whole
+             library — so "what did I download yesterday" had no answer, and a sprite from
+             2d/ sat between two wavs from sounds/. Submitting on change keeps it a plain
+             GET form, so every order is a shareable URL. */}}
+        <form method="get" action="/" class="gridsort">
+          {{if .Search}}<input type="hidden" name="q" value="{{.Search}}">{{end}}
+          {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+          {{if .Dir}}<input type="hidden" name="dir" value="{{.Dir}}">{{end}}
+          {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+          {{if ne .Page.PageSize 100}}<input type="hidden" name="per" value="{{.Page.PageSize}}">{{end}}
+          <label class="sr-only" for="gridsort">Sort by</label>
+          <select id="gridsort" name="sort" data-role="autosubmit">
+            {{range .SortOptions}}
+              <option value="{{.}}" {{if eq (printf "%s" .) $.Sort}}selected{{end}}>{{.Label}}</option>
+            {{end}}
+          </select>
+          <noscript><button type="submit">Sort</button></noscript>
+        </form>
+
         {{/* Thumbnail size, the control Eagle puts in the same place. It drives the
              --tile custom property through the CSSOM (workspace.js) and remembers the
              choice, because "everything is too small to recognise" is a real problem
@@ -236,11 +90,20 @@
                  hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
                  hx-target="#bulk-suggestions" hx-swap="innerHTML" hx-params="*">
           <datalist id="bulk-suggestions"></datalist>
-          <button type="submit" name="scope" value="selected">apply to ticked</button>
+          <button type="submit" name="scope" value="selected" data-role="tag-selected">
+            Tag <span data-role="selected-count">0</span> selected
+          </button>
+          {{/* "or all N" looked like a link and tagged the entire result set — 5,610 assets
+               from a mis-click, with no undo. It asks now. */}}
           <button type="submit" name="scope" value="all" class="linkish"
-                  title="Tag every asset matching this search, not only the ones on screen">
+                  data-confirm="Tag all {{.Page.Total}} assets matching this search?"
+                  title="Every asset matching this search, not only the ones on screen">
             or all {{.Page.Total}}
           </button>
+          <label class="checkline selectall">
+            <input type="checkbox" data-role="select-page">
+            <span>Select page</span>
+          </label>
         </div>
 
       {{/* One tile per logical asset, not per file. §5.1: "Indexing them
@@ -252,13 +115,22 @@
             <li class="tile{{if .Missing}} tile-missing{{end}}{{if .IsAudio}} tile-audio{{end}}"
                 {{if .IsAudio}}data-audio="/assets/{{.ID}}/audio" data-asset-id="{{.ID}}" data-title="{{.Filename}}"{{end}}>
               <label class="tilecheck"><input type="checkbox" name="id" value="{{.ID}}" aria-label="Select {{.Filename}}"></label>
-              <a class="tilelink" href="/assets/{{.ID}}">
-                <span class="thumb{{if .IsPixelArt}} thumb-pixelated{{end}}">
-                  {{if .HasPreview}}
-                    {{/* Hovering swaps in the animated GIF, which §8 asks for in the
-                         grid. Handled in CSS + the data attribute, no inline JS. */}}
+              {{/* A new tab per asset (M16). You are comparing things: opening one should
+                   not throw away the grid you were reading, and the browser's back button
+                   is a poor substitute for having both on screen. */}}
+              <a class="tilelink" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener">
+                {{/* Pixelated when the detector says pixel art *or* when the tile is
+                     necessarily magnifying the source (M16) — the detector is a
+                     heuristic and a 32px sprite drawn at 176px has no smooth answer. */}}
+                <span class="thumb{{if or .IsPixelArt .ThumbUpscales}} thumb-pixelated{{end}}">
+                  {{if .ShowsThumb}}
+                    {{/* Hovering swaps in the moving preview, which §8 asks for in the
+                         grid — but only where one exists. AnimatedPreview decides, and
+                         says nothing for a *detected* frame grid: a tileset is not an
+                         animation, and pointing at an anim.gif that was never written
+                         is what made a hover blank the tile (M17). */}}
                     <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}" loading="lazy"
-                         {{if .Animated}}data-anim="/assets/{{.ID}}/anim.gif"{{end}}>
+                         {{with .AnimatedPreview}}data-anim="{{.}}"{{end}}>
                   {{else if .NeedsBrowserThumb}}
                     {{/* M15: the server has no 3D renderer and Blender is optional
                          (§6), but the browser has one and is about to be asked. Until
@@ -279,9 +151,41 @@
                 </span>
                 <span class="tilename">{{.Filename}}</span>
               </a>
-              <span class="tilemeta">
-                {{.PackName}} · {{bytes .Size}}{{with .Dimensions}} · {{.}}{{end}}
+              {{/* The pack name and the byte size used to be here and wrapped to three
+                   lines under every tile, which is most of what made the grid noisy — and
+                   the pack is the same for a whole screenful anyway. Pixel size is the one
+                   that decides whether a sprite is usable; the rest is in the tooltip. */}}
+              <span class="tilemeta" title="{{.PackName}} · {{bytes .Size}}{{with .Dimensions}} · {{.}}{{end}}">
+                {{with .Dimensions}}{{.}}{{else}}{{.Ext}}{{end}}
               </span>
+              {{/* Quick actions (M16). Hidden until the tile is hovered or focused, because a
+                   grid of a hundred tiles with six buttons each is not a grid any more. Present
+                   in the DOM either way, so the keyboard reaches them.
+
+                   The app buttons carry each application's own colour and initials rather than
+                   its logo: shipping vendor logos would mean either an external request (§11's
+                   CSP forbids one) or redistributing a trademark. */}}
+              {{$apps := index $.TileApps .ID}}
+              {{$path := index $.TilePaths .ID}}
+              {{if or $apps $path}}
+                <span class="tileacts">
+                  {{if not .Missing}}
+                    <a class="tileact" href="/assets/{{.ID}}/download"
+                       title="Download {{.Filename}}" aria-label="Download">↓</a>
+                  {{end}}
+                  {{with $path}}
+                    <button type="button" class="tileact" data-copy-path="{{.}}"
+                            title="Copy the local path&#10;{{.}}" aria-label="Copy path">⧉</button>
+                  {{end}}
+                  {{range $apps}}
+                    {{if ne .Key "reveal"}}
+                      <a class="tileact appbtn app-{{.Key}}" href="{{.URL}}"
+                         title="Open in {{.Label}}" aria-label="Open in {{.Label}}">{{.Short}}</a>
+                    {{end}}
+                  {{end}}
+                </span>
+              {{end}}
+
               <span class="tilebadges">
                 {{if $group.MultiVariant}}
                   {{/* §5.1: the grid shows one entry per group; the count tells you
@@ -309,42 +213,117 @@
         <script src="/static/modelthumb.js" defer></script>
       {{end}}
 
-      {{if .NextURL}}
-        {{/* htmx swaps the next page in place of this button and appends the rows
-             (§2: no bundler, no SPA). Without JavaScript it is an ordinary link,
-             which is the whole appeal of htmx here. */}}
-        <div class="more" id="more">
-          <a href="{{.NextURL}}"
-             hx-get="{{.NextURL}}"
-             hx-select="#thumbgrid > li"
-             hx-target="#thumbgrid"
-             hx-swap="beforeend"
-             hx-select-oob="#more">Load more</a>
-        </div>
+      {{/* Numbered paging (M16), replacing "Load more".
+
+           The old control appended rows with htmx, which sounds friendlier and was worse
+           in every way that mattered here: no way back, no way to jump, no URL for where
+           you are, and the browser's back button threw away everything you had loaded. It
+           also asked the server for the *whole page* each time and discarded all but the
+           tiles. A library of 5,610 assets is 57 pages; PageNumbers windows them so this
+           is nine links rather than fifty-seven. */}}
+      {{with .Page}}
+        {{if gt .Pages 1}}
+          <nav class="pager" aria-label="Pages">
+            {{if .HasPrev}}
+              <a class="button button-quiet" href="{{call $.PageURL .PrevPage}}" rel="prev"
+                 data-role="prev-page">‹ Prev</a>
+            {{else}}
+              <span class="button button-quiet is-disabled">‹ Prev</span>
+            {{end}}
+
+            <span class="pager-pages">
+              {{range .PageNumbers}}
+                {{if eq . 0}}
+                  <span class="pager-gap" aria-hidden="true">…</span>
+                {{else if eq . $.Page.Page}}
+                  <span class="pager-n on" aria-current="page">{{.}}</span>
+                {{else}}
+                  <a class="pager-n" href="{{call $.PageURL .}}">{{.}}</a>
+                {{end}}
+              {{end}}
+            </span>
+
+            {{if .HasNext}}
+              <a class="button button-quiet" href="{{call $.PageURL .NextPage}}" rel="next"
+                 data-role="next-page">Next ›</a>
+            {{else}}
+              <span class="button button-quiet is-disabled">Next ›</span>
+            {{end}}
+
+            <span class="pager-range">{{.FirstShown}}–{{.LastShown}} of {{.Total}}</span>
+
+            <form method="get" action="/" class="pager-size">
+              {{if $.Search}}<input type="hidden" name="q" value="{{$.Search}}">{{end}}
+              {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
+              {{if $.Dir}}<input type="hidden" name="dir" value="{{$.Dir}}">{{end}}
+              {{if $.IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+              <input type="hidden" name="sort" value="{{$.Sort}}">
+              <label class="sr-only" for="pagesize">Per page</label>
+              <select id="pagesize" name="per" data-role="autosubmit">
+                {{range $.PageSizes}}
+                  <option value="{{.}}" {{if eq . $.Page.PageSize}}selected{{end}}>{{.}} / page</option>
+                {{end}}
+              </select>
+              <noscript><button type="submit">Apply</button></noscript>
+            </form>
+          </nav>
+        {{end}}
       {{end}}
       </form>
     {{else}}
       <div class="card">
         {{if .Search}}
+          {{/* M16: the syntax lesson that used to live here is a tooltip. Someone who has
+               just got no results wants a way forward, not a paragraph — and the same
+               five examples are already in the search box's placeholder. */}}
           <p>Nothing matched “{{.Search}}”.</p>
           <p class="hint">
-            Words match filenames, packs and tags as prefixes, so <code>swo</code> finds
-            <code>wooden_sword_01.glb</code>. You can also filter by
-            <code>type:model</code>, <code>theme:sci-fi</code>, negate with
-            <code>-style:realistic</code>, compare with <code>width:&gt;=64</code>, and
-            combine groups with <code>OR</code>.
+            <a href="/">Clear the search</a> ·
+            <span title="Words match filenames, packs and tags as prefixes, so 'swo' finds wooden_sword_01.glb. Filter with type:model or theme:sci-fi, negate with -style:realistic, compare with width:>=64, combine with OR.">what can I type here?</span>
           </p>
         {{else if .Stats}}
           {{if eq .Stats.Assets 0}}
+            {{/* The button is in the sidebar, so pointing at a shell command here was
+                 sending the user to SSH into the NAS for something they can click. */}}
             <p>The index is empty.</p>
-            <p class="hint">Run <code>ambar scan</code> to index the library at
+            <p class="hint">Press <strong>Re-scan library</strong> to index
               <code>{{.LibraryRoot}}</code>.</p>
           {{else}}
             <p>No assets match this filter.</p>
+            <p class="hint"><a href="/">Clear the filters</a></p>
           {{end}}
         {{end}}
       </div>
     {{end}}
   {{end}}
 </div>
+{{end}}
+
+{{/* The search box's completion list (M16), rendered as a fragment into the toolbar.
+
+     Grouped by kind on purpose: a keyword answers "what can I type", a tag or a pack tells
+     you this library's vocabulary, and a filename gets you to one thing. One ranked list
+     would bury the rare exact-filename match under forty tags.
+
+     Rows are buttons, not links: choosing one replaces the token being typed and leaves the
+     rest of the query alone, which a link cannot express. */}}
+{{define "search-suggestions"}}
+  {{if .Suggestions}}
+    <ul class="suggest-list" role="listbox">
+      {{$kind := ""}}
+      {{range .Suggestions}}
+        {{if ne (printf "%s" .Kind) $kind}}
+          {{$kind = printf "%s" .Kind}}
+          <li class="suggest-group" role="presentation">{{.Kind.Label}}</li>
+        {{end}}
+        <li role="presentation">
+          <button type="button" class="suggest-item" role="option"
+                  data-insert="{{.Insert}}" tabindex="-1">
+            <span class="suggest-text">{{.Display}}</span>
+            {{with .Detail}}<span class="suggest-detail">{{.}}</span>{{end}}
+          </button>
+        </li>
+      {{end}}
+    </ul>
+  {{end}}
 {{end}}

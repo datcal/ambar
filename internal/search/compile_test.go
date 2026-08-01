@@ -110,11 +110,37 @@ func TestCompileOrGroups(t *testing.T) {
 }
 
 func TestCompileEmpty(t *testing.T) {
-	// Both terms name columns that do not exist yet (§7 fields from later
-	// milestones), so the whole query constrains nothing.
-	c := compile(t, "tris:<10 duration:>5", fakeResolver{})
+	// A field with no column behind it constrains nothing, and the compiler must produce no
+	// SQL at all rather than a clause that quietly matches everything.
+	//
+	// `tris:` and `duration:` used to be the example here; M16 connected them to the columns
+	// M5 and M6 added, so `acquired:` — a pack-level provenance date this compiler cannot
+	// join to yet — is what is left.
+	c := compile(t, "acquired:>2026-01", fakeResolver{})
 	if c.SQL != "" {
 		t.Errorf("all-no-op query should compile to empty, got %q", c.SQL)
+	}
+}
+
+// The model and audio filters are real (M16): they must produce SQL against the columns M5
+// and M6 added, not silently match the whole library.
+func TestCompileModelAndAudioFields(t *testing.T) {
+	c := compile(t, "tris:<5000 materials:>1 duration:>1000", fakeResolver{})
+	for _, want := range []string{"a.tri_count < ?", "a.material_count > ?", "a.duration_ms > ?"} {
+		if !strings.Contains(c.SQL, want) {
+			t.Errorf("SQL = %q, want it to contain %q", c.SQL, want)
+		}
+	}
+}
+
+// A pixel size compiles to an exact match on both columns (M16).
+func TestCompileDimensions(t *testing.T) {
+	c := compile(t, "32x32", fakeResolver{})
+	if !strings.Contains(c.SQL, "a.width = ?") || !strings.Contains(c.SQL, "a.height = ?") {
+		t.Errorf("SQL = %q", c.SQL)
+	}
+	if len(c.Args) != 2 || c.Args[0] != 32 || c.Args[1] != 32 {
+		t.Errorf("Args = %#v, want [32 32]", c.Args)
 	}
 }
 

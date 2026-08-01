@@ -2,47 +2,15 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/datcal/ambar/internal/provenance"
 )
-
-// handleProvenanceList renders the §9 capture backlog and licence-risk views.
-func (s *Server) handleProvenanceList(w http.ResponseWriter, r *http.Request) {
-	view := r.URL.Query().Get("view")
-	filter := provenance.FilterNeeds
-	switch view {
-	case "risk":
-		filter = provenance.FilterRisk
-	case "all":
-		filter = provenance.FilterAll
-	default:
-		view = "needs"
-	}
-
-	summaries, err := s.prov.Summaries(r.Context(), filter)
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "provenance list failed", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	licenses, err := s.prov.Licenses(r.Context())
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "licenses failed", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	data := s.newPageData(r)
-	data.PackSummaries = summaries
-	data.ProvView = view
-	data.Licenses = licenses
-	data.Flash = r.URL.Query().Get("msg")
-	s.render(w, r, "provenance.html", http.StatusOK, data)
-}
 
 // handlePackProvenanceForm renders the capture form for one pack, pre-filling
 // what it can sniff from the source URL (§9).
@@ -132,56 +100,15 @@ func (s *Server) handlePackProvenanceSave(w http.ResponseWriter, r *http.Request
 	s.redirectWithMessage(w, r, back, "Saved provenance.")
 }
 
-// handleProvenanceBulk sets one licence across selected packs (§9 multi-selection).
-func (s *Server) handleProvenanceBulk(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	view := r.PostFormValue("view")
-	back := "/provenance?view=" + view
+// The /provenance backlog list and its bulk form lived here until M16.
+//
+// They assumed every arrival is a downloaded pack you sit down and process. In practice a single
+// PNG turns up on its own, and then the only place anyone asks "where did this come from, may we
+// ship it" is the asset page they are already looking at — which is where those two fields are
+// now (handleAssetProvenanceSave). The backlog itself is a search: `-has:provenance` lists the
+// affected assets in the grid, each one fixable in place, and the sidebar links to it with a
+// count. The full capture form stays, one click from the asset page.
 
-	spdx := r.PostFormValue("license")
-	if spdx == "" {
-		s.redirectWithMessage(w, r, back, "Choose a licence to apply.")
-		return
-	}
-	license, found, err := s.prov.LicenseBySPDX(r.Context(), spdx)
-	if err != nil || !found {
-		s.redirectWithMessage(w, r, back, "That licence is not recognised.")
-		return
-	}
-
-	applied := 0
-	for _, raw := range r.PostForm["id"] {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			continue
-		}
-		prov, err := s.prov.Get(r.Context(), id)
-		if err != nil {
-			continue
-		}
-		prov.PackID = id
-		prov.LicenseID = &license.ID
-		prov.AttributionRequired = license.AttributionRequired
-		prov.State = provenance.StateComplete
-		if err := s.prov.Update(r.Context(), prov); err != nil {
-			s.log.WarnContext(r.Context(), "bulk provenance update failed", "pack", id, "error", err)
-			continue
-		}
-		if _, _, rel, ok := s.packByID(r.Context(), id); ok {
-			if err := s.sidecars.Write(r.Context(), id, rel); err != nil {
-				s.log.WarnContext(r.Context(), "sidecar write failed", "pack", id, "error", err)
-			}
-		}
-		applied++
-	}
-	s.redirectWithMessage(w, r, back, "Set "+license.SPDXID+" on "+strconv.Itoa(applied)+" pack(s).")
-}
-
-// lookupPack parses the {id} path value and loads the pack's identity, writing
-// the error response if it fails.
 func (s *Server) lookupPack(w http.ResponseWriter, r *http.Request) (id int64, name, rel string, ok bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -232,4 +159,74 @@ func parseDate(raw string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
+}
+
+// --- provenance from the asset page (M16) ------------------------------------
+
+// handleAssetProvenanceSave records a licence and a source URL for the pack an asset
+// belongs to, from the asset's own page.
+//
+// Why this exists: the /provenance backlog view assumed every arrival is a downloaded pack
+// you sit down and process. In practice a single PNG turns up on its own, and then the only
+// place the question "where did this come from and may we ship it" is ever asked is the page
+// you are already looking at. So the two fields that actually get filled in — licence and
+// link — are here, and the full capture form stays for the rest.
+//
+// A *partial* update on purpose. handlePackProvenanceSave writes the whole record from its
+// form, so posting two fields through it would silently blank the author, the price, the
+// order reference and the notes. This reads what is there, patches those two, and writes it
+// back.
+func (s *Server) handleAssetProvenanceSave(w http.ResponseWriter, r *http.Request) {
+	asset, ok := s.lookupAsset(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	p, err := s.prov.Get(r.Context(), asset.PackID)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "loading provenance failed", "pack_id", asset.PackID, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	p.SourceURL = strings.TrimSpace(r.PostFormValue("source_url"))
+
+	// An empty selection means "not recorded yet" rather than "no licence", so it clears
+	// the field instead of failing.
+	p.LicenseID = nil
+	if spdx := strings.TrimSpace(r.PostFormValue("license")); spdx != "" {
+		l, found, err := s.prov.LicenseBySPDX(r.Context(), spdx)
+		if err != nil {
+			s.log.ErrorContext(r.Context(), "resolving licence failed", "spdx", spdx, "error", err)
+		} else if found {
+			p.LicenseID = &l.ID
+		}
+	}
+
+	// The pack stops being a backlog item once both halves are known. Anything less stays
+	// on the list — §9's point is that the gap is visible, not that it is dismissible.
+	if p.LicenseID != nil && p.SourceURL != "" {
+		p.State = provenance.StateComplete
+	} else {
+		p.State = provenance.StateNeedsProvenance
+	}
+
+	if err := s.prov.Update(r.Context(), p); err != nil {
+		s.log.ErrorContext(r.Context(), "saving provenance failed", "pack_id", asset.PackID, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// The sidebar counts packs that still need provenance.
+	s.nav.invalidate()
+
+	msg := "Saved. This applies to the whole pack."
+	if p.State == provenance.StateNeedsProvenance {
+		msg = "Saved. Still incomplete: a licence and a source link mark a pack done."
+	}
+	http.Redirect(w, r, fmt.Sprintf("/assets/%d?msg=%s", asset.ID, url.QueryEscape(msg)), http.StatusSeeOther)
 }

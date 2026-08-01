@@ -1,0 +1,178 @@
+{{/* The library sidebar, shared by every workspace page (M16).
+
+     It used to live in assets.html, and asset.html replaced it with a short list of
+     prose links ("← back to the library", "everything of kind image"). So opening an
+     asset threw away the kinds, the colours, the tags and the folder tree — exactly
+     when you might want to jump sideways — and the navigation moved under you, which
+     base.html's own comment said it should not.
+
+     Order follows how the library is actually used: the action you need constantly,
+     then kinds, colours, tags, filters, folders, saved searches, and maintenance last.
+     The folder tree stays closed unless you are browsing inside it, because "whole
+     library" is the normal view. */}}
+{{define "library-nav"}}
+  <section class="panel-section">
+    {{/* The scan runs in place (M16): the button used to redirect to /jobs, throwing away the
+         grid, the search and the scroll position to show a table that did not refresh either.
+         jobs.js posts this and then keeps the line below it moving; without JavaScript the
+         form posts normally and lands back on the same page. */}}
+    <form method="post" action="/scan" class="panel-action" data-role="scan-form">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit" class="primary">Re-scan library</button>
+    </form>
+    <p class="panel-note" data-role="scan-line"
+       {{if .LastScan}}title="{{.LastScan.At.Format "2006-01-02 15:04:05"}}"{{end}}>
+      {{if .LastScan}}Scanned {{.LastScan.Ago}} · {{.LastScan.Assets}} assets{{else}}Not scanned yet{{end}}
+    </p>
+  </section>
+
+  {{if .Stats}}
+    <section class="panel-section">
+      <h2>Kinds</h2>
+      <ul class="panel-list">
+        <li>
+          <a class="{{if and (not .Kind) (not .Dir)}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
+            <span>whole library</span><span class="n">{{.Stats.Assets}}</span>
+          </a>
+        </li>
+        {{range .Stats.ByKind}}
+          <li>
+            <a class="{{if eq $.Kind .Kind}}on{{end}}"
+               href="/?kind={{.Kind}}{{if $.Search}}&amp;q={{$.Search}}{{end}}">
+              <span>{{.Kind}}</span><span class="n">{{.Count}}</span>
+            </a>
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+
+  {{/* §7: "palette mismatch is the main thing that makes such a game look
+       incoherent". The library's own dominant colours, as a filter — this is where
+       colour search stops being a syntax you have to remember. The swatches are their
+       own explanation, so the sentence that used to sit under them is gone. */}}
+  {{if .Colours}}
+    <section class="panel-section">
+      <h2>Colours</h2>
+      <ul class="colour-filter">
+        {{range .Colours}}
+          <li>
+            <a class="colour-chip" data-hex="{{.Hex}}"
+               href="/?q=color%3A{{.HexQuery}}~24{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
+               title="{{.Hex}} — {{.Assets}} asset(s). Click to find assets containing it.">
+              <span class="colour-swatch" aria-hidden="true"></span>
+              <span class="sr-only">{{.Hex}}</span>
+            </a>
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+
+  {{if .Facets}}
+    <section class="panel-section">
+      <h2>Tags</h2>
+      <ul class="panel-list">
+        {{range .Facets}}
+          <li>
+            <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
+              <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
+            </a>
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+
+  <section class="panel-section">
+    <h2>Filters</h2>
+    <ul class="panel-list">
+      <li><a href="/?q=has%3Aalpha{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>has alpha</span></a></li>
+      <li><a href="/?q=style%3Apixel-art{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>pixel art</span></a></li>
+      <li><a href="/?q=has%3Aanimation{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>animated</span></a></li>
+      <li><a href="/?q=has%3Asource-file"><span>has editable source</span></a></li>
+      {{if .Stats}}{{if .Stats.Missing}}
+        <li>
+          <a class="{{if .IncludeMissing}}on{{end}}"
+             href="/?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">
+            <span>missing files</span><span class="n">{{.Stats.Missing}}</span>
+          </a>
+        </li>
+      {{end}}{{end}}
+    </ul>
+  </section>
+
+  {{/* Closed unless you are browsing inside it. <details> does this natively, so
+       there is no JavaScript and no state to keep on the server. */}}
+  {{if .Tree}}
+    <section class="panel-section">
+      <details class="folders"{{if .Dir}} open{{end}}>
+        <summary><h2>Folders</h2></summary>
+        <ul class="panel-list tree">
+          <li>
+            <a class="{{if not .Dir}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
+              <span>whole library</span><span class="n">{{.TreeTotal}}</span>
+            </a>
+          </li>
+          {{range .Tree}}
+            <li data-depth="{{.Depth}}">
+              <a class="{{if .Selected}}on{{end}}"
+                 href="/?dir={{.Path}}{{if $.Search}}&amp;q={{$.Search}}{{end}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
+                 title="{{.Path}}">
+                <span>{{if .HasChildren}}{{if .Open}}▾{{else}}▸{{end}} {{end}}{{.Name}}</span>
+                <span class="n">{{.Assets}}</span>
+              </a>
+            </li>
+          {{end}}
+        </ul>
+      </details>
+    </section>
+  {{end}}
+
+  {{if .SavedSearches}}
+    <section class="panel-section">
+      <h2>Saved searches</h2>
+      <ul class="panel-list">
+        {{range .SavedSearches}}
+          <li class="saved-row">
+            <a href="/?q={{.Query}}"><span>{{.Name}}</span></a>
+            <form method="post" action="/searches/{{.ID}}/delete" class="tag-remove">
+              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+              <button type="submit" aria-label="Delete saved search {{.Name}}" title="Delete">×</button>
+            </form>
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+
+  {{/* Maintenance, in one place. These four used to appear in the toolbar, in the
+       library sidebar's "Tools" section *and* in the asset page's own sidebar — three
+       copies of the same four links, and the toolbar was the only one with no counts.
+       The audition widget that used to head this section went with the Tools block:
+       §8's keyboard audition had exactly one entry point and it was here. */}}
+  <section class="panel-section">
+    <h2>Maintenance</h2>
+    <ul class="panel-list">
+      <li><a class="{{if eq .Nav "dupes"}}on{{end}}" href="/dupes"><span>duplicates</span></a></li>
+      <li><a class="{{if eq .Nav "junk"}}on{{end}}" href="/junk"><span>junk</span></a></li>
+      <li><a class="{{if eq .Nav "trash"}}on{{end}}" href="/trash"><span>trash</span></a></li>
+      {{/* The provenance backlog is a search now (M16), not a page: it lands in the grid where
+           each asset can be fixed on its own page, which is what a library of loose files needs.
+           The count is packs, the grid shows assets — the tooltip says so. */}}
+      <li>
+        <a href="/?q=-has%3Aprovenance"
+           title="{{.NeedsProvenance}} pack(s) with no licence or source recorded">
+          <span>needs provenance</span>
+          {{if .NeedsProvenance}}<span class="n">{{.NeedsProvenance}}</span>{{end}}
+        </a>
+      </li>
+      <li>
+        <a class="{{if eq .Nav "jobs"}}on{{end}}" href="/jobs">
+          <span>background work</span>
+          {{if .ActiveJobs}}<span class="n">{{.ActiveJobs}}</span>{{end}}
+        </a>
+      </li>
+    </ul>
+  </section>
+{{end}}

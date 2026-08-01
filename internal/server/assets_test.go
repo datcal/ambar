@@ -100,14 +100,25 @@ func TestAssetsGridListsIndexedFiles(t *testing.T) {
 	}
 }
 
-func TestAssetsGridEmptyStateExplainsScan(t *testing.T) {
+// TestAssetsGridEmptyStateOffersTheScan checks that an empty library points at the
+// button rather than at a shell.
+//
+// M16 changed what "explains" means here. The old copy said to run `ambar scan`, which on
+// the target deployment means finding an SSH session on a NAS to do something the sidebar
+// has a button for. The empty state now names that button and the path it will index.
+func TestAssetsGridEmptyStateOffersTheScan(t *testing.T) {
 	ts := newTestServer(t)
 	ts.createUser(t, testUsername, testPassword)
 	ts.login(t, testUsername, testPassword)
 
 	body := ts.body(t, ts.get(t, "/assets"))
-	if !strings.Contains(body, "ambar scan") {
-		t.Error("the empty grid does not tell the user to run ambar scan")
+	for _, want := range []string{"The index is empty", "Re-scan library", `action="/scan"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the empty grid is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "ambar scan") {
+		t.Error("the empty state still sends the user to the command line")
 	}
 }
 
@@ -205,12 +216,30 @@ func TestAssetsPaginationLink(t *testing.T) {
 	}
 	ts.seedLibrary(t, files)
 
+	// M16 replaced "Load more" with numbered pages, so the assertions are about a pager:
+	// a next link, a page 2 link, and a range readout. The old control could only ever go
+	// forward, had no URL for where you were, and lost everything on a back button.
 	body := ts.body(t, ts.get(t, "/assets"))
-	if !strings.Contains(body, "Load more") {
-		t.Fatal("no next-page control on a multi-page result")
+	for _, want := range []string{"Next ›", "page=2", "1–100 of 110"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the pager is missing %q", want)
+		}
 	}
-	if !strings.Contains(body, "cursor=") {
-		t.Error("the next-page link carries no cursor")
+
+	// And page 2 is reachable, ends the list, and offers the way back.
+	second := ts.body(t, ts.get(t, "/assets?page=2"))
+	for _, want := range []string{"‹ Prev", "101–110 of 110"} {
+		if !strings.Contains(second, want) {
+			t.Errorf("page 2 is missing %q", want)
+		}
+	}
+	if strings.Contains(second, `data-role="next-page"`) {
+		t.Error("the last page offers a next link")
+	}
+
+	// A nonsense page number shows the library rather than an error.
+	if resp := ts.get(t, "/assets?page=-3"); resp.StatusCode != 200 {
+		t.Errorf("page=-3 returned %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -228,11 +257,12 @@ func TestAssetsPaginationPreservesFilters(t *testing.T) {
 	ts.seedLibrary(t, files)
 
 	body := ts.body(t, ts.get(t, "/assets?q=sword"))
-	idx := strings.Index(body, "cursor=")
+	idx := strings.Index(body, "page=2")
 	if idx < 0 {
-		t.Fatal("no cursor in the next-page link")
+		t.Fatal("no next-page link on a multi-page search")
 	}
-	// The link must still carry q=sword.
+	// Every page link must still carry q=sword, or paging silently widens the search to
+	// the whole library — which is worse than no paging at all.
 	tail := body[max(0, idx-200):]
 	if !strings.Contains(tail, "q=sword") {
 		t.Errorf("the next-page link lost the search filter: %s", tail[:min(200, len(tail))])
@@ -245,9 +275,12 @@ func TestAssetsMalformedCursorRedirects(t *testing.T) {
 	ts.login(t, testUsername, testPassword)
 	ts.seedLibrary(t, map[string]string{"pack/a.png": "a"})
 
+	// M16: the grid pages by number, so *any* cursor in the URL — malformed or a valid one
+	// from a pre-M16 bookmark — redirects to the first page of the same view rather than
+	// being ignored.
 	resp := ts.get(t, "/assets?cursor=nonsense")
 	if resp.StatusCode != http.StatusSeeOther {
-		t.Errorf("status = %d, want 303 — a bad cursor is a bad URL, not a server fault", resp.StatusCode)
+		t.Errorf("status = %d, want 303 — a cursor URL belongs to the API, not the grid", resp.StatusCode)
 	}
 }
 
@@ -497,9 +530,10 @@ func TestRootIsTheLibrary(t *testing.T) {
 	ts.createUser(t, testUsername, testPassword)
 	ts.login(t, testUsername, testPassword)
 
-	// Empty index first: the grid's empty state is where a new user is told what to do.
-	if body := ts.body(t, ts.get(t, "/")); !strings.Contains(body, "ambar scan") {
-		t.Error("the empty library does not tell a new user to run ambar scan")
+	// Empty index first: the grid's empty state is where a new user is told what to do —
+	// which since M16 is "press this button", not "run this command".
+	if body := ts.body(t, ts.get(t, "/")); !strings.Contains(body, "Re-scan library") {
+		t.Error("the empty library does not offer a new user the scan button")
 	}
 
 	ts.seedLibrary(t, map[string]string{"pack/a.png": "a", "pack/b.png": "bb"})
@@ -530,8 +564,12 @@ func TestStatusPageShowsIndexStats(t *testing.T) {
 	ts.seedLibrary(t, map[string]string{"pack/a.png": "a", "pack/b.png": "bb"})
 
 	body := ts.body(t, ts.get(t, "/status"))
-	if !strings.Contains(body, "Browse assets") {
+	if !strings.Contains(body, "Browse the library") {
 		t.Error("the status page has no link to the library")
+	}
+	// The counts are the point of the page, so they are numbers rather than rows.
+	if !strings.Contains(body, "statgrid") {
+		t.Error("the status page does not show the index counts")
 	}
 	// A document page, not the workspace shell.
 	if strings.Contains(body, "panel-left") {
@@ -635,5 +673,57 @@ func TestFolderTreeNavigation(t *testing.T) {
 	body = ts.body(t, ts.get(t, "/?dir=../../etc"))
 	if !strings.Contains(body, "hero.png") || !strings.Contains(body, "hit.wav") {
 		t.Errorf("a bad dir should fall back to the whole library:\n%s", body[:200])
+	}
+}
+
+// TestGridHoverOnlyOffersAnAnimationThatExists is the end-to-end half of M17's hover
+// fix. index.AnimatedPreview decides; this asserts the grid template asks it rather
+// than building /anim.gif from a frame count, which is what put a 404 behind nearly
+// six thousand tiles and blanked each one on hover.
+func TestGridHoverOnlyOffersAnAnimationThatExists(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"pack/walk.gif":      "GIF89a",
+		"pack/tileset.png":   "not really a png",
+		"pack/confirmed.png": "not really a png either",
+	})
+	gifID := ts.assetID(t, "pack/walk.gif")
+	sheetID := ts.assetID(t, "pack/tileset.png")
+	okID := ts.assetID(t, "pack/confirmed.png")
+
+	// A real animation, a detected grid, and a grid somebody stood behind. All three
+	// have frame_count > 1, which used to be the whole test.
+	for _, row := range []struct {
+		id     int64
+		frames int
+		source string
+	}{
+		{gifID, 12, ""},
+		{sheetID, 1920, "detected"},
+		{okID, 8, "manual"},
+	} {
+		if _, err := ts.db.Writer.Exec(
+			`UPDATE assets SET derive_state = 'ok', frame_count = ?, frame_source = ?,
+			                   frame_cols = 4, frame_rows = 2 WHERE id = ?`,
+			row.frames, row.source, row.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := readBody(t, ts.get(t, "/assets"))
+	if !strings.Contains(body, itoa(`data-anim="/assets/%d/anim.gif"`, gifID)) {
+		t.Error("a real animation lost its hover preview")
+	}
+	if !strings.Contains(body, itoa(`data-anim="/assets/%d/sheet.gif"`, okID)) {
+		t.Error("a confirmed frame grid should hover-play its sheet preview")
+	}
+	if strings.Contains(body, itoa(`data-anim="/assets/%d/`, sheetID)) {
+		t.Error("a detected grid is a guess, not an animation; it must not hover-play")
+	}
+	// The specific URL that never existed for a detected sheet.
+	if strings.Contains(body, itoa(`/assets/%d/anim.gif`, sheetID)) {
+		t.Error("the grid still points a detected sheet at anim.gif, which is never written for one")
 	}
 }

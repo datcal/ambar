@@ -310,3 +310,53 @@ func TestBrowserModelThumbnailReplacesAnOrphan(t *testing.T) {
 		t.Error("a derive-owned thumbnail must not be replaceable by a client")
 	}
 }
+
+// TestModelTileWithoutAPictureAsksForOne is M17's second regression, and the one the
+// first pass missed.
+//
+// `derive_state = 'ok'` means "derive finished". For a glTF or an OBJ that means it
+// wrote a preview.glb — geometry, no picture. The grid read 'ok' as "there is a
+// thumbnail", rendered an <img> at a URL that 404s, and the same field gated the
+// browser renderer, so nothing ever filled it in. Measured on the real library: 212 of
+// 221 glTF tiles and 42 of 42 OBJ tiles were blank and would have stayed blank.
+func TestModelTileWithoutAPictureAsksForOne(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"pack/models/hut.gltf":   `{"asset":{"version":"2.0"}}`,
+		"pack/models/barrel.obj": "v 0 0 0\n",
+	})
+	gltfID := ts.assetID(t, "pack/models/hut.gltf")
+	objID := ts.assetID(t, "pack/models/barrel.obj")
+
+	// Both derived successfully — and for a model that says nothing about a picture.
+	for _, id := range []int64{gltfID, objID} {
+		if _, err := ts.db.Writer.Exec(
+			`UPDATE assets SET derive_state = 'ok' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The glTF has the artifact derive really does write. It is not an image.
+	ts.writeDerivative(t, gltfID, "preview.glb", []byte("glTF-normalised"))
+
+	body := readBody(t, ts.get(t, "/assets"))
+	for _, id := range []int64{gltfID, objID} {
+		if strings.Contains(body, itoa(`<img src="/assets/%d/thumb"`, id)) {
+			t.Errorf("asset %d renders an <img> for a thumbnail that was never written", id)
+		}
+		if !strings.Contains(body, itoa(`data-asset="%d"`, id)) {
+			t.Errorf("asset %d was not offered to the browser thumbnailer", id)
+		}
+	}
+
+	// Now give one of them a real picture: it must render it and stop asking.
+	ts.writeDerivative(t, objID, "thumb.webp", []byte("RIFF....WEBPVP8L"))
+	body = readBody(t, ts.get(t, "/assets"))
+	if !strings.Contains(body, itoa(`<img src="/assets/%d/thumb"`, objID)) {
+		t.Error("a model with a thumbnail on disk should render it")
+	}
+	if strings.Contains(body, itoa(`data-asset="%d"`, objID)) {
+		t.Error("a model with a thumbnail is still being queued for rendering")
+	}
+}

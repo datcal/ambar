@@ -92,7 +92,7 @@ type Result struct {
 // its unit of work is purely "get the bytes safely onto disk and record the
 // pack". A safety or format failure is quarantined and returned as a non-error
 // Result, because a bad drop is an expected event, not a pipeline fault.
-func (ig *Ingester) Ingest(ctx context.Context, archiveRelPath, sourceURL string) (Result, error) {
+func (ig *Ingester) Ingest(ctx context.Context, archiveRelPath, sourceURL, destDir string) (Result, error) {
 	if ig.opts.Readonly {
 		return Result{}, ErrReadonly
 	}
@@ -111,7 +111,7 @@ func (ig *Ingester) Ingest(ctx context.Context, archiveRelPath, sourceURL string
 		return Result{Quarantined: true, QuarantineReason: reason}, nil
 	}
 
-	packRel, absTarget, err := ig.uniquePackDir(absArchive)
+	packRel, absTarget, err := ig.uniquePackDir(absArchive, destDir)
 	if err != nil {
 		return Result{}, err
 	}
@@ -157,19 +157,52 @@ func (ig *Ingester) Ingest(ctx context.Context, archiveRelPath, sourceURL string
 	}, nil
 }
 
+// cleanDestDir normalises a destination folder and refuses anything that is not a single,
+// ordinary library folder.
+//
+// safepath still guards the final path — this is the earlier, narrower check: the destination
+// comes from a form, and "one folder name" is a much smaller thing to validate than "a path
+// that stays under the root". A reserved name (_inbox, _archives) is refused because those
+// are pipeline directories, not places a pack belongs.
+func cleanDestDir(raw string) string {
+	clean := strings.Trim(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"), "/")
+	if clean == "" || clean == "." {
+		return ""
+	}
+	if strings.Contains(clean, "/") {
+		return "" // a single level, by design
+	}
+	if clean == ".." || library.IsReserved(clean) {
+		return ""
+	}
+	if library.Slugify(clean) == "" {
+		return ""
+	}
+	return clean
+}
+
 // uniquePackDir picks a library-relative directory for the extracted pack,
 // derived from the archive name and suffixed until it does not collide.
-func (ig *Ingester) uniquePackDir(absArchive string) (relPath, absPath string, err error) {
+func (ig *Ingester) uniquePackDir(absArchive, destDir string) (relPath, absPath string, err error) {
 	base := filepath.Base(absArchive)
 	base = strings.TrimSuffix(base, filepath.Ext(base))
 	slug := library.Slugify(base)
 	if slug == "" {
 		slug = "pack"
 	}
+
+	// The destination is a single level by choice (M16): "2d/kenney-platformer", not
+	// "2d/tiles/kenney-platformer". Deeper nesting is what the folder tree and tags are for,
+	// and every extra level is a decision to make while you are trying to file a download.
+	prefix := ""
+	if clean := cleanDestDir(destDir); clean != "" {
+		prefix = clean + "/"
+	}
+
 	for i := 0; i < 1000; i++ {
-		candidate := slug
+		candidate := prefix + slug
 		if i > 0 {
-			candidate = fmt.Sprintf("%s-%d", slug, i+1)
+			candidate = fmt.Sprintf("%s%s-%d", prefix, slug, i+1)
 		}
 		abs, err := safepath.Resolve(ig.root, candidate)
 		if err != nil {
@@ -272,7 +305,7 @@ func (ig *Ingester) Register(q *jobs.Queue, afterIngest func(ctx context.Context
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("unmarshal ingest payload: %w", err)
 		}
-		res, err := ig.Ingest(ctx, p.ArchiveRelPath, p.SourceURL)
+		res, err := ig.Ingest(ctx, p.ArchiveRelPath, p.SourceURL, p.DestDir)
 		if err != nil {
 			return err
 		}
@@ -292,6 +325,15 @@ func (ig *Ingester) Register(q *jobs.Queue, afterIngest func(ctx context.Context
 type Payload struct {
 	ArchiveRelPath string `json:"archive_rel_path"`
 	SourceURL      string `json:"source_url,omitempty"`
+	// DestDir is the library folder the pack is extracted into, slash-separated and
+	// library-relative — "2d", "sounds". Empty keeps the pre-M16 behaviour of extracting
+	// at the library root.
+	//
+	// This exists because a pack always landed at the root: after a hundred downloads the
+	// top level was a hundred vendor slugs, and the buckets the operator actually keeps
+	// their library in (2d, 3d, sounds, fonts) were bypassed by the only path that adds
+	// packs automatically.
+	DestDir string `json:"dest_dir,omitempty"`
 }
 
 // Enqueue queues one archive for ingest, deduplicated on its path so a poller

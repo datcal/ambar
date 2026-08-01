@@ -1466,6 +1466,740 @@ swallowed looked identical to a model that had not loaded yet. The blank-render 
 as much a diagnostic as a fix — it turns "nothing appeared" into a rejected upload and a
 log line.
 
+## M16 — the 2D viewer, measured against the real library
+
+Three complaints from daily use, all in the same area, all reproduced against
+`/mnt/game-assets` rather than against fixtures. The open questions and their answers are
+in `docs/archive/2026-07-ui-review-questions.md`.
+
+**Every asset sat right of and below centre.** Not a style choice but a bug:
+`.viewer-stage img` combined `translate: -50% -50%` with a `transform` carrying the
+`scale()`. CSS applies the individual `translate` property *before* the `transform`
+property, and it is therefore not scaled — so the image was pulled back by half its
+*unscaled* size while being drawn at its *scaled* size, a constant offset of
+`(scale - 1) x size / 2`. A 32x32 sprite at fit (16x) sat 240px right and 240px low. The
+same mismatch made cursor-anchored wheel zoom drift. Centring is now computed in
+`viewer2d.js:render()` from the stage rectangle, and `setZoom` solves against that same
+expression so the two cannot disagree. Offsets are rounded to whole pixels: a half-pixel
+translate resamples pixel art even when the scale is exact.
+
+**The wheel no longer zooms by default.** §8 asked for wheel zoom, and it made the palette
+and the tag panel under the viewer unreachable — the stage covers most of the centre
+column and `preventDefault` ate every scroll, so the only way down was the scrollbar. Now
+a plain wheel scrolls the page, `Ctrl/⌘+wheel` zooms, and a remembered toolbar switch
+restores the old behaviour for anyone who wants it. Deliberate deviation from §8.
+
+**`image-rendering` is a switch, not a guess — and the guess itself was wrong.** Two
+separate problems:
+
+- The viewer keyed smoothing off `is_pixel_art`, and only above 1:1. So a
+  misclassification was unfixable, and a 2048px atlas shown at fit was blurred on the way
+  *down*, which is the case where sharpness matters most. Pixels is now the default (in
+  this library smoothing is the exception), applies at every scale, snaps fit and zoom to
+  whole factors — and to whole divisors below 1:1, which is what Aseprite does — and is
+  remembered per browser. The detector's answer is exposed as `data-detected` for
+  debugging and decides nothing.
+- The detector had a blind spot that only real data showed. `Analyse` required
+  `ColorCount <= 256 && SoftTransitionRatio < 0.40`, and the transition metric cannot tell
+  a one-pixel step between *adjacent* palette entries from a one-pixel antialiasing blend.
+  Shaded pixel art is made of the former — a skin ramp steps by 15-40 per channel, under
+  `hardEdgeThreshold` — so every shaded sprite scored "soft" and was resized smoothly.
+  Measured over a sample of the library: 5-colour `card-template-icon.png` scored 0.676,
+  `ui-right.aseprite` (19) 0.447, `npc12.png` (28) 0.643, `TileSet_V2.png` (65) 0.597 —
+  around 40% of the real sprites were misclassified, tilesets and sheets worst. The
+  antialiased-vector fixture the old threshold was calibrated on has 120 colours and scores
+  0.542, so the two populations separate on colour count, not on sharpness.
+  `pixelArtCertainColors = 96` now decides below the gap and the transition test only
+  breaks ties in the 97-256 band. The error costs are asymmetric and the threshold leans
+  accordingly: a smooth image treated as pixel art is a slightly aliased thumbnail, while
+  pixel art treated as smooth destroys the artwork.
+
+`TestShadedPixelArtDefeatsTheTransitionTest` pins the blind spot down with a fixture
+that scores 0.589 at 24 colours, so the rule cannot be "simplified" back into the bug.
+
+**Grid tiles no longer ask the detector either**, at least not alone. `Asset.ThumbUpscales`
+adds `image-rendering: pixelated` whenever the source's long edge is 256px or less,
+because the tile is 4-26rem wide and is therefore always magnifying at those sizes — there
+is no smooth answer for a 32px sprite drawn at 176px. Large sources are left smooth, since
+a tile *reduces* them and nearest-neighbour reduction discards whatever it does not land
+on.
+
+Not done here, and deliberately not decided unilaterally: `derive.Version` is **not**
+bumped, so existing rows keep the `is_pixel_art` the old rule wrote. The viewer and the
+tile rule no longer depend on it, so the visible damage is already gone; what a re-derive
+would still fix is the resize filter baked into previews of images larger than 2048px.
+That costs a full decode of every asset on a NAS with a weak CPU, which is the operator's
+call, not a side effect of a UI fix.
+
+## M16 — the visual language
+
+"Genel olarak çok eski hissettiriyor" was the umbrella complaint behind every specific
+one, so the token layer came first: everything after it is markup laid on top of this.
+
+**One accent was doing five jobs.** `--accent` was the link colour, the button fill, the
+focus ring, the active-tab marker and the highlight. Nothing could be emphasised relative
+to anything else, so a page with eight buttons had eight equally loud calls to action.
+Roles now exist separately (`--link`, `--brand`, `--active`, `--focus`, `--danger`, `--ok`,
+`--warn`), with `--accent` and `--error` kept as aliases so nothing had to be renamed in
+one pass.
+
+**Four button roles, not five ad-hoc styles.** The bare element used to be a filled accent
+button — maximum emphasis by default — carrying `margin-top: 1.2rem`, which also knocked
+every button in a flex row out of alignment (`.tag-add` is the clearest case). The default
+is now a neutral outlined control; `.primary` marks the one action a page exists for,
+`.linkish` stays quiet and inline, and `.danger` exists because §9.1's purge is the only
+irreversible action in Ambar and it looked exactly like "Save". `.viewer-toolbar`,
+`.palette-controls`, `.audio-controls` and the audition toolbar had each grown their own
+near-identical copy of a small control; they share one rule now, including a single
+pressed state — previously `.on` used the same blue as every link, so "this is enabled"
+and "this is clickable" were indistinguishable.
+
+**Contrast and hierarchy.** `--muted` (#9aa3b2 on #1e2128, about 4.3:1) was used for whole
+paragraphs, which is under AA for body text. Text roles are now split: `--text` for
+content, `--text-2` for secondary prose, `--muted` for labels and metadata only. Headings
+were 1.25rem and 1rem against 15px body — barely a hierarchy — and `h2` was redefined
+further down the file at 1rem, silently overriding the first rule. One type scale now,
+with the sizes named.
+
+**Segmented groups and a real current-page state.** Toolbar buttons that answer one
+question (zoom, background, rendering) sit flush as a segmented control. Sidebar selection
+gets an inset marker and the accent instead of a slightly lighter grey, which was
+invisible in a list of thirty folders.
+
+**Dead and duplicated CSS.** `.searchbar` and `.kinds` had been dead since search moved to
+the toolbar in M14. `.swatch-actions` and `.swatch-icon` were defined twice with the second
+copy silently winning. `.button` was defined twice. All resolved to one definition.
+
+**Static assets are versioned.** `/static` was served with a one-hour TTL and no version in
+the URL, so a deployed CSS or JS change did not appear until a manual hard refresh — the
+trap that makes a fix look like it did nothing. The templates now append `?v=<version>`,
+and the handler serves a released build as immutable while a `dev` or `-dirty` build is
+`no-cache`, because that build is the one being edited.
+
+Verified by rendering the real pages in headless Firefox against a scanned copy of the
+library, not by reading the CSS: the centring fix, pixel-exact tiles at 8x upscale, one
+primary action per page, and the red purge button were all confirmed on screen. Worth
+recording for next time: `--screenshot` races image decoding, so the first capture of a
+grid shows alt text and only a second, cache-warm run is trustworthy. Two runs of the same
+profile is the whole trick.
+
+## M16 — the shell: one navigation, in one place
+
+**The sidebar no longer moves when you open something.** `asset.html` defined its own
+`{{define "sidebar"}}` — "← back to the library", "everything of kind image", "similar
+palette" — so opening an asset threw away the kinds, the colours, the tag facets and the
+folder tree, exactly when you might want to jump sideways. base.html's own comment claimed
+"same shell as the grid, so navigation does not move when you open something", which had
+not been true since the asset page grew that block. The sidebar now lives in `nav.html`,
+parsed into every page's template set, and both pages ask for it by name. The three
+sideways jumps it offered became chips in the rail, next to the identity they are about.
+
+That change made the asset page pay for whole-library aggregates it never used to run, so
+**`sidebar.go` arrived with it rather than waiting for the CPU step.** Counts by kind, the
+dominant colours, the folder tree, the pack states and the last scan are built once and
+cached for 60 seconds; `LibraryColours` alone groups `asset_swatches` on computed
+expressions, so no index applies and it is the most expensive query in the application.
+Writes that visibly move a number call `invalidate()` — pinning a saved search and then
+not seeing it for a minute reads as "the button did nothing", and the test that caught
+this was `TestSavedSearchFlow` failing for exactly that reason. The lock is held across
+the rebuild on purpose: these queries are CPU-bound, so ten concurrent rebuilds are
+slower than one.
+
+`Facets` stays per-request, because it describes the current result set rather than the
+library.
+
+**"Scanned 23 min ago · 6490 assets"** replaced a two-line paragraph about what scanning
+does. First implementation read the last completed `library.scan` job and reported "not
+scanned yet" on a library with six thousand assets in it — `ambar scan` on the command
+line does the work directly instead of enqueuing it, and that is the documented way to run
+the first one. It reads `max(assets.last_verified_at)` now, which every scan stamps
+whichever path it came through.
+
+**Three copies of four links became one.** `duplicates`, `junk` and `trash` were in the
+toolbar, in the sidebar's "Tools" section and in the asset page's sidebar; the toolbar copy
+was the only one with no counts. They live in the sidebar's Maintenance group with their
+counts, and the toolbar is down to four destinations with a real current-page state.
+
+**§8's keyboard audition is gone.** Not a judgement on the feature: the Tools block was its
+only entry point, so removing that block left an island that could not be switched on.
+`audition.js`, its CSS and its markup went with it; `TestAuditionGridMarkup` became
+`TestAudioTileMarkup`, which keeps the part that is not audition — the per-tile audio
+source — and asserts the bar does *not* come back.
+
+**Prose diet, first pass.** The "open in" panel lost three standing paragraphs: how to
+configure `AMBAR_LOCAL_LIBRARY_PATH` is setup documentation and now links to /settings, and
+"Ambar cannot launch it for you" is a tooltip on the copy button. The no-results state lost
+its five-example syntax lesson, which was already in the search placeholder. Both empty
+states stopped telling the user to run `ambar scan`: on this deployment that means finding
+a shell on the NAS to do something the sidebar has a button for.
+
+## M16 — the palette, and PSDs that looked broken
+
+**The palette is a row of circles again.** It had become a grid of 6.5rem cells, each
+carrying a chip, a hex string, a percentage and two icons, under three controls and over
+four lines of explanation — a screenful to answer "what colours are in this". Now: circles
+sized to the touch target, click to copy, and everything else (the percentages, the pixel
+counts, the sort, the greyscale check, the exports) behind a remembered **Details**
+disclosure. Nothing was removed; the numbers stopped being the default.
+
+Two details worth keeping: copy feedback is a ring rather than a colour change, because a
+swatch must not lie about its colour even for 600ms; and sorting reorders the strip and the
+detail table together from one comparison, so the two views cannot disagree about which
+colour is which.
+
+`display: flex` on the details panel outranked the `hidden` attribute's `display: none`, so
+the table was open on first load whatever the disclosure said. Caught on a screenshot, not
+in review — which is the argument for taking them.
+
+**The asset page column now fills the pane** and the viewer takes whatever height is left,
+instead of the stage being a fixed `min(72vh, 46rem)`. Fixing the wheel was necessary but
+not sufficient: the palette and the tag panel are what you use *while* looking at a sprite,
+and they should not need scrolling to reach at all.
+
+**The rail's audit facts are folded away.** Eighteen rows deep, of which the content hash
+wrapped over three lines and "Last verified" answers a question nobody asks while choosing
+a sprite. Path, pack, kind, size, dimensions, colours and alpha stay; extension, dates and
+SHA-256 are one click down.
+
+**PSDs arrived in an opaque white box, and it was our bug.** The decoder read only the
+flattened composite Photoshop writes, and vendor PSDs ship a filled `Background` layer at
+the bottom, so that composite has no alpha at all. The PSD variant of an artwork therefore
+looked worse than its own PNG.
+
+The layers are flattened here now, skipping a canvas-covering opaque bottom layer, with the
+composite kept as the fallback. Dumping the real file was what made this tractable, and it
+killed both plausible shortcuts:
+
+	[0] "Background"  rect 1920x1080  visible  image   opaque
+	[1] "Frame 1"     folder, visible
+	[2] "Frame 2"…    folders, hidden
+
+The backdrop is a full-HD leftover behind a 32x32 sprite, so a canvas-sized rect proves
+nothing; and it carries a transparency channel like every other PSD layer, so "no alpha
+channel" rejected it. What actually distinguishes a backdrop is that you cannot see through
+it, so `isPSDBackground` samples its alpha. A false positive is cheap: dropping the only
+layer leaves nothing drawn and `decodePSD` falls back to the composite, which is exactly
+what should happen for a flattened export.
+
+The frames-as-layers structure also answered a question that had been left open — whether
+such a PSD should become an animation. It should not need to: only "Frame 1" is visible, so
+flattening the visible layers already produces the single clean sprite the artist left on
+screen. Verified against the real file: 23 colours with alpha, matching its `.aseprite`
+sibling exactly, where before it was 24 opaque colours.
+
+Blend modes, clipping groups and adjustment layers are deliberately not implemented — the
+same compromise the Aseprite decoder documents. `flattenPSD` is unit-tested against layer
+structures transcribed from the real file rather than against a fixture, because there is no
+pure-Go PSD encoder to build one with and the vendor artwork is not ours to commit.
+
+`0015_psd_alpha_repair.sql` resets `derive_state` for PSDs only. Bumping `derive.Version`
+would have fixed them too, at the cost of decoding every asset in the library again — hours
+of NAS CPU to repair a few hundred files, on a box whose CPU load is a standing complaint.
+
+## M16 — the asset page, finished
+
+**Previous / Results / Next.** The detail page was a dead end: §8 asked for keyboard
+navigation and the only way out of an asset was the browser's back button. `Neighbours`
+positions by `(filename, groupID)` — the same keyset the grid pages with, so it costs one
+indexed comparison rather than counting rows — and takes the ordinary `ListOptions`, so `j`
+and `k` walk the search you came from once the grid passes it along and the whole library
+when it does not. The ends stop rather than wrap: a loop would remove the only signal that
+you have seen everything.
+
+Positioned by the group's *primary*, not by the asset you opened, so reaching a `.psd`
+variant does not put you at a different point in the sequence than its `.png`.
+
+`assetnav.js` presses the links the server already rendered rather than knowing the order
+itself. It stays out of the way twice over: never while focus is in an input (stealing `j`
+from someone typing "jungle" is worse than having no shortcut), and never inside a viewer,
+where the arrows already mean pan and orbit.
+
+**Licence and source, on the asset page.** §9's capture backlog assumed every arrival is a
+pack you sit down and process. In practice a single PNG turns up on its own, and then the
+only place anyone asks "where did this come from, may we ship it" is the page they are
+already looking at. Two fields and a button; the full form stays a click away.
+
+The implementation detail that needed a test rather than a comment: this is a *partial*
+update. `handlePackProvenanceSave` writes the whole record from its form, so posting two
+fields through it would silently blank the author, the price, the order reference and the
+notes of any pack that had them — data loss on the page whose purpose is recording
+provenance. `handleAssetProvenanceSave` reads, patches two fields, writes back, and
+`TestAssetProvenanceSaveIsPartial` fails if that ever regresses. A licence without a link
+leaves the pack on the backlog: §9's point is that the gap stays visible, not that it can
+be dismissed.
+
+Both fields are pack-level and the panel says so. Writing one file's licence onto its
+neighbours silently would be worse than sending you to the pack page.
+
+**Smaller things, same theme.** The format variants were a card with a heading, an
+explanatory paragraph and a four-column table to say "there is also a .psd"; they are one
+line of chips now, current one marked, download on each, paths in the tooltips. The tag
+form's two-line syntax lesson became a tooltip — the placeholder already shows the shape.
+The 3D viewer's "1.8 m ref" button, which prompted "1.8 nedir anlamadım", is "Human scale"
+with a sentence explaining what it draws and why. The font specimen moved above the preview:
+for a typeface the first thing you want is your own text in it, not our pangram.
+
+## M16 — the grid: numbered pages, and an order you chose
+
+**"Load more" is gone.** It sounds friendlier than a pager and was worse in every way that
+mattered: one direction only, no way to jump, no URL for where you are, and the browser's
+back button threw away everything you had loaded. It also asked the server for the *entire
+page* — sidebar aggregates included — and discarded all but the tiles.
+
+Numbered paging needs an offset, so the grid and the API now page differently and that is
+deliberate. The API keeps its keyset cursor (§10): stateless, stable while the library
+changes under it, and a client walking every asset only ever needs "next". `Page == 0` is
+how `ListGroups` tells them apart, because the API leaves it unset and the grid always sends
+a number. `Total` was already computed for the result count, so the page count is free.
+
+The first version of this got the interaction between the two modes wrong in the way keyset
+paging always breaks: the cursor's first page came back in the *new default* order while the
+cursor itself encodes a filename position, so the second page repeated and skipped rows.
+`TestGroupPagination` caught it. Cursor mode now runs in the keyset's own order throughout.
+
+A `cursor` in a grid URL — a pre-M16 bookmark, or hand-editing — redirects to page 1 of the
+same view rather than being silently ignored.
+
+**Seven orders, and the default is no longer alphabetical.** There was exactly one order:
+filename A→Z across the whole library. So "what did I download yesterday" was unanswerable
+in a tool whose entire job is finding assets, and a sprite from `2d/` sat between two wavs
+from `sounds/`. The default is now most-recently-indexed: a library grows by arrival, and
+alphabetical order buries that under whatever happens to begin with "a".
+
+Every order ends in `g.id` as a tiebreaker. Without it an offset pager over a non-unique
+order (`size DESC` across identically sized files) is free to repeat and skip rows between
+queries — `TestListGroupsNumberedPagingCoversEverything` writes 25 identical files precisely
+to hold that down.
+
+`0016_sort_indexes.sql` indexes the four sortable columns. Not the pixel-area order: it sorts
+by `width*height`, and an expression index maintained on every scan for the least-used order
+is a bad trade — it sorts in memory, which is fine at the size of result set that order is
+useful on.
+
+Deviation from the plan: `sort:` was *not* added to the search language. A dropdown that
+produces a shareable URL is the whole feature; a second syntax inside the query box would be
+a second way to say the same thing.
+
+**Tiles.** They open in a new tab, because you are comparing things and opening one should
+not throw away the grid you were reading. The pack name and byte size — three wrapped lines
+under every tile, identical for a whole screenful — moved into the tooltip, leaving the
+pixel size, which is what decides whether a sprite is usable. The checkbox moved off the
+artwork's corner.
+
+**Hover animation finally exists.** The markup has carried `data-anim` since M2 and the
+template comment claimed CSS handled it. No rule ever did, and §6 had asked for it: dead
+code that looked like a feature.
+
+**Selection survives paging.** Ticking twelve sprites and turning the page used to lose them
+silently, and the bulk tag then applied to whatever was on screen. Ids live in
+sessionStorage keyed by the current search, are re-injected as hidden inputs on submit, and
+are dropped when the search changes. "Select page" fills the current page; "or all N" — which
+tags every match, thousands of rows, with no undo — now asks first. §9.1's rule is that the
+human selects, and a mis-click is not a selection.
+
+**Keyboard.** Arrows move a cursor ring tile to tile (row height measured from the laid-out
+grid, so it follows the size slider), Enter opens, Space selects, `n`/`p` page. Nothing fires
+while focus is in a field.
+
+**`Ctrl/⌘ +/-` no longer resizes tiles.** It took over the browser's own zoom on the busiest
+page in the application, and it was documented nowhere except the comment that implemented
+it. The slider it duplicated is two centimetres away.
+
+## M16 — search you can start typing into
+
+**The box had no completion at all.** The only suggestions in the application went into a
+`<datalist>` on the *tag* inputs, so searching a six-thousand-asset library meant remembering
+both its vocabulary and the query syntax — and the syntax was "documented" by a placeholder
+listing five examples in a box too narrow to read them in.
+
+`/api/v1/suggest` returns a grouped fragment: **Filters** (the query language, as
+completions), **Tags** and **Packs** with counts, **Files**. Grouped rather than ranked
+because they answer different questions — a keyword tells you the syntax exists, a tag tells
+you this library's vocabulary, a filename gets you to one thing — and one ranked list would
+bury the rare exact-filename match under forty tags. The keyword group is now the only place
+the syntax is documented in the UI, which is deliberate: you type "t" and see what `type:`
+does, instead of reading a paragraph you did not ask for.
+
+Only the last token is completed. Someone typing `type:model tur` has already committed to
+the rest, and replacing the whole box would throw that away. A token containing `:` skips the
+vocabulary queries entirely — it is a syntax question, not a vocabulary one.
+
+HTML rather than JSON: the island is twenty lines of DOM handling either way, and a fragment
+keeps the grouping, the escaping and the count column in the template with everything else.
+
+Every branch is a prefix match on an indexed column, because this runs on a keystroke on a
+NAS. `escapeLike` neutralises `%` and `_`, and `TestSearchSuggestEscapesWildcards` holds it
+down — without it, typing `%` suggests the entire library.
+
+`search.js` adds what a datalist could never do: grouped rows, counts, `↑`/`↓`/`Enter`/`Esc`,
+`Tab` to complete without searching (what a shell does), recent searches when the box is
+empty, and `/` to focus from anywhere. Recent searches live in localStorage — what one
+browser typed is not library state. In-flight requests are aborted on the next keystroke: on
+a fast typist the answers arrive out of order, and a stale list under a fresh prefix is worse
+than no list.
+
+**`32x32` is a search.** Typed bare, it filters by exact pixel size; `dim:` and `px:` are the
+explicit forms for a query built by a link. "Which of these are 32 by 32" is the most common
+question in a sprite library and it used to require `width:32 height:32`. `size:` could not
+be it — that has meant file bytes since M1. Exact rather than a range, because a pixel size
+in this library is a category (the tile grid you are working in), and `width:>=32 width:<=48`
+already covers ranges. `0x0` is refused: it would match nothing while looking like a filter.
+
+**Three filters stopped lying.** `tris:`, `verts:` and `duration:` were in `futureFields` —
+they parsed so a query would not error, and then contributed *nothing*, so `tris:<5000`
+returned the whole library. Their columns arrived with M5 and M6; they only needed connecting,
+and `materials:` was added alongside. `acquired:` is the last honest member of that list: the
+date lives on the pack and this compiler cannot join to it yet.
+
+Not done: bounding-box ranges for models. `bbox_*` is three columns and the useful query is
+"fits in a 2 m cube", which wants a syntax of its own rather than three numeric fields.
+
+## M16 — upload that works for the files people actually download
+
+The old upload was one form post straight into ingest, and it failed at its own job:
+
+- **100 MB ceiling**, with an error telling you to use `_inbox` instead — so the documented way
+  to add a pack did not work for the packs people download.
+- **Buffered through `ParseMultipartForm`**, which spills anything over 8 MB to `TMPDIR` and
+  then copies it to `_inbox`: two writes of a 2 GB file on a NAS, and if `/tmp` is a tmpfs,
+  2 GB of RAM.
+- **No progress at all.** htmx cannot report upload progress, so a five-minute upload was a
+  page doing nothing.
+- **Always extracted at the library root**, ignoring the `2d`/`3d`/`sounds` folders the
+  library is actually organised into. A hundred downloads later the top level is a hundred
+  vendor slugs.
+- **Asked for the source URL first**, as a field you filled in before choosing a file.
+
+Now the part streams straight to `_inbox` with `MultipartReader` and `io.Copy`: constant
+memory, one write, and the default cap is *none* — on a LAN there is nothing left to protect
+against, and a configured cap is still honoured against the stream. A partial file is removed
+on any failure, because the inbox poller would otherwise find it and half-ingest it.
+
+**The flow follows the questions.** Drop → progress (percentage, rate, time left, from
+`xhr.upload.onprogress`, which is still the only way a browser can report request-body
+progress — `fetch` cannot) → *where does this go, and where did it come from* → queued. The
+destination arrives with a suggestion already chosen, because by then the server has run
+`archive.Inspect` — entries listed, nothing extracted (§5's inspect step) — and voted the
+extensions into folders. Two thirds of one kind is the bar; below it the archive is genuinely
+mixed and gets no suggestion rather than a confident wrong one.
+
+Destination and source ended up in the *same* step after a false start: the first version asked
+for the link after starting the extraction, by which point the ingest job was queued with an
+empty source and there was nowhere to put the answer.
+
+`DestDir` is one level by design — `2d/kenney-platformer`, not `2d/tiles/kenney-platformer`.
+Deeper nesting is what the folder tree and tags are for, and every extra level is a decision to
+make while you are trying to file a download.
+
+**A real hole, caught by a test I wrote for the happy path's sibling.** The first version of
+`/ingest/start` checked the archive path with `strings.HasPrefix(relPath, "_inbox/")`.
+`_inbox/../pack/hero.png` passes that, resolves to an indexed original, and ingest would have
+read it as an archive, failed, and *moved it into `_quarantine`* — the application relocating a
+library file, which invariant 1 forbids outright. `inboxArchive` resolves first and confines
+second, requires a regular file directly inside the inbox, and returns a path *re-derived* from
+the resolved absolute one, so what reaches the job payload is ours rather than the client's.
+`TestIngestStartRefusesPathsOutsideTheInbox` covers four shapes of that.
+
+Verified end to end against the running server: a five-PNG zip uploaded (987 B, 5 files,
+suggested `2d` at 100%), started into `2d`, and the log recorded
+`ingested archive pack=2d/testpack files=5 flattened=sprites`.
+
+Still open, and not a code question: `raw/` currently holds the operator's own downloaded zips
+*and* is the natural destination for mixed archives. Either the zips move to `_raw/` (which the
+walker excludes automatically) or mixed packs go somewhere else. The picker lists whatever
+folders exist, so nothing depends on the answer.
+
+## M16 — background work you can watch
+
+**The application told the user to press F5.** §12 asked for "pollable status" and what existed
+was a page you reloaded by hand — and two other pages that said so out loud: junk and trash
+both ended with "watch background work, then reload". Dupes too. That is the application moving
+its own job onto the operator.
+
+`/api/v1/jobs/status` is the fix, and `jobs.js` is its only consumer: the sidebar's scan line on
+every workspace page, and the jobs table. It polls every 2 s while something is running, drops
+to a 30 s heartbeat when the queue is idle, and stops entirely when the tab is hidden — a NAS
+should not answer a request every two seconds to say "nothing is happening". The jobs page
+reloads itself once when the queue goes idle, because what you came there for is the *result*.
+
+**Jobs can say how far along they are.** The queue had states — queued, running, done, failed —
+which answers "is it working" but not "will this finish before lunch". A scan of twenty thousand
+files said "running" for four minutes. `0017_job_progress.sql` adds done/total/note: three
+columns rather than a percentage, because "2431 / 20000 files" is the readout that means
+something and a percentage throws the numbers away.
+
+The job's id reaches its handler through the *context* rather than a changed `Handler`
+signature, so `q.Reporter(ctx)` is available to any handler that wants it and every handler that
+does not is untouched. Throttling lives in the reporter — one write per 400 ms, always writing
+the final one — because there is one rule and every long job should get it for free. Outside a
+job the reporter is a no-op, which is what lets the same scan code run from the CLI.
+
+Phase notes were not in the plan and turned out to be the point. Watching the real thing showed
+the file counter finishing in under 400 ms on a library where nothing had changed, and the
+remaining three seconds being spent in move detection with nothing to show. Each phase names
+itself now, and phases with no count of their own report a *zero* total rather than total/total:
+a bar sitting at 100% while work continues is a bar that lies.
+
+**The scan button stays where you are.** It used to redirect to /jobs — throwing away the grid,
+the search and the scroll position to show a table that did not refresh either. It posts in
+place now, and the line under it starts moving. Without JavaScript it is an ordinary form post
+that redirects back to the page it came from, not to /jobs.
+
+**One scan a night, and nothing else.** Asked for in these words: "gece süper olur sabaha karşı
+5 6 7 arası. sürekli arkada bir şey çalışmasın." So: 05:00 local by default,
+`AMBAR_NIGHTLY_SCAN=off` disables it, and it is the *only* scheduled job in the application.
+That restraint is not politeness — invariant 3 says the application never removes anything on
+its own, and a scheduler is exactly the shape of thing that quietly breaks that rule. A scan
+only reads the filesystem and writes index rows.
+
+Not cron: one goroutine and a timer is the whole requirement. `untilNext` walks to tomorrow
+rather than adding 24h, so a DST change shifts the run by an hour instead of drifting, and it
+treats "exactly on the hour" as tomorrow — otherwise a process started at 05:00:00 would enqueue
+immediately and again a second later.
+
+Verified against the running server: the scan enqueued in place, the status endpoint reported
+`checking files` with a total of 6490 and then `matching moved files`, and the nightly schedule
+logged `nightly scan scheduled in=5h0m0s at=05:00`.
+
+## M16 — the CPU, measured before it was optimised
+
+The complaint was "NAS'ta çok CPU harcıyor". The first version of this note guessed at the
+cause; the numbers moved the answer. Timed against a real 6,495-asset library (122,711 swatch
+rows) on a developer machine — the NAS is several times slower, so treat these as ratios:
+
+	Stats                  10 ms
+	Tree                   22 ms
+	Facets                 55 ms
+	LibraryColours        157 ms      grouped on computed expressions; no index applies
+	ListGroups(page 1)    112 ms
+
+That is roughly 350 ms of CPU per grid page view, and after M16's shared sidebar the asset page
+paid most of it too.
+
+**`ListGroups` was not slow because of SQL.** Splitting it apart: the count was 3.7 ms and the
+page query 10.3 ms — 14 ms of SQL inside a 112 ms call. The rest was in the driver, and one
+column was most of it:
+
+	47 columns, including palette_json   77.7 ms
+	the same 47 with the palettes empty  34.8 ms
+	a hand-picked 18 columns             26.0 ms
+
+`palette_json` is up to a few KB of JSON per row, and the grid renders exactly none of it —
+a hundred rows of it were allocated and thrown away on every page view. `assetListColumns`
+selects `'' AS palette_json` instead: same column count, same order, same scanner, so nothing
+about the scanning code has to know which query it is reading. Trimming the other 27 unused
+columns would buy 9 ms more and needs a separate projection type; that trade is not worth it,
+this one obviously was. **112 → 42 ms**, and the size-sorted view 41 → 13 ms.
+
+**The aggregates left the request path entirely.** The 60-second TTL from the shell work
+already amortised them, but every write invalidated the snapshot, so *the first click after any
+write was the slow one* — which is exactly the click somebody is watching. `sidebarCache.get`
+now serves the warm snapshot however stale and refreshes behind the request, single-flighted so
+a burst of page loads cannot start ten CPU-bound rebuilds at once. The refresh runs on
+`context.WithoutCancel`, because a browser navigating away must not leave the cache permanently
+stale. Only the first request of a process waits.
+
+**Facets joined the snapshot for the unfiltered case.** They describe the current result set, so
+a filtered view still computes its own — but "browsing with no filter" is most page views, and
+those all want the same answer.
+
+End to end on the running server, after: **the asset page 12–14 ms**, a search page 10–11 ms, an
+unfiltered grid page 74–142 ms (309 ms for the very first, which builds the snapshot). The grid
+is the expensive page and now it is expensive because it renders a hundred tiles, which is its
+job.
+
+`0016_sort_indexes.sql` is the other half of this: the new browse orders each sort the whole
+result set before a LIMIT, and without indexes that is a temp b-tree per page view.
+
+Worth writing down because it went the other way twice: `LibraryColours` looked like the thing
+to optimise — it is still the most expensive single query — and it turned out not to matter,
+because it happens once a minute off the request path. What mattered was a JSON column nobody
+looked at.
+
+## M16 — what was removed, and what replaced it
+
+Three deletions, each confirmed by the person who uses this daily rather than guessed at.
+
+**`/palettes`** — the §7 pack-palette comparison view. "asla kullanmayacağım bi özellik." Gone
+with its handler, template, tests, CSS, four menu links, and the `index/palettes.go` functions
+that existed only for it (`PackPalettes`, `PackPaletteOf`, `packColours`, `ComparePacks`,
+`PackComparison` and their formatters). `LibraryColours` and `PackColour` stay: the sidebar's
+colour filter and `color:` search are built on them, and those *are* used. §7's question — "does
+this tileset sit next to that character set" — is answered in practice by clicking a colour in
+the sidebar, which is the version people reach for.
+
+**Four palette export formats.** `.txt`, `.json`, `.css` and `.png` went; `.gpl` (Aseprite,
+GIMP, Krita) and `.gd`/`.tres` (Godot) stayed. They existed because they were easy to write, not
+because anyone exports a game palette to CSS — and seven links in a row made the useful three
+harder to find. The exporters went with the links, so an old URL is a clean 404 rather than a
+format nobody maintains.
+
+**`/provenance`, the capture backlog page.** The reason it went is the interesting part: it
+assumed every arrival is a downloaded pack you sit down and process, and in this library "bazen
+sadece 1 tane png iniyor". The two fields that get filled in are on the asset page now, and the
+*backlog* became a search — `-has:provenance`, which lands in the grid where each asset is
+fixable in place, with the sidebar linking to it and a count beside it.
+
+That needed one addition to the query language: `has:provenance` is the only `has:` flag that
+joins to `packs`, because provenance lives on the pack. It reads correctly both ways —
+`has:provenance` is what is done, `-has:provenance` is what is left — which the old page could
+not express at all.
+
+The bulk "set this licence on twenty packs" form went with it, and deliberately was not
+replaced: a licence is a claim about a specific thing, and a form that sets one on twenty packs
+at once is a fast way to record something wrong about nineteen of them.
+
+Kept, against the same list: `/status` (the operator asked for it), duplicates, junk, trash, the
+spritesheet grid confirmation (the Godot import needs it), the API tokens page (the plugin needs
+it), the font specimen ("o çok güzel"), the browser-rendered model thumbnails, and the 1.8 m
+reference — relabelled rather than removed.
+
+Verified on the running server: `/palettes`, `/provenance` and `/assets/N/palette/css` all 404;
+`.gpl` still serves; `-has:provenance` returns the backlog as a grid.
+
+## M16 — why "open in Aseprite" opened Aseprite with nothing in it
+
+Reported as: "yükledim, tıklayınca ambar ile açıyor, sonra hangi uygulama olduğunu söyleyince boş
+olarak o uygulamayı açıyor." Two separate faults, and the *script* was not one of them — run by
+hand with a real URL it passed exactly the right argument, spaces and all.
+
+**The symptom is what an unregistered scheme looks like.** When nothing handles `ambar://`, the
+browser asks the user to pick an application — and then hands *the raw `ambar://` URL* to that
+application as its filename. Aseprite cannot open `ambar://open?app=…`, so it opens empty. The
+description matches that sequence exactly, and on this machine the registration was indeed
+absent: no `ambar-open.desktop`, and `xdg-mime query default x-scheme-handler/ambar` returned
+nothing.
+
+Why the registration had not taken is the design fault. Installation was two manual steps in a
+required order — copy the script to `~/.local/bin`, *then* run `--install` — and the desktop
+entry recorded whatever path the script happened to be at. Running `--install` from the Downloads
+folder registered a handler pointing into Downloads, which then broke when the file was moved or
+deleted. So:
+
+- `--install` copies itself to `~/.local/bin/ambar-open` and registers *that* copy. One step, no
+  ordering to get wrong, and the download can be deleted.
+- `--check` reports what `xdg-mime` actually returns and distinguishes the two failures that look
+  identical from a browser: nothing registered, and something else registered. It also says to
+  clear the remembered handler in the browser, because Firefox keeps its own list and a wrong
+  choice made once at the prompt is sticky.
+- `--test` prints what would run without launching anything.
+- A launch on a path that does not exist now fails loudly instead of "succeeding" — because an
+  application opening empty is exactly the confusion this script exists to remove.
+
+**The second fault: `exec aseprite "$path"`.** GUI applications on an Arch-family desktop are
+often Flatpaks, and on this machine none of `aseprite`, `blender` or `godot` is on `PATH` — so
+even a correctly registered scheme fell through to `xdg-open`. Each app is now resolved as
+binary → Flatpak (`flatpak info` first, so a missing one does not produce a wall of Flatpak
+errors) → `xdg-open`, with an override in `~/.config/ambar-open.conf` that survives
+re-downloading the script. When it falls back it says so, and names the variable to set.
+
+**A latent bug found on the way.** `url.QueryEscape` encodes a space as `+`, so the link carried
+`2+Objects` for the directory `2 Objects`, and the helper's decoder turned every `+` back into a
+space — which means a file genuinely named `sprite+outline.png` would have opened as
+`sprite outline.png` and failed. Spaces are `%20` now and the `+`-to-space rule is gone.
+Incidentally this also stops html/template rendering the link as `…2&#43;Objects…`, which made
+debugging this harder than it needed to be.
+
+Verified end to end on this machine: install → `ok: ambar:// is handled by /home/…/ambar-open`,
+`xdg-mime` agrees, a launch with a stub `aseprite` on PATH receives one argument
+`/mnt/game-assets/…/2 Objects/6 Tent/2.png`, a `.conf` override with a multi-word command works,
+a missing file and a path-less link each explain themselves.
+
+**The buttons are readable now.** "Renkleri okunmuyor" was about accent blue on dark blue. Each
+application gets its own colour with a dark glyph on it, on the asset page and as two-letter
+marks in the grid's per-tile action row (download, copy path, open in…), which appears on hover.
+Not the vendors' logos: shipping those would mean either an external request — which §11's CSP
+forbids — or redistributing a trademark. A colour and an initial is recognisable at 20px and is
+honestly ours.
+
+## M16 — the Godot plugin, which did nothing
+
+"Bu addons'u yükledim, hiçbir şey olmadı." Four causes, and the API it talks to was not one of
+them — that half turned out to work.
+
+**It asked for `EditorInterface`, the singleton, which is Godot 4.2+.** On 4.1 that is an unknown
+identifier, the script fails to load, and an addon whose script fails to load shows as *enabled*
+while doing nothing at all, with the error in the Output panel. `editor_compat.gd` now reaches
+the editor through whichever API this Godot has, and every call there degrades instead of
+erroring.
+
+**It was a dock, and the wrong kind of thing.** `DOCK_SLOT_LEFT_UR` is a tab sharing space with
+Scene and Import — easy to miss entirely, and not what anyone means by "a menu up there next to
+2D and 3D". That is a *main screen* plugin: `_has_main_screen()`, `_get_plugin_name()`,
+`_make_visible()`, and the control parented to the editor's main screen. Which is what it is now.
+
+**Its settings were somewhere nobody would look.** The server URL and token lived in Editor
+Settings as `ambar/base_url` and `ambar/api_token`, among four hundred editor preferences, with
+the URL defaulting to `http://ambar:8973` — a hostname that resolves on nobody's network. So even
+a correctly loaded plugin quietly failed every request. They are asked for in the plugin's own
+UI now, and the panel *tests* the connection and reports what came back.
+
+The split is deliberate: `res://ambar.cfg` holds the URL and is committed, because which server
+the studio runs is a fact about the studio; `user://ambar_token.cfg` holds the token and is not,
+for the same reason §11 keeps tokens per user.
+
+**And the connection test hit a genuine server bug.** `/api/v1/healthz` is registered with
+session auth for the browser, so a perfectly valid API token got `401 unauthorized` — a "can I
+reach the library" probe that answers "your token is wrong" would have sent anyone straight back
+to re-check a token that was fine. `/api/v1/ping` is the same report behind token auth.
+
+Two smaller decisions:
+
+*No hand-written `.import` files.* The old plugin wrote partial ones before reimport, and its own
+comment said the keys "must be verified in-editor", which never happened. Godot owns those files.
+The supported way to say "this project is pixel art" is `importer_defaults/texture` plus the
+canvas texture filter — one button, project-wide, and nothing to keep in sync with a Godot
+version.
+
+*Results are thumbnails.* A list of filenames in a library where two hundred files are called
+`1.png` is not browsable — the same thing the web grid had to learn.
+
+**Then Godot turned out to be on the machine after all** (a Steam install), and running it found
+the actual root cause — which was none of the four above, and was in the one file this rewrite
+had not touched:
+
+	SCRIPT ERROR: Parse Error: Cannot infer the type of "data" variable
+	              because the value doesn't have a set type.
+	  at: project.gd:21, :31, :40, :50
+	Compile Error: Failed to compile depended scripts. → main.gd, plugin.gd
+	ERROR: Failed to load script "res://addons/ambar/plugin.gd" with error "Compilation failed".
+
+`var data := _read_json(...)` — inference from a function with no declared return type. GDScript
+rejects that, a *parse* error in one file fails the compile of everything that preloads it, and an
+addon whose script will not compile appears **enabled and does nothing**, with the only evidence
+in the Output panel. That is "hiçbir şey olmadı", exactly and literally. Four `:=` became `=`.
+
+Running it then found two more, both mine:
+
+* `remove_control_from_docks()` on shutdown for a control that had gone to the main screen, not a
+  dock. Godot 4.7 reports that as a failed condition. Tracked with a flag now.
+* An `HTTPRequest` refuses to run outside the scene tree, and the plugin called `set_plugin()` —
+  which fires the first search — *before* parenting the control to the main screen. Every startup
+  with a configured server would have failed its first search with "could not send the request".
+  The parenting moved first, the initial load moved into `_ready()`, and the API client now
+  reports that condition as an internal error rather than as a bad URL.
+
+**Verified in Godot 4.7.1**, headless, against the running server:
+
+	editor load     no script errors, no warnings, plugin loads
+	config          res://ambar.cfg + user://ambar_token.cfg round-trip
+	ping            status=ok, version reported
+	search          249 matches, 100 rows, cursor, id/filename/kind/pack.slug/sha256 all parse
+	thumbnail       61,170 bytes → Image 385x512 via load_webp_from_buffer
+	bad token       "unauthorised — the API token is missing or wrong (Settings → API tokens…)"
+	import          1.png → res://assets/image/<pack>/1.png, 1798 bytes on disk
+	manifest        res_path, sha256, filename, pack recorded
+	server told     credits.md returns "# Credits — AmbarPluginTest"
+	asset page      the rail now lists "AmbarPluginTest · res://assets/image/…/1.png"
+
+That last line is §9.1's protection becoming true from inside the editor, which is the whole point
+of §10.
+
+Worth keeping: a headless Godot run is a *test*. `--headless --editor --quit` surfaces every parse
+error in a plugin in about twenty seconds, and `--headless --script` can drive the API client
+against a live server. Neither needs a display. The previous version of this plugin shipped
+untested with a comment saying so; it did not have to.
+
 ## Still open
 
 Every milestone in §14 is delivered, and so is every deferral recorded above. What
@@ -1477,3 +2211,201 @@ remains is two documented non-goals:
 - **Blend modes other than Normal are approximated** as Normal when compositing Aseprite
   layers, and say so in the job log. No file in the 72-file corpus uses one, so there is
   no evidence to implement against yet.
+
+## M16 — what the specification says now
+
+§8 was rewritten rather than annotated. The old version described a viewer nobody had built
+yet and, in three places, one that had been deliberately reversed — the wheel zooming, the
+palette as a table, the grid as an infinite cursor. A specification that still argues for an
+abandoned idea costs more than one that admits the change, because the next person to read it
+implements the wrong thing and thinks they are catching up.
+
+The rule applied throughout: **describe what exists, keep the reversals with their reasons,
+and mark what was never built as deferred rather than leaving it looking unfinished.** Channel
+isolation and the tiling preview are honestly deferred — they are texture-workflow tools and
+this library is sprites. The colour-picker readout is gone, because the palette panel answers
+the same question better. Keyboard audition is recorded as removed *and why*: it was good, and
+its only entry point was deleted underneath it.
+
+Four other sections had drifted:
+
+* **§10** told the plugin to hand-write `.import` files, which is the thing Godot owns and the
+  reason the last version corrupted imports; it now says to set import defaults. The dock, the
+  Editor Settings keys and the silent failure modes went the same way. A paragraph on headless
+  verification was added, because that is what would have caught all of it.
+* **§12** gained the one scheduled job — 05:00, and "sürekli arkada bir şey çalışmasın" is a
+  requirement on a NAS, not a preference — and the rule the CPU work left behind: a
+  library-wide aggregate belongs in a cache with explicit invalidation, never in a request path.
+* **§13** was aligned with the config the code actually reads, including the upload cap going
+  to 0 (no cap). The 100 MB number existed because the first implementation buffered the whole
+  body through `TMPDIR`; the upload streams now, so the ceiling protected nothing and blocked
+  the normal case of dragging a real pack onto the page.
+* **§17** got the layout that emerged — `sounds` not `audio`, `aseprite` and `fonts` as their
+  own things, `raw` as the honest destination for a mixed pack — with a warning attached. The
+  bucket list names directories whose *children* are packs; `sounds`, `aseprite` and `fonts`
+  hold loose files, so they are packs themselves and adding them to the list would scatter
+  their contents. Checked against the real mount rather than assumed.
+
+**§15 stopped being a to-do list.** All five questions were answered years of commits ago, and
+one of the answers written down there was wrong: it claimed `phash` was not built. It is, in
+M13, capped by image count and review-only. Kept as a record because each answer still
+constrains the codebase — FTS5 without CGO, `html/template` over `templ`, vendored ES modules
+over a bundler.
+
+**§0 gained one line**, which is the whole of what M16 was about: *the interface is part of the
+product, not a skin on it.* The version handed over was correct and unpleasant, and none of
+what was wrong with it arrived as a bug report. It arrived as people not using the thing.
+
+`docs/ui-review-questions.md` moved to `docs/archive/2026-07-ui-review-questions.md` with a
+header saying what it was. The answers in it are the source for most of the above and worth
+keeping legible; the questions are answered and the file should not be edited again.
+
+**Still open, deliberately:** the Unreal plugin (§10's last paragraph — "unreal i sonra
+yapariz"), and where uploaded zips land versus mixed packs, since `raw/` currently means both
+"the original downloads" and "a pack that did not sort cleanly". No code depends on resolving
+the second one.
+
+## M17 — four things that looked like polish and were not
+
+The report was four sentences, and each one named a defect with a number behind it. Everything
+below was measured on `testdata/data/ambar.db`, an 11,839-asset copy of the real library, before
+anything was changed.
+
+### "gltf dosyaları neden görünüyor anlamıyorum, içine girince hiçbir şey çıkmıyor"
+
+All 442 glTF assets were `derive_state=ok`, and the preview.glb derive had written for them was
+**1,396 bytes**:
+
+	buffers: [{"uri": "building_archeryrange_blue.bin", "byteLength": 202372}]
+	images:  [{"uri": "hexagons_medieval.png"}]
+
+`gltf.SaveBinary` writes the GLB's BIN chunk only when the first buffer has no URI, and a
+`.gltf` on disk always has one — the name of the `.bin` beside it. So "normalise everything to a
+single self-contained preview.glb" (§6) produced a file that was still a pointer, plus a helpful
+copy of the 202 KB buffer in the derivative directory that no route serves. The viewer loaded
+1.4 KB of JSON, resolved the buffer to `/assets/4988/building_archeryrange_blue.bin` (the
+companion route lives at `/assets/{id}/file/…`), got a 404, and rendered nothing. The thumbnail
+existed because the browser thumbnailer had made it from the *original*, which is why the asset
+looked fine right up until you opened it.
+
+Two changes, and the second is the one that matters:
+
+* `internal/model` now clears the first buffer's URI so the bytes become the BIN chunk, and
+  inlines any texture sitting beside the model. Same file, same pipeline: **1,396 → 224,780
+  bytes**, and it still reads with the source directory deleted. That is what preview.glb was
+  always supposed to be, and the API is its consumer.
+* **The viewer stopped using preview.glb at all** and loads the original through the companion
+  route, as `.obj` and `.fbx` already did. Embedding could fix the buffer but not the texture:
+  `hexagons_medieval.png` is not beside the model, it is in the pack's shared directory several
+  levels up, and finding it needs the pack boundary — which `internal/model` does not know and
+  the companion route's pack-wide lookup does. Verified on the running server: the `.gltf`
+  (3,090 bytes), its `.bin` (202,372) and its texture (15,783) all return 200.
+
+Migration 0018 resets glTF rows so the repaired artifact is rebuilt, and it is narrow for the
+reason 0015 was: bumping `derive.Version` would re-decode the entire library, which on this NAS
+is hours of CPU to fix 442 files.
+
+**0018 also carries `missing_since IS NULL`, which 0015 should have had.** Without it the reset
+parks absent files in `pending` forever: `EnqueueStale` skips missing rows and
+`recordForContent` skips them too, so nothing will ever clear the state. It was 221 rows here —
+old paths from a pack that moved, whose content is indexed elsewhere — plus 6 PSDs still stuck
+from M16. Both repaired.
+
+### "sadece fbx dosyasını göster, gltf'i kesinlikle göstermeyelim"
+
+Not done, and this is the one place M17 argues back. The primary of every model group:
+
+	gltf   442   all multi-format (each has an fbx and an obj sibling); none stands alone
+	fbx    244   needs_blender — no image at all, and every one of them is fbx-only
+	fbx    198   ok
+	obj     84   ok
+
+Demoting glTF would trade 442 working previews for 442 waiting on a Blender that is not
+installed — the 244 imageless groups are exactly what that dependency looks like. glTF derives
+in pure Go and renders in the browser; it is the *right* primary. And the worry behind the
+request ("tek başına gltf olursa ne yaparız") does not arise: there is no glTF-only group in
+this library. The complaint's actual cause was the empty viewer above, which is fixed. Ordering
+stays `png > webp > glb > gltf > fbx > obj > …` (§5.1) — raise it again if the fixed viewer
+still reads wrong.
+
+### "her image animasyon değil, üzerine gelince bozuk görünüyor"
+
+The largest of the four by a distance:
+
+	assets counted as animated (frame_count > 1)   6,706
+	anim.gif files that actually exist                795
+	sheet.gif files (confident detected grids)      1,302
+
+`Animated()` was `FrameCount > 1`. But `frame_count` is also written by §6's spritesheet grid
+*detection*, which is a guess about geometry, not a claim that anything moves — and it had
+decided `towers_walls_grass_dark_1.png` was an animation of **1,920 frames** on a 48×40 grid. It
+is a tileset. So roughly 5,900 tiles carried `data-anim="/assets/N/anim.gif"` for a file derive
+never writes, hover set `img.src` to a 404, and the tile went blank. On the default first page
+**all 100 tiles** met the old condition and every one sampled 404'd.
+
+`frame_source` is the distinction that was always there: empty means the decoder found real
+frames in the file, which is exactly when `anim.gif` is written — 795 rows, 795 files, no gap.
+So `Animated()` is now `FrameCount > 1 && FrameSource == ""`, and a new `AnimatedPreview()`
+returns the URL of something that exists: `anim.gif` for a real animation, `sheet.gif` for a grid
+a human confirmed, and nothing at all for a detected one. §6 already said a guess is never
+trusted silently; animating one in the grid was trusting it silently.
+
+`grid.js` also restores the still frame on `error` now, because "the server only offers files it
+expects to exist" is not a guarantee — confirming a grid does not rebuild `sheet.gif`, so a
+corrected geometry can outlive the preview built from the guess it replaced.
+
+After: 36 of 100 tiles offer a hover preview and **all 36 return 200**.
+
+Left alone deliberately: the detector's thresholds. A 1,920-frame guess is still wrong on the
+detail page and in what the Godot plugin is told, and retuning it is its own piece of work with
+its own fixtures. M17 stopped the guess from breaking the grid; it did not make the guess better.
+
+### "soldaki colours çok az"
+
+`LibraryColours(ctx, 18)`. The library has **673** colour buckets above the 2% swatch threshold,
+and sorted by coverage the first eighteen are all dark browns and greys — greens, yellows and
+blues start around the twentieth. A filter that cannot offer green is not a colour filter. Now
+40, which the sidebar's `flex-wrap` handles without a layout change and the SQL does not notice:
+the grouping already runs over everything and `LIMIT` only decides where to stop.
+
+### "çoğu model dosyasının görüntüsü yok"
+
+Answered twice, because the first answer was wrong.
+
+**The first answer** was the browser thumbnailer's `BUDGET = 12` **per page load**. A page shows
+a hundred tiles, so filling one took about twenty visits. That is real, and the cap is gone:
+every model tile scrolled past is now rendered, one at a time through the single WebGL context.
+The constant survives only as a fallback for a browser with no `IntersectionObserver`, where
+there is no way to know what was looked at.
+
+**But it was not the cause**, and the reply to the first pass — "gltf dosyaları listeleniyor ve
+görüntü yok, yapmamışsın" — was correct. Measured properly this time, per format, asking the
+filesystem rather than the `derive_state` column:
+
+	glTF primary groups   9 of 221 have a thumb.webp
+	OBJ  primary groups   0 of  42
+	FBX  primary groups 140 of 140
+
+The FBX column is the tell. `derive_state = 'ok'` means "derive finished", and for an FBX derive
+never finishes in Go — the *browser* renders it, and that path writes the image before recording
+success, so 'ok' really does imply a picture there. For a glTF or an OBJ, derive succeeds by
+writing a **preview.glb**: geometry, no image. `HasPreview()` was `DeriveState == "ok"`, so the
+grid rendered `<img src="/assets/N/thumb">` for 254 model tiles whose thumb.webp had never
+existed — each one a 404, each one blank — and the same field gated `NeedsBrowserThumb()`, so the
+renderer that would have fixed them was told they were already done. Blank forever, by
+construction.
+
+The fix separates the two questions. `ShowsThumb()` asks "is there a picture" and, for a model,
+answers from the filesystem: one `stat` per model row on the page, in `markModelThumbs`. Not a
+column — invariant 2 says the filesystem is the source of truth, and a cached boolean is a second
+copy that can drift from the directory it describes. §8's rule about aggregates belonging in a
+cache is about queries over the whole library; a handful of stats against the local data volume
+is not that.
+
+Verified on the real library, `?kind=model&per=100`: 29 tiles render an image and all 29 return
+200; the other 71 are queued for the browser — and **all 71 were `derive_state = 'ok'`**, which
+is to say all 71 were blank before.
+
+The lesson, and M17 keeps producing it: `derive_state` answers "did the job run", and three
+separate features had read it as "is there a picture". Hover was the first (`anim.gif`), the 3D
+viewer was the second (`preview.glb`), this is the third.

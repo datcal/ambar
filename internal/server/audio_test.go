@@ -118,20 +118,23 @@ func TestAudioDetailAndServing(t *testing.T) {
 	}
 }
 
-func TestAuditionGridMarkup(t *testing.T) {
+// TestAudioTileMarkup is what is left of TestAuditionGridMarkup.
+//
+// M16 removed §8's keyboard audition along with the sidebar's "Tools" section, which was
+// its only entry point — see docs/decisions.md. The per-tile audio source is not part of
+// that feature: it is how any future preview-on-hover or player finds the file, so it is
+// still asserted here.
+func TestAudioTileMarkup(t *testing.T) {
 	ts := newTestServer(t)
 	ts.createUser(t, testUsername, testPassword)
 	ts.login(t, testUsername, testPassword)
 	id := ts.insertAudioAsset(t, "hit.wav")
 
 	body := readBody(t, ts.get(t, "/assets"))
-	if !strings.Contains(body, `id="audition"`) {
-		t.Errorf("audition bar missing from the grid")
-	}
 	if !strings.Contains(body, itoa(`data-audio="/assets/%d/audio"`, id)) {
 		t.Errorf("audio tile not marked with its data-audio source")
 	}
-	if !strings.Contains(body, `name="csrf-token"`) {
-		t.Errorf("csrf meta missing (audition quick-tag needs it)")
+	if strings.Contains(body, `id="audition"`) {
+		t.Errorf("the audition bar is back; it was removed with the Tools section")
 	}
 }

@@ -36,6 +36,40 @@ func pixelArtSprite(w, h int) image.Image {
 	return img
 }
 
+// shadedPixelArtSprite builds pixel art the way it is actually drawn: flat blocks, but
+// coloured from *ramps* whose neighbouring steps are close together.
+//
+// This is the case the transition test cannot see. Every edge here is a hard one-pixel
+// step — there is no antialiasing anywhere — yet most steps are between adjacent ramp
+// entries, so they fall under hardEdgeThreshold and count as "soft". Real shaded sprites
+// score 0.44-0.68 on that metric, which is why colour count has to decide below
+// pixelArtCertainColors. Verified against the real library, not invented here:
+// ui-right.aseprite (19 colours, 0.447), npc12.png (28, 0.643), TileSet_V2.png (65, 0.597).
+func shadedPixelArtSprite(w, h int) image.Image {
+	// Four ramps of six steps: 24 colours, each step 18 per channel — sharp to the eye,
+	// "soft" to measureTransitions.
+	var palette []color.RGBA
+	for _, base := range [][3]uint8{{0xe8, 0xb7, 0x96}, {0x4f, 0x7a, 0x3c}, {0x6b, 0x4a, 0x2f}, {0x3c, 0x4a, 0x7a}} {
+		for step := 0; step < 6; step++ {
+			d := uint8(step * 18)
+			palette = append(palette, color.RGBA{
+				R: base[0] - d, G: base[1] - d, B: base[2] - d, A: 0xff,
+			})
+		}
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			// 2x2 blocks so runs stay flat, and an index walk that mostly moves one
+			// step along a ramp — exactly how shading is laid down.
+			i := ((x / 2) + (y / 2)) % len(palette)
+			img.Set(x, y, palette[i])
+		}
+	}
+	return img
+}
+
 // photograph builds a smooth gradient with per-channel noise: many colours, soft
 // transitions.
 //
@@ -145,7 +179,22 @@ func TestPixelArtDetection(t *testing.T) {
 			name:      "antialiased vector shape",
 			img:       antialiasedShape(256, 256),
 			wantPixel: false,
-			why:       "few colours but soft edges, which is what the edge test is for",
+			why:       "120 colours and soft edges, which is what the edge test is for",
+		},
+		{
+			name:      "shaded pixel art",
+			img:       shadedPixelArtSprite(64, 64),
+			wantPixel: true,
+			why: "24 colours from ramps: every edge is a hard one-pixel step, but the " +
+				"steps are small, so the transition test calls them soft. Measured on the " +
+				"real library at 0.44-0.68 — this used to be smoothly resized, which is " +
+				"the bug pixelArtCertainColors fixes",
+		},
+		{
+			name:      "shaded pixel-art atlas",
+			img:       shadedPixelArtSprite(1024, 1024),
+			wantPixel: true,
+			why:       "the same artwork at atlas size, where the resize filter actually matters",
 		},
 	}
 
@@ -159,6 +208,33 @@ func TestPixelArtDetection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShadedPixelArtDefeatsTheTransitionTest pins down *why* pixelArtCertainColors
+// exists, so nobody deletes it as redundant.
+//
+// The shaded fixture must score above the soft-ratio threshold — that is the blind spot
+// — and must still be classified as pixel art. If a future change to measureTransitions
+// makes the ratio meaningful for shaded art, this test fails and the rule can be
+// simplified deliberately rather than by accident.
+func TestShadedPixelArtDefeatsTheTransitionTest(t *testing.T) {
+	a := Analyse(shadedPixelArtSprite(64, 64))
+
+	if a.ColorCount > pixelArtCertainColors {
+		t.Fatalf("fixture has %d colours, above the %d certainty threshold: it no longer "+
+			"exercises the rule", a.ColorCount, pixelArtCertainColors)
+	}
+	if a.SoftTransitionRatio <= pixelArtMaxSoftRatio {
+		t.Errorf("fixture scores %.3f, below the %.2f threshold: the transition test would "+
+			"have accepted it anyway, so this fixture no longer reproduces the bug",
+			a.SoftTransitionRatio, pixelArtMaxSoftRatio)
+	}
+	if !a.IsPixelArt {
+		t.Errorf("shaded pixel art classified as smooth: colours=%d softRatio=%.3f",
+			a.ColorCount, a.SoftTransitionRatio)
+	}
+	t.Logf("shaded sprite: colours=%d softRatio=%.3f (threshold %.2f) → pixelArt=%v",
+		a.ColorCount, a.SoftTransitionRatio, pixelArtMaxSoftRatio, a.IsPixelArt)
 }
 
 func TestAnalyseAlpha(t *testing.T) {

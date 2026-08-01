@@ -100,7 +100,9 @@ func TestOpenWithPanel(t *testing.T) {
 		"Open in",
 		"smb://nas.local/game/assets/pack/hero.aseprite",
 		"Aseprite", // suggested for the extension
-		"cannot launch it for you",
+		// M16: "Ambar cannot launch it for you" is a tooltip on the copy button now, not
+		// a standing paragraph. The panel is a control, not documentation.
+		"cannot open the file for you",
 		`data-role="copy-path"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -119,7 +121,9 @@ func TestOpenWithPanel(t *testing.T) {
 	if strings.Contains(body, "smb://") {
 		t.Error("no local path may be shown when the mapping is unset")
 	}
-	if !strings.Contains(body, "AMBAR_LOCAL_LIBRARY_PATH") {
-		t.Error("the panel should say how to enable itself")
+	// M16: how to configure the mapping is setup documentation, so the panel links to
+	// /settings instead of reciting an environment variable.
+	if !strings.Contains(body, `href="/settings#open-in"`) {
+		t.Error("the panel should link to where the mapping is configured")
 	}
 }
