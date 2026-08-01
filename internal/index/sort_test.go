@@ -133,3 +133,70 @@ func itoa2(n int) string {
 	const digits = "0123456789"
 	return string([]byte{digits[n/10], digits[n%10]})
 }
+
+// TestSortByTriangleCount is M17's answer to "3D needs polygon count".
+//
+// `tris:<5000` had worked as a search filter since M16, but a filter needs a number you
+// already have in mind. Browsing by cost — "show me the cheapest models in this pack" —
+// had no order at all, and it is the question a five-person studio asks before it asks
+// any other question about a model.
+func TestSortByTriangleCount(t *testing.T) {
+	f := newFixture(t)
+	f.write("3d/pack/heavy.glb", "glTF-heavy")
+	f.write("3d/pack/light.glb", "glTF-light")
+	f.write("3d/pack/middle.glb", "glTF-middle")
+	f.write("2d/pack/sprite.png", "a sprite with no triangles at all")
+	f.scan()
+
+	for name, tris := range map[string]int{"heavy.glb": 90000, "light.glb": 120, "middle.glb": 4000} {
+		if _, err := f.db.Writer.Exec(
+			`UPDATE assets SET tri_count = ? WHERE filename = ?`, tris, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	names := func(sort SortOrder) []string {
+		t.Helper()
+		page, err := f.ix.ListGroups(context.Background(), ListOptions{Sort: sort, Page: 1, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, g := range page.Groups {
+			out = append(out, g.Primary.Filename)
+		}
+		return out
+	}
+
+	asc := names(SortTrisAsc)
+	if len(asc) != 4 {
+		t.Fatalf("got %d groups, want 4: %v", len(asc), asc)
+	}
+	if asc[0] != "light.glb" || asc[1] != "middle.glb" || asc[2] != "heavy.glb" {
+		t.Errorf("ascending order = %v, want light, middle, heavy first", asc)
+	}
+	// The sprite has no triangle count, and an unknown count is not a small one — it
+	// goes last, or the first page of "cheapest models" is full of 2D art.
+	if asc[3] != "sprite.png" {
+		t.Errorf("ascending order = %v, want the countless asset last", asc)
+	}
+
+	desc := names(SortTrisDesc)
+	if desc[0] != "heavy.glb" || desc[1] != "middle.glb" || desc[2] != "light.glb" {
+		t.Errorf("descending order = %v, want heavy, middle, light first", desc)
+	}
+
+	// And it is offered in the UI, not only reachable by hand-editing a URL.
+	var offered bool
+	for _, s := range SortOrders() {
+		if s == SortTrisAsc {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Error("the triangle order is not in the dropdown")
+	}
+	if ParseSort("tris") != SortTrisAsc || ParseSort("tris-desc") != SortTrisDesc {
+		t.Error("the URL values do not round-trip")
+	}
+}

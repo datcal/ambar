@@ -35,8 +35,10 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		Kind:           q.Get("kind"),
 		Dir:            q.Get("dir"),
 		IncludeMissing: q.Get("missing") == "1",
-		Sort:           index.ParseSort(q.Get("sort")),
-		Limit:          pageSizeParam(q.Get("per")),
+		// The hide tag (M17). Same shape as missing: excluded by default, one link away.
+		IncludeDisabled: q.Get("disabled") == "1",
+		Sort:            index.ParseSort(q.Get("sort")),
+		Limit:           pageSizeParam(q.Get("per")),
 		// Always at least 1: the zero value means "cursor mode" to ListGroups, which is
 		// the API's paging, not the grid's.
 		Page: pageParam(q.Get("page")),
@@ -68,6 +70,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	data.Search = opts.Query
 	data.Kind = opts.Kind
 	data.IncludeMissing = opts.IncludeMissing
+	data.IncludeDisabled = opts.IncludeDisabled
 	data.Sort = string(opts.Sort)
 	data.SortOptions = index.SortOrders()
 	data.PageSizes = pageSizes
@@ -321,7 +324,8 @@ func (s *Server) lookupAsset(w http.ResponseWriter, r *http.Request) (index.Asse
 
 // isFiltered reports whether these options narrow the library at all.
 func isFiltered(opts index.ListOptions) bool {
-	return opts.Query != "" || opts.Kind != "" || opts.Dir != "" || opts.PackID != 0 || opts.IncludeMissing
+	return opts.Query != "" || opts.Kind != "" || opts.Dir != "" || opts.PackID != 0 ||
+		opts.IncludeMissing || opts.IncludeDisabled
 }
 
 // browseOptions reads the filters an asset page was reached with.
@@ -336,6 +340,8 @@ func browseOptions(r *http.Request) index.ListOptions {
 		Kind:           q.Get("kind"),
 		Dir:            q.Get("dir"),
 		IncludeMissing: q.Get("missing") == "1",
+		// The hide tag (M17). Same shape as missing: excluded by default, one link away.
+		IncludeDisabled: q.Get("disabled") == "1",
 	}
 	if raw := q.Get("pack"); raw != "" {
 		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
@@ -363,6 +369,9 @@ func browseQueryString(opts index.ListOptions) string {
 	}
 	if opts.IncludeMissing {
 		v.Set("missing", "1")
+	}
+	if opts.IncludeDisabled {
+		v.Set("disabled", "1")
 	}
 	if len(v) == 0 {
 		return ""

@@ -54,6 +54,26 @@
   {{if .Colours}}
     <section class="panel-section">
       <h2>Colours</h2>
+      {{/* M17: the swatches answer "what is this library made of". This answers the
+           other question — "I have a colour, what matches it" — which had no way in at
+           all, because `color:aabbcc~24` is a syntax nobody is going to type. A plain
+           GET form, so the browser supplies the picker and no script is involved. */}}
+      <form class="colour-pick" method="get" action="/colour">
+        {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
+        <label class="sr-only" for="colour-pick">Pick a colour</label>
+        <input type="color" id="colour-pick" name="hex" value="#4f8ef7">
+        {{/* Typed wins over picked, because a colour is usually a number you already
+             have — from a style guide, from Aseprite, from dev tools — and matching it
+             by eye on a wheel is worse than useless. #aabbcc, #abc and rgb(1,2,3) all
+             parse. */}}
+        <label class="sr-only" for="colour-typed">or type a colour</label>
+        <input type="text" id="colour-typed" name="typed" placeholder="#aabbcc"
+               autocomplete="off" spellcheck="false" inputmode="text">
+        <button type="submit">Find</button>
+        {{/* An eyedropper, where the browser has one. Chromium does; Firefox does not
+             implement EyeDropper, so the button is created by the island only when the
+             API exists rather than sitting here as a promise it cannot keep. */}}
+      </form>
       <ul class="colour-filter">
         {{range .Colours}}
           <li>

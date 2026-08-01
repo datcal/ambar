@@ -395,6 +395,9 @@ type ListOptions struct {
 	// default: they are not there, so they would be noise in a browse. §12 keeps
 	// the rows forever regardless.
 	IncludeMissing bool
+	// IncludeDisabled shows assets tagged `disable:true`. Off by default — that is the
+	// whole point of the tag; see DisabledTag.
+	IncludeDisabled bool
 
 	Limit int
 	// Cursor is the keyset position for the API's `next_cursor` paging (§10). The web
@@ -431,6 +434,11 @@ const (
 	SortLargest  SortOrder = "size"
 	SortKind     SortOrder = "kind"
 	SortPixels   SortOrder = "pixels" // biggest image area first
+	// Triangle count, both ways (M17). Both directions matter and they are different
+	// questions: "cheapest model that will do" is the budget one people actually ask,
+	// and "heaviest thing in the library" is how you find the one that will not ship.
+	SortTrisAsc  SortOrder = "tris"
+	SortTrisDesc SortOrder = "tris-desc"
 
 	// SortDefault is what an unqualified browse gets: most recently indexed first.
 	//
@@ -458,6 +466,13 @@ func (s SortOrder) orderBy() string {
 		// NULL for anything without dimensions (audio, fonts), which sorts last here
 		// rather than first — an unknown size is not a big one.
 		return "coalesce(a.width, 0) * coalesce(a.height, 0) DESC, g.id DESC"
+	case SortTrisAsc:
+		// Ascending is the awkward direction: everything that is not a model has no
+		// triangle count, and NULL sorting first would fill the first page with sprites.
+		// So a missing count is pushed to the end explicitly.
+		return "a.tri_count IS NULL, a.tri_count ASC, g.id ASC"
+	case SortTrisDesc:
+		return "coalesce(a.tri_count, 0) DESC, g.id DESC"
 	default:
 		return "a.first_seen_at DESC, g.id DESC"
 	}
@@ -478,6 +493,10 @@ func (s SortOrder) Label() string {
 		return "Kind, then name"
 	case SortPixels:
 		return "Pixel size"
+	case SortTrisAsc:
+		return "Triangles, fewest first"
+	case SortTrisDesc:
+		return "Triangles, most first"
 	default:
 		return "Recently added"
 	}
@@ -485,7 +504,10 @@ func (s SortOrder) Label() string {
 
 // SortOrders lists the orders in the sequence the dropdown shows them.
 func SortOrders() []SortOrder {
-	return []SortOrder{SortNewest, SortModified, SortName, SortNameDesc, SortLargest, SortKind, SortPixels}
+	return []SortOrder{
+		SortNewest, SortModified, SortName, SortNameDesc, SortLargest, SortKind,
+		SortPixels, SortTrisAsc, SortTrisDesc,
+	}
 }
 
 // ParseSort maps a URL value to an order, falling back to the default rather than
@@ -625,6 +647,27 @@ func (ix *Indexer) List(ctx context.Context, opts ListOptions) (*Page, error) {
 	return page, nil
 }
 
+// DisabledNamespace / DisabledName are the tag that hides an asset: `disable:true`.
+//
+// A tag rather than a column, because the work is bulk. A 3D pack ships a dozen blank
+// filler PNGs and a "hidden" column would need its own button, its own bulk form and its
+// own page; the grid already has multi-select and a tag box, so tagging fifty tiles at
+// once is a feature that already exists. It also travels: §3 writes tags to the sidecar,
+// so re-indexing from scratch keeps the decision, which a column on a rebuildable index
+// would not (invariant 2).
+const (
+	DisabledNamespace = "disable"
+	DisabledName      = "true"
+)
+
+// notDisabledExpr excludes assets carrying the hide tag. `alias` is the assets alias in
+// the query being built.
+func notDisabledExpr(alias string) string {
+	return "NOT EXISTS (SELECT 1 FROM asset_tags dt JOIN tags dtg ON dtg.id = dt.tag_id" +
+		" WHERE dt.asset_id = " + alias + ".id AND dtg.namespace = '" + DisabledNamespace +
+		"' AND dtg.name = '" + DisabledName + "')"
+}
+
 // listFilters builds the shared WHERE clause.
 func listFilters(opts ListOptions) ([]string, []any, error) {
 	where := []string{"1 = 1"}
@@ -632,6 +675,9 @@ func listFilters(opts ListOptions) ([]string, []any, error) {
 
 	if !opts.IncludeMissing {
 		where = append(where, "a.missing_since IS NULL")
+	}
+	if !opts.IncludeDisabled {
+		where = append(where, notDisabledExpr("a"))
 	}
 	if opts.Kind != "" {
 		where = append(where, "a.kind = ?")
@@ -694,8 +740,11 @@ type Stats struct {
 	Packs          int
 	Missing        int
 	ContentChanged int
-	TotalBytes     int64
-	ByKind         []KindCount
+	// Disabled counts assets tagged `disable:true`, so the grid can say how many it is
+	// not showing. A hidden thing you cannot count is a thing you have lost.
+	Disabled   int
+	TotalBytes int64
+	ByKind     []KindCount
 }
 
 // KindCount is one row of the kind breakdown, largest first.
@@ -718,6 +767,11 @@ func (ix *Indexer) Stats(ctx context.Context) (Stats, error) {
 	}
 	if err := ix.db.Reader.QueryRowContext(ctx, `SELECT count(*) FROM packs`).Scan(&s.Packs); err != nil {
 		return s, fmt.Errorf("pack stats: %w", err)
+	}
+	if err := ix.db.Reader.QueryRowContext(ctx, `
+		SELECT count(*) FROM assets a
+		WHERE a.missing_since IS NULL AND NOT (`+notDisabledExpr("a")+`)`).Scan(&s.Disabled); err != nil {
+		return s, fmt.Errorf("hidden stats: %w", err)
 	}
 
 	rows, err := ix.db.Reader.QueryContext(ctx, `

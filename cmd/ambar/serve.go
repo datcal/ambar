@@ -138,6 +138,7 @@ func runServe(args []string) error {
 		},
 	})
 	deriver.Register(queue)
+	deriver.RegisterPalette(queue)
 
 	// A scan enqueues the derivative work it discovered. Passing this in as a
 	// callback keeps internal/index unaware of internal/derive.
@@ -271,6 +272,14 @@ func runServe(args []string) error {
 		log.Warn("could not enqueue outstanding derivatives", "error", err)
 	} else if n > 0 {
 		log.Info("enqueued outstanding derivative jobs", "count", n)
+	}
+
+	// Models whose thumbnail exists but whose palette does not (M17). Converges rather
+	// than repeating: once a model has swatches the query stops selecting it.
+	if n, err := derive.EnqueueModelPalettes(ctx, database, queue); err != nil {
+		log.Warn("could not enqueue model palettes", "error", err)
+	} else if n > 0 {
+		log.Info("enqueued model palette jobs", "count", n)
 	}
 
 	// Poll _inbox for dropped archives (§5, the primary ingest path). Skipped on a

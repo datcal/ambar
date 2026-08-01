@@ -120,6 +120,13 @@ type ScanReport struct {
 	Moved          int // §9.1 rule 2: same bytes, new path
 	MarkedMissing  int
 	Reappeared     int
+	// PurgedIgnored counts index rows dropped because their path is now junk — a
+	// `.Trash-1000` that was indexed before the ignore list knew about it. Not a
+	// deletion in the sense invariant 3 forbids: nothing on disk is touched, and
+	// invariant 2 already says the index is rebuildable from the filesystem. The
+	// alternative is worse — the row would sit in "missing" forever, counted in the
+	// banner, indistinguishable from a real file lost to an unmounted share.
+	PurgedIgnored int
 
 	// Asset groups (§5.1). MultiVariantGroups is the interesting number: each one
 	// would otherwise be several grid rows for the same artwork.
@@ -319,6 +326,34 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 		updates = append(updates, func(tx *sql.Tx) error {
 			return moveAsset(ctx, tx, id, file, sum, now)
 		})
+	}
+
+	// A row can vanish from the walk for two different reasons, and they deserve
+	// different answers: the file is gone (mark it missing, keep it forever, §12), or
+	// the path is one the ignore list now covers (drop the row — it should never have
+	// been indexed, and it is not coming back).
+	var purge []int64
+	kept := stillMissing[:0]
+	for _, prior := range stillMissing {
+		if ix.ignore.IgnoredPath(libraryPath(prior.packRelPath, prior.relPath)) {
+			purge = append(purge, prior.id)
+			continue
+		}
+		kept = append(kept, prior)
+	}
+	stillMissing = kept
+
+	report.PurgedIgnored = len(purge)
+	if len(purge) > 0 {
+		ix.log.InfoContext(ctx,
+			"dropped index rows whose path is now ignored; no files were touched",
+			"rows", len(purge))
+		for _, id := range purge {
+			id := id
+			updates = append(updates, func(tx *sql.Tx) error {
+				return purgeAsset(ctx, tx, id)
+			})
+		}
 	}
 
 	report.MarkedMissing = len(stillMissing)
@@ -606,6 +641,27 @@ func moveAsset(ctx context.Context, tx *sql.Tx, id int64, f library.File, sum st
 		return fmt.Errorf("move asset %d: clear fts: %w", id, err)
 	}
 	return insertFTS(ctx, tx, id, f.Filename, packName)
+}
+
+// purgeAsset removes an index row whose path the ignore list now covers.
+//
+// The only place this application deletes an asset row outside an explicit removal, and
+// it is worth being precise about why that is allowed: invariant 3 is about files, and
+// this touches none — the bytes were never ours, they are in somebody's trash folder.
+// Invariant 2 makes the index rebuildable by definition, and `rebuild-index` would drop
+// exactly these rows anyway, so leaving them behind only means a scan and a rebuild
+// disagree.
+//
+// Foreign keys handle the rest of the graph (tags, group membership, swatches). The FTS
+// row has no foreign key, so it goes explicitly.
+func purgeAsset(ctx context.Context, tx *sql.Tx, id int64) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM assets_fts WHERE rowid = ?`, id); err != nil {
+		return fmt.Errorf("purge ignored asset %d: clear fts: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM assets WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("purge ignored asset %d: %w", id, err)
+	}
+	return nil
 }
 
 // markMissing records that a file is gone. It never deletes (§12).

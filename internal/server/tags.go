@@ -41,6 +41,12 @@ func (s *Server) handleAssetTagAdd(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The sidebar's counts and its tag facet are cached, and `disable:true` changes what
+	// the grid shows — so a hide that does not appear in the banner until the cache
+	// expires reads as the tag not working. Bulk tagging already did this; single-asset
+	// tagging was the path nobody had exercised (M17).
+	s.nav.invalidate()
+
 	s.loadAssetTags(r, &data, asset.ID)
 	s.renderPartial(w, r, "asset.html", "asset-tags", status, data)
 }
@@ -63,6 +69,7 @@ func (s *Server) handleAssetTagRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	s.nav.invalidate()
 
 	data := s.newPageData(r)
 	data.Asset = &asset

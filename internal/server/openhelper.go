@@ -187,8 +187,11 @@ func linuxHelper() string {
 # browser asked you to pick an application instead — so it handed the raw ambar:// URL to that
 # application, which cannot open it. --check is how you tell the difference.
 #
-# Apps are resolved in this order: a command on PATH, then a Flatpak, then xdg-open. Override any
-# of them in ~/.config/ambar-open.conf, which survives re-downloading this script:
+# Apps are resolved in this order: a command on PATH, then a Flatpak, then a Steam install,
+# then xdg-open. Steam is in that list because an application bought there has no command on
+# PATH and its .desktop entry is "steam steam://rungameid/431730", which carries no file — so
+# the fallback opened the editor with nothing in it. Override any of them in
+# ~/.config/ambar-open.conf, which survives re-downloading this script:
 #
 #   ASEPRITE_CMD="flatpak run org.aseprite.Aseprite"
 #   BLENDER_CMD="/opt/blender/blender"
@@ -224,38 +227,54 @@ DESKTOP
     exec "$target" --check
 fi
 
-# --check reports whether the registration actually took. It is a separate step because the two
-# ways this fails — nothing registered, or something else registered — look identical from a
-# browser, which just asks you to pick an application either way.
-if [ "${1:-}" = "--check" ]; then
-    status=0
-    [ -x "$target" ] || { echo "missing: $target is not installed or not executable" >&2; status=1; }
-    [ -f "$desktop" ] || { echo "missing: $desktop" >&2; status=1; }
-
-    handler=$(xdg-mime query default x-scheme-handler/ambar 2>/dev/null || true)
-    case $handler in
-        ambar-open.desktop) echo "ok: ambar:// is handled by $target" ;;
-        "")  echo "not registered: nothing handles ambar:// yet" >&2; status=1 ;;
-        *)   echo "registered to something else: $handler" >&2; status=1 ;;
-    esac
-
-    # Firefox keeps its own handler list and only consults it after the first prompt; if it has
-    # already remembered a wrong choice, this is where that gets fixed.
-    echo "if your browser still asks which application to use, clear ambar in its"
-    echo "settings (Firefox: Settings → General → Applications) and click a link again"
-    exit $status
-fi
-
 # --- resolving applications ---------------------------------------------------------
 
 # shellcheck source=/dev/null
 [ -f "$HOME/.config/ambar-open.conf" ] && . "$HOME/.config/ambar-open.conf"
 
-# resolve echoes the command for an app key: an override, a binary on PATH, a Flatpak, or empty.
+# steam_libraries lists every Steam library root on this machine, one per line.
+#
+# Steam installs to more than one place: the default under $HOME, and any extra library the
+# user added on another drive. The extras are listed in libraryfolders.vdf as "path" entries,
+# which is a Valve text format but a regular enough one to read with sed for this single key.
+steam_libraries() {
+    for base in "$HOME/.local/share/Steam" "$HOME/.steam/steam" \
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"; do
+        [ -d "$base/steamapps/common" ] && echo "$base"
+        vdf="$base/steamapps/libraryfolders.vdf"
+        [ -f "$vdf" ] && sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)".*/\1/p' "$vdf"
+    done
+}
+
+# steam_binary echoes the first executable matching an install directory and a binary glob.
+#
+# Why this exists: an application bought on Steam has no command on PATH and no Flatpak, and
+# its .desktop entry is Steam's own —
+#
+#     Exec=steam steam://rungameid/431730
+#
+# — which takes no file argument at all. So the xdg-open fallback launched Aseprite with
+# nothing in it, every time, and looked exactly like a broken link. Aseprite itself has a
+# perfectly good CLI -- "aseprite [OPTIONS] [FILES]..." -- it was never handed the file.
+steam_binary() {
+    dir=$1
+    glob=$2
+    steam_libraries | while IFS= read -r lib; do
+        for candidate in "$lib/steamapps/common/$dir/"$glob; do
+            [ -f "$candidate" ] && [ -x "$candidate" ] && printf '%s\n' "$candidate"
+        done
+    done | head -1
+}
+
+# resolve echoes the command for an app key: an override, a binary on PATH, a Flatpak, a
+# Steam install, or empty. In that order, because an explicit override beats a guess and a
+# packaged binary beats a game-store copy.
 resolve() {
     override=$1
     binary=$2
     flatpak_id=$3
+    steam_dir=$4
+    steam_glob=$5
 
     if [ -n "$override" ]; then
         echo "$override"
@@ -270,21 +289,72 @@ resolve() {
         echo "flatpak run $flatpak_id"
         return
     fi
+    if [ -n "$steam_dir" ]; then
+        found=$(steam_binary "$steam_dir" "$steam_glob")
+        if [ -n "$found" ]; then
+            echo "$found"
+            return
+        fi
+    fi
     echo ""
 }
 
 command_for() {
     case $1 in
-        aseprite) resolve "${ASEPRITE_CMD:-}" aseprite org.aseprite.Aseprite ;;
-        blender)  resolve "${BLENDER_CMD:-}"  blender  org.blender.Blender ;;
-        godot)    resolve "${GODOT_CMD:-}"    godot    org.godotengine.Godot ;;
-        krita)    resolve "${KRITA_CMD:-}"    krita    org.kde.krita ;;
-        gimp)     resolve "${GIMP_CMD:-}"     gimp     org.gimp.GIMP ;;
-        audio)    resolve "${AUDIO_CMD:-}"    audacity org.audacityteam.Audacity ;;
-        tiled)    resolve "${TILED_CMD:-}"    tiled    org.mapeditor.Tiled ;;
+        aseprite) resolve "${ASEPRITE_CMD:-}" aseprite org.aseprite.Aseprite "Aseprite" "aseprite" ;;
+        blender)  resolve "${BLENDER_CMD:-}"  blender  org.blender.Blender  "Blender" "blender" ;;
+        # Steam ships Godot as the raw export-template-style binary, whose name carries the
+        # platform and build ("godot.x11.opt.tools.64"), so this matches on the prefix.
+        godot)    resolve "${GODOT_CMD:-}"    godot    org.godotengine.Godot "Godot Engine" "godot*" ;;
+        krita)    resolve "${KRITA_CMD:-}"    krita    org.kde.krita       "Krita" "bin/krita" ;;
+        gimp)     resolve "${GIMP_CMD:-}"     gimp     org.gimp.GIMP       "" "" ;;
+        audio)    resolve "${AUDIO_CMD:-}"    audacity org.audacityteam.Audacity "" "" ;;
+        tiled)    resolve "${TILED_CMD:-}"    tiled    org.mapeditor.Tiled "Tiled" "tiled" ;;
         *)        echo "" ;;
     esac
 }
+
+# --check reports whether the registration actually took, and what each application resolves to.
+#
+# Two separate failures look identical from a browser: nothing is registered, or something else
+# is. A third looks identical from the *desktop*: the scheme works, the script runs, and the
+# application opens with nothing in it — which is what a Steam-installed editor did before
+# resolve() learned to look there, because xdg-open honours a .desktop whose Exec is
+# "steam steam://rungameid/431730" and that carries no file. So the report names the command it
+# would actually run for each app; a wrong or missing one is then a line you can read rather
+# than a mystery.
+if [ "${1:-}" = "--check" ]; then
+    status=0
+    [ -x "$target" ] || { echo "missing: $target is not installed or not executable" >&2; status=1; }
+    [ -f "$desktop" ] || { echo "missing: $desktop" >&2; status=1; }
+
+    handler=$(xdg-mime query default x-scheme-handler/ambar 2>/dev/null || true)
+    case $handler in
+        ambar-open.desktop) echo "ok: ambar:// is handled by $target" ;;
+        "")  echo "not registered: nothing handles ambar:// yet" >&2; status=1 ;;
+        *)   echo "registered to something else: $handler" >&2; status=1 ;;
+    esac
+
+    echo
+    echo "applications:"
+    for app_key in aseprite blender godot krita gimp audio tiled; do
+        found=$(command_for "$app_key")
+        if [ -n "$found" ]; then
+            printf '  %-9s %s\n' "$app_key" "$found"
+        else
+            upper_key=$(printf '%s' "$app_key" | tr '[:lower:]' '[:upper:]')
+            printf '  %-9s not found — xdg-open will guess; set %s_CMD to choose\n' \
+                "$app_key" "$upper_key"
+        fi
+    done
+
+    # Firefox keeps its own handler list and only consults it after the first prompt; if it has
+    # already remembered a wrong choice, this is where that gets fixed.
+    echo
+    echo "if your browser still asks which application to use, clear ambar in its"
+    echo "settings (Firefox: Settings → General → Applications) and click a link again"
+    exit $status
+fi
 
 # --- the link ----------------------------------------------------------------------
 
@@ -359,6 +429,12 @@ if [ -z "$cmd" ]; then
 fi
 
 [ -n "$dry_run" ] && { echo "would run: $cmd $path"; exit 0; }
+
+# A resolved absolute path is executed quoted, because Steam's install directories contain
+# spaces — "Godot Engine" would otherwise word-split into two arguments and launch nothing.
+if [ -x "$cmd" ]; then
+    exec "$cmd" "$path"
+fi
 
 # Unquoted on purpose: an override may be a command *with* arguments ("flatpak run org.x.Y").
 # shellcheck disable=SC2086

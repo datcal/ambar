@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -725,5 +726,62 @@ func TestGridHoverOnlyOffersAnAnimationThatExists(t *testing.T) {
 	// The specific URL that never existed for a detected sheet.
 	if strings.Contains(body, itoa(`/assets/%d/anim.gif`, sheetID)) {
 		t.Error("the grid still points a detected sheet at anim.gif, which is never written for one")
+	}
+}
+
+// TestDisableTagHidesAnAssetEverywhere is M17's hide tag.
+//
+// A 3D pack ships filler images — a blank frame, a logo, a "thanks for buying" card — and
+// they are indistinguishable from content by any rule the scanner could apply. So the
+// human tags them and they go away. The tag is `disable:true`, applied with the bulk tag
+// box the grid already has, because hiding fifty of them one at a time is not a workflow.
+func TestDisableTagHidesAnAssetEverywhere(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{
+		"pack/hero.png":   "hero",
+		"pack/filler.png": "an empty frame",
+	})
+	heroID := ts.assetID(t, "pack/hero.png")
+	fillerID := ts.assetID(t, "pack/filler.png")
+
+	ts.postForm(t, itoa("/assets/%d/tags", fillerID), url.Values{"tag": {"disable:true"}})
+
+	body := readBody(t, ts.get(t, "/assets"))
+	if strings.Contains(body, itoa(`/assets/%d`, fillerID)) {
+		t.Error("a disabled asset is still in the grid")
+	}
+	if !strings.Contains(body, itoa(`/assets/%d`, heroID)) {
+		t.Error("the hide tag took the wrong asset with it")
+	}
+	// Counted, always: a hidden thing you cannot count is a thing you have lost.
+	if !strings.Contains(body, "hidden by") {
+		t.Error("the grid does not say how many assets it is hiding")
+	}
+
+	// Searching does not smuggle it back.
+	if body := readBody(t, ts.get(t, "/assets?q=filler")); strings.Contains(body, itoa(`/assets/%d`, fillerID)) {
+		t.Error("a disabled asset came back through search")
+	}
+
+	// And it is one link away, because the tag has to be removable.
+	shown := readBody(t, ts.get(t, "/assets?disabled=1"))
+	if !strings.Contains(shown, itoa(`/assets/%d`, fillerID)) {
+		t.Error("?disabled=1 does not show the hidden asset")
+	}
+
+	// Removing the tag restores it, with no scan or re-derive in between. The remove
+	// endpoint works on the tag's id, which is what the page's own button submits.
+	var tagID int64
+	if err := ts.db.Reader.QueryRow(
+		`SELECT id FROM tags WHERE namespace = ? AND name = ?`,
+		index.DisabledNamespace, index.DisabledName).Scan(&tagID); err != nil {
+		t.Fatal(err)
+	}
+	ts.postForm(t, itoa("/assets/%d/tags/remove", fillerID),
+		url.Values{"tag_id": {itoa("%d", tagID)}})
+	if body := readBody(t, ts.get(t, "/assets")); !strings.Contains(body, itoa(`/assets/%d`, fillerID)) {
+		t.Error("removing the tag did not bring the asset back")
 	}
 }

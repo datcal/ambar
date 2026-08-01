@@ -12,6 +12,25 @@
 
   {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
 
+  {{/* M17: the hide tag. A 3D pack ships filler images that are blank or a logo, and
+       "onları elle böyle taglicem, görmek istemiyorum" is a reasonable thing to want —
+       but a hidden thing you cannot count is a thing you have lost, so the number is
+       always here and getting them back is one link. */}}
+  {{if and .Stats .Stats.Disabled}}
+    {{if not .IncludeDisabled}}
+      <p class="note">
+        {{.Stats.Disabled}} asset{{if ne .Stats.Disabled 1}}s are{{else}} is{{end}} hidden by
+        a <code>disable:true</code> tag.
+        <a href="/?disabled=1{{if .Search}}&amp;q={{.Search}}{{end}}{{if .Kind}}&amp;kind={{.Kind}}{{end}}">Show them</a>.
+      </p>
+    {{else}}
+      <p class="note">
+        Showing hidden assets. Remove the <code>disable:true</code> tag on an asset's page to
+        bring it back. <a href="/{{if .Search}}?q={{.Search}}{{end}}">Hide them again</a>.
+      </p>
+    {{end}}
+  {{end}}
+
   {{if and .Stats .Stats.Missing}}
     {{if not .IncludeMissing}}
       {{/* §12: these rows are kept, never deleted. Say so plainly, because a count

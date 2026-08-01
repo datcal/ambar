@@ -461,7 +461,13 @@ func (d *Deriver) recordForContent(ctx context.Context, sha256hex, state, messag
 // before (a quantized palette after an exact one), and leftover high-rank rows would
 // make a colour search match a colour the asset no longer has.
 func (d *Deriver) recordSwatches(ctx context.Context, sha256hex string, swatches []palette.Swatch) error {
-	if _, err := d.db.Writer.ExecContext(ctx, `
+	return recordSwatchesTo(ctx, d.db, sha256hex, swatches)
+}
+
+// recordSwatchesTo is the same thing without a Deriver, for the model-palette path, which
+// runs from a job and from an HTTP handler and must write identical rows either way.
+func recordSwatchesTo(ctx context.Context, database *db.DB, sha256hex string, swatches []palette.Swatch) error {
+	if _, err := database.Writer.ExecContext(ctx, `
 		DELETE FROM asset_swatches
 		WHERE asset_id IN (SELECT id FROM assets WHERE sha256 = ?)`, sha256hex); err != nil {
 		return fmt.Errorf("clear swatches for content %s: %w", sha256hex[:8], err)
@@ -471,7 +477,7 @@ func (d *Deriver) recordSwatches(ctx context.Context, sha256hex string, swatches
 	}
 
 	for i, s := range swatches {
-		if _, err := d.db.Writer.ExecContext(ctx, `
+		if _, err := database.Writer.ExecContext(ctx, `
 			INSERT INTO asset_swatches (asset_id, rank, r, g, b, ratio)
 			SELECT id, ?, ?, ?, ?, ? FROM assets WHERE sha256 = ?
 			ON CONFLICT(asset_id, rank) DO UPDATE SET

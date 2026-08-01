@@ -21,6 +21,10 @@ import (
 // pack, so failing to exclude it does not merely add noise, it doubles the
 // apparent asset count. It is present in the target library at arbitrary depth,
 // which is why matching is not anchored to the top level.
+// The rest is what a shared network volume accumulates. None of it is the user's
+// content and all of it is real: `.Trash-1000` appeared on the target library with
+// a deleted pack inside it, which would otherwise have been indexed as a pack —
+// deleted files coming back as search results is the opposite of useful.
 var DefaultIgnoreGlobs = []string{
 	"__MACOSX",
 	".DS_Store",
@@ -28,6 +32,32 @@ var DefaultIgnoreGlobs = []string{
 	"desktop.ini",
 	"._*", // AppleDouble sidecars
 	".git",
+
+	// Trash. The freedesktop spec puts a per-user trash at the root of every
+	// non-home filesystem, named for the uid — `.Trash-1000` on this library, and a
+	// different number on a colleague's machine, so it has to be a glob.
+	".Trash-*",
+	".Trash",
+
+	// Synology. `@eaDir` is the big one: DSM writes a thumbnail and index directory
+	// beside *every* media file, at every depth, so on a NAS it is easily the largest
+	// source of noise in the tree. `#recycle` is the share-level recycle bin, which is
+	// trash by another name, and `#snapshot` is Btrfs snapshots — the same files again,
+	// frozen, which would read as thousands of duplicates (§9.1).
+	"@eaDir",
+	"#recycle",
+	"#snapshot",
+	".@__thumb",
+
+	// Windows, which the packs arrive from.
+	"$RECYCLE.BIN",
+	"System Volume Information",
+
+	// macOS, on network volumes.
+	".Spotlight-V100",
+	".fseventsd",
+	".TemporaryItems",
+	".DocumentRevisions-V100",
 }
 
 // Matcher decides whether a path component is junk.

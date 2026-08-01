@@ -164,6 +164,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
 	mux.Handle("GET /assets", auth.RequireUser(http.HandlerFunc(s.handleAssets)))
+	// The colour picker beside the sidebar's swatches (M17): pick a colour, get the
+	// search. A redirect so the form needs no JavaScript.
+	mux.Handle("GET /colour", auth.RequireUser(http.HandlerFunc(s.handleColourSearch)))
 	mux.Handle("GET /assets/{id}", auth.RequireUser(http.HandlerFunc(s.handleAsset)))
 	mux.Handle("GET /assets/{id}/download", auth.RequireUser(http.HandlerFunc(s.handleAssetDownload)))
 
@@ -365,14 +368,15 @@ type pageData struct {
 
 	// Asset browsing (M1) and grouping (M2). Page holds groups rather than
 	// individual assets — see §5.1 and index.ListGroups.
-	Page           *index.GroupPage
-	Group          *index.Group
-	Variants       []index.Asset
-	Asset          *index.Asset
-	Stats          *index.Stats
-	Search         string
-	Kind           string
-	IncludeMissing bool
+	Page            *index.GroupPage
+	Group           *index.Group
+	Variants        []index.Asset
+	Asset           *index.Asset
+	Stats           *index.Stats
+	Search          string
+	Kind            string
+	IncludeMissing  bool
+	IncludeDisabled bool
 
 	// The grid's pager and sort control (M16). PageURL builds a link to another page with
 	// every filter intact; it is a func so the template can ask for an arbitrary number

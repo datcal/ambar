@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -143,9 +144,46 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// A palette, from the only picture of this model that exists (M17).
+	//
+	// Colour search worked on 2D and silently returned nothing for 3D — 926 models in
+	// the library, zero with a swatch — because a model's derive produces geometry and
+	// never an image, and swatches come from images. This render *is* an image, and it
+	// is already decoded and bounds-checked right here, so the palette costs one more
+	// pass over pixels we have in hand.
+	//
+	// It is the render, not the material definitions: the lighting the viewer used is
+	// baked in, so a white model under warm light reads slightly warm. That is a fair
+	// description of what the thing looks like, which is what a colour filter is for —
+	// and the alternative, reading base-colour factors out of the glTF, would ignore
+	// every texture and be confidently wrong instead.
+	if err := s.recordThumbSwatches(r.Context(), asset.SHA256, img); err != nil {
+		// Not fatal: the thumbnail is written and useful, and a missing palette costs
+		// nothing but a colour search that does not find this model.
+		s.log.WarnContext(r.Context(), "could not record a model palette",
+			"asset_id", asset.ID, "error", err)
+	}
+
 	s.log.InfoContext(r.Context(), "stored a browser-rendered model thumbnail",
 		"asset_id", asset.ID, "bytes", buf.Len())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordThumbSwatches extracts a palette from a rendered model thumbnail and indexes it
+// for `color:` search.
+//
+// The writing is derive's, not this package's: it owns the swatch table and already has
+// the delete-then-insert that keeps a re-render from leaving a high-rank row matching a
+// colour the model no longer has. Two copies of that SQL would be two things to keep in
+// step, and the backfill job (derive.EnqueueModelPalettes, for the thumbnails that already
+// existed) has to agree with this path exactly.
+func (s *Server) recordThumbSwatches(ctx context.Context, sha256hex string, img image.Image) error {
+	if err := derive.RecordImagePalette(ctx, s.db, sha256hex, img); err != nil {
+		return err
+	}
+	// The sidebar's colour row is an aggregate over exactly that table.
+	s.nav.invalidate()
+	return nil
 }
 
 // decodeThumbPNG accepts only a PNG of plausible thumbnail dimensions.
