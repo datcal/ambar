@@ -566,6 +566,11 @@ func groupFilters(opts ListOptions) ([]string, []any) {
 	if !opts.IncludeMissing {
 		where = append(where, "a.missing_since IS NULL")
 	}
+	// The hide tag (M17), matched against the primary — which is the file the tile shows
+	// and therefore the one somebody tagged after looking at it.
+	if !opts.IncludeDisabled {
+		where = append(where, notDisabledExpr("a"))
+	}
 	if opts.Kind != "" {
 		// Matched against any variant: a group whose primary is a PNG but which also
 		// holds a .glb should appear under a model filter.

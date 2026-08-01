@@ -2409,3 +2409,213 @@ is to say all 71 were blank before.
 The lesson, and M17 keeps producing it: `derive_state` answers "did the job run", and three
 separate features had read it as "is there a picture". Hover was the first (`anim.gif`), the 3D
 viewer was the second (`preview.glb`), this is the third.
+
+## M17 — "open in Aseprite" opened Aseprite, empty, again
+
+The question asked was "does Aseprite really not take parameters?" It does, and the proof is
+its own `--help`:
+
+	Aseprite v1.3.18.1-x64 | A pixel art program
+	Usage:
+	  aseprite [OPTIONS] [FILES]...
+
+Run against a real file from the library, in batch mode, it read an eleven-frame sprite and
+wrote eleven PNGs. Aseprite was never the problem. It was never being handed the file.
+
+**The cause is Steam.** This copy of Aseprite was bought there, so there is no `aseprite` on
+PATH and no Flatpak, and the helper's resolution chain — override, PATH, Flatpak, then
+`xdg-open` — reached the fallback. `xdg-open` honours the desktop entry Steam installs:
+
+	[Desktop Entry]
+	Name=Aseprite
+	Exec=steam steam://rungameid/431730
+
+There is no `%f` in that Exec line and no file in that URL. The launch "succeeds", the editor
+opens with an empty canvas, and from the outside it is indistinguishable from the `ambar://`
+scheme not being registered at all — which is precisely the confusion M16 wrote this script to
+remove, arriving through a door it had not thought of.
+
+`resolve()` now has a fourth step: **the Steam libraries**. It reads `libraryfolders.vdf` for
+every library root (Steam installs to more than one drive, and this machine has two), then looks
+for a known install directory and binary — `Aseprite/aseprite`, `Blender/blender`,
+`Godot Engine/godot*`, `Krita/bin/krita`, `Tiled/tiled`. Steam is *last* among the automatic
+options, after PATH and Flatpak, because a packaged binary is the better choice when both exist,
+and an explicit override still beats all of them.
+
+That surfaced a second bug that had never fired: `exec $cmd "$path"` is deliberately unquoted so
+an override can be a command *with* arguments ("flatpak run org.x.Y"). Steam's directory for
+Godot is `Godot Engine` — with a space — so the resolved path would have split into two
+arguments and launched nothing. A resolved absolute executable is now exec'd quoted; only the
+"command plus arguments" case stays unquoted.
+
+**`--check` now names the command it would run for each application**, which is the diagnostic
+this whole class of failure needed:
+
+	applications:
+	  aseprite  /home/…/Steam/steamapps/common/Aseprite/aseprite
+	  blender   flatpak run org.blender.Blender
+	  godot     /home/…/Steam/steamapps/common/Godot Engine/godot.x11.opt.tools.64
+	  gimp      not found — xdg-open will guess; set GIMP_CMD to choose
+
+Three different failures used to look identical from a browser: nothing registered, something
+else registered, and "registered, ran, opened empty". The third one now reads as a line.
+
+**Tested by running the script**, which is the only honest way to test a shell program shipped as
+a Go string literal — reading it certainly did not catch this. `TestLinuxHelperFindsASteamInstall`
+builds a fake Steam library under a temporary HOME, with a space in the install directory and a
+space in the filename, and asserts the stub binary receives exactly one argument. It would have
+failed against the old script twice over.
+
+One consequence worth stating: **the installed copy of `ambar-open` is a downloaded file, not part
+of the server.** Fixing the generator fixes nobody's machine until they download it again —
+Settings → "open in…" helper, then `ambar-open --install`. `--check` is how to confirm it took.
+
+## M17 — the NAS junk, the colour row, the hide tag
+
+Four smaller things, each with a measurement behind it.
+
+### `.Trash-1000`
+
+Sitting at the root of the library with a deleted pack inside it, and nothing in
+`DefaultIgnoreGlobs` matched the name — so the walk would have indexed deleted files and
+served them as search results. The uid in the name is why it has to be a glob: 1000 here,
+something else on the next machine.
+
+Added with the rest of what a shared network volume accumulates, since they are the same
+class of thing and finding them one complaint at a time is a waste: `.Trash-*`, `.Trash`,
+`@eaDir` (DSM writes one beside *every* media file, at every depth — on a Synology it is
+easily the largest source of noise), `#recycle`, `#snapshot` (the same files again, frozen,
+which §9.1 would read as thousands of duplicates), `.@__thumb`, `$RECYCLE.BIN`,
+`System Volume Information`, and the macOS network-volume set.
+
+**Adding the glob only stops new ones**, and that is the half worth writing down. A row that
+was indexed before simply stops appearing in the walk, which the reconciler reads as "the
+file is gone" and records as missing — forever, in the same banner that warns about an
+unmounted share. So a path the ignore list now covers has its row dropped instead
+(`purgeAsset`). That is the only place outside an explicit removal where this application
+deletes an asset row, and it is allowed because invariant 3 is about *files*: nothing on
+disk is touched, invariant 2 makes the index rebuildable by definition, and `rebuild-index`
+would drop exactly these rows anyway — leaving them behind only means a scan and a rebuild
+disagree.
+
+Verified on the real 11,839-asset library: a `.Trash-1000/files/oldpack/` with two PNGs in
+it, scanned, produced 0 assets and 0 packs.
+
+### The colour row was ranked wrong
+
+"Orası en çok kullanılan renkleri gösteriyor değil mi?" — it was, and that was the mistake.
+Ranked by coverage, the leader was `#0d0d13`, present in **38% of all images**; nine of the
+top twelve were the same dark cluster. Pixel art is mostly outline and shadow, so coverage
+measures the wrong thing. As a filter it failed twice: the row could not offer a green, and
+the colour it did offer returned a third of the library.
+
+Candidates are still ranked by coverage — that part is right, it is how you find the
+*strongest* example of a colour — but the selection now round-robins across twelve hue
+families plus one for the neutrals, and the result is ordered by hue so the strip reads as a
+spectrum. Every family gets its best colour before any family gets a second, which is what
+makes a green appear at all: the library has 24 green buckets and they were being outweighed
+by shadow. The neutrals are one family rather than twenty separate greys, so "the dark ones"
+is still offerable without being the whole row.
+
+### Picking a colour
+
+`color:aabbcc~24` existed and nobody was ever going to type it. A native
+`<input type="color">` in a plain GET form, and a route that composes the query and
+redirects — no JavaScript, and the browser supplies its own picker and eyedropper. The
+tolerance matches the sidebar chips, because these swatches are bucket *averages*: the
+centre of a group of shades, not a pixel value any file actually contains.
+
+### Colour search found no models, and that was structural
+
+926 models in the library, **zero with a swatch**. Swatches come from images; a model's
+derive produces a preview.glb and never an image. The browser-rendered thumbnail *is* an
+image, and by the time it reaches the server it is already decoded and bounds-checked — so
+the palette costs one more pass over pixels already in hand.
+
+It is the render, not the material definitions: the viewer's lighting is baked in, so a
+white model under warm light reads slightly warm. That is a fair description of what the
+thing looks like, which is what a colour filter is for. Reading base-colour factors out of
+the glTF instead would ignore every texture and be confidently wrong.
+
+### `disable:true`
+
+A 3D pack ships filler images — a blank frame, a logo, a "thanks for buying" card — and no
+rule the scanner could apply would tell them from content. So the human tags them and they
+go away.
+
+A tag rather than a `hidden` column, and the reason is the workflow rather than the schema:
+hiding fifty tiles one at a time is not a workflow, and the grid already has multi-select
+and a bulk tag box. It also travels — §3 writes tags to the sidecar, so re-indexing from
+scratch keeps the decision, which a column on a rebuildable index would not (invariant 2).
+
+Hidden everywhere the grid and search look, and **always counted**: a hidden thing you
+cannot count is a thing you have lost, so the banner says how many and `?disabled=1` brings
+them back, mirroring how missing files already work.
+
+Writing it surfaced a real bug in a path nobody had exercised: **single-asset tagging never
+invalidated the sidebar cache** (bulk tagging did). Every count in the sidebar was stale
+until the cache expired, which for this feature reads as the tag not working at all.
+
+### Triangle count
+
+`tris:<5000` had worked as a search filter since M16, but a filter needs a number you
+already have in mind. Browsing by cost — "the cheapest model that will do" — had no order,
+and for a small studio that is the first question about a model, not a late one. Two orders,
+because the directions are different questions: fewest-first is the budget one, most-first
+is how you find the thing that will not ship.
+
+Ascending needs care: `tri_count` is NULL for every image, audio file and font, and NULL
+sorts first in SQLite — so the first page of "cheapest models" would have been sprites. An
+unknown count is not a small one, and it goes last. Index in 0019, partial, because the rows
+without a count are most of the table and never what the order is for.
+
+## M17 — the colour picker, and why models still had no colours
+
+Two follow-ups to the colour work, and the second one was a half-finished job on my part.
+
+### "Başka bir objenin rengini ölçemiyorum"
+
+Right, and the fix is in three parts rather than one.
+
+**Type it.** A colour is usually a number you already have written down — from a style guide,
+from Aseprite, from a browser's dev tools — and matching that by eye on a colour wheel is
+worse than useless. So there is a text field beside the wheel, and it takes the notations a
+colour actually arrives in: `#aabbcc`, the bare `aabbcc`, the three-digit `#abc` people type
+from memory, `#rrggbbaa` with the alpha dropped, and `rgb(170, 187, 204)` in both the comma
+and the modern space-separated form. Named colours are refused clearly rather than half-
+supported. **Typed beats picked**, always, because the wheel has a value whether or not
+anyone touched it — a stale `#4f8ef7` silently overriding a hex somebody just typed would be
+the worst possible behaviour.
+
+**Sample it.** `window.EyeDropper` reads a pixel from anywhere on screen, and it is the only
+part of this that plain HTML cannot do. Chromium has it; **Firefox does not**. So the button
+is created by the island only when the API exists, rather than sitting in the template as a
+promise it cannot keep — a control that is present and does nothing is worse than one that is
+absent, and there is no polyfill for reading a pixel outside the page.
+
+**Take it from an asset you already have.** This existed and was too well hidden: the palette
+Details table has had a "find assets containing this colour" action per swatch since M16. It
+is the answer to "sample another object's colour" for anything already in the library — and
+it did not work for models, which is the next section.
+
+### The models had no colours because I only did half of it
+
+The upload handler extracts a palette from each *new* browser-rendered thumbnail. Every
+thumbnail already on disk kept nothing, which on this library was 235 of them — so
+`color:` still returned no models, and "herhalde renkleri tutmuyor" was exactly right.
+
+`asset.modelpalette` is the backfill: a queue job that reads the stored `thumb.webp`,
+decodes it and records the palette. Reading the file rather than asking the browser to
+render again, because the picture already exists and re-rendering hundreds of models to
+recompute something from a file we have is work for its own sake. `x/image/webp` reads the
+lossless VP8L that nativewebp writes — checked against a real derivative before building on
+it, since "we can decode what we encode" is the kind of assumption that fails quietly.
+
+Enqueued at startup beside `EnqueueStale`, and it converges rather than repeating: a model
+with swatches is excluded by the query, and one whose thumbnail does not exist yet returns
+without writing. The write itself moved into `derive.RecordImagePalette`, shared by the job
+and the upload handler — two paths produce a model's picture and two copies of the
+swatch-writing SQL would be two things to keep in step.
+
+Run against the real library: **926 jobs, 470 models with a palette**, and a colour search
+that used to return nothing now returns 65 models for one of their own dominant colours.

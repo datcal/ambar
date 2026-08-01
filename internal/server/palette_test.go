@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -134,5 +135,71 @@ func TestPaletteExportNoPalette(t *testing.T) {
 
 	if resp := ts.get(t, itoa("/assets/%d/palette/gpl", id)); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("no-palette export status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestColourInputParsing: the notations a colour actually arrives in.
+//
+// "Elle gireceksem bari CSS gibi renk girelim" — and that is right, because a colour is
+// usually a number you already have written down somewhere, not something to match by eye
+// on a wheel. So the field takes what design tools and dev tools hand you.
+func TestColourInputParsing(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"#aabbcc", "aabbcc", true},
+		{"aabbcc", "aabbcc", true},
+		{"  #AABBCC  ", "aabbcc", true},
+		{"#abc", "aabbcc", true},               // the shorthand people type from memory
+		{"#aabbccff", "aabbcc", true},          // alpha dropped: a palette has no opacity
+		{"rgb(170, 187, 204)", "aabbcc", true}, // what dev tools copy
+		{"rgb(170 187 204)", "aabbcc", true},   // the modern space-separated form
+		{"rgba(170, 187, 204, 0.5)", "aabbcc", true},
+		{"", "", false},
+		{"#gggggg", "", false},
+		{"#aabb", "", false},
+		{"rgb(300, 0, 0)", "", false}, // out of range is a typo, not a colour
+		{"rgb(1, 2)", "", false},
+		{"cornflowerblue", "", false}, // named colours would need a table; say no clearly
+	}
+	for _, tc := range tests {
+		got, ok := parseColourInput(tc.in)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("parseColourInput(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestColourSearchPrefersTheTypedValue: both inputs are always submitted, because the
+// colour wheel has a value whether or not anyone touched it. The typed one has to win or
+// typing a hex would be quietly overridden by whatever the wheel happened to be showing.
+func TestColourSearchPrefersTheTypedValue(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+
+	cases := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"typed wins", "/colour?hex=%234f8ef7&typed=%23aabbcc", "color%3Aaabbcc"},
+		{"the wheel is used when nothing was typed", "/colour?hex=%234f8ef7&typed=", "color%3A4f8ef7"},
+		{"css notation", "/colour?typed=" + url.QueryEscape("rgb(170,187,204)"), "color%3Aaabbcc"},
+		{"nothing usable goes home", "/colour?typed=nonsense&hex=", "/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := ts.get(t, tc.query)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusSeeOther {
+				t.Fatalf("status = %d, want 303", resp.StatusCode)
+			}
+			if loc := resp.Header.Get("Location"); !strings.Contains(loc, tc.want) {
+				t.Errorf("redirect = %q, want it to contain %q", loc, tc.want)
+			}
+		})
 	}
 }

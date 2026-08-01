@@ -3,8 +3,11 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/datcal/ambar/internal/palette"
@@ -77,4 +80,100 @@ func exportFilename(filename, format string) string {
 		base = base[:i]
 	}
 	return base + "-palette." + format
+}
+
+// swatchTolerance is the per-channel slack the sidebar's colour links use. Wider than
+// search's own default because these colours are bucket *averages* — the swatch is the
+// centre of a group of shades, not a pixel value anybody's file actually contains.
+const swatchTolerance = 24
+
+// handleColourSearch turns a colour picker — or a typed colour — into a colour search (M17).
+//
+// The sidebar's swatches answer "what is this library made of"; this answers the other
+// question, "I have a colour, what matches it", which had no route in the UI at all. The
+// syntax existed (`color:aabbcc~24`) and nobody is going to type that.
+//
+// Two inputs, and the typed one wins when it has anything in it. That is not a fallback but
+// the common case: a colour is usually something you already have written down — from a
+// style guide, from Aseprite, from another engine — and retyping it into a colour wheel by
+// eye is worse than useless. The wheel is for when you do not have the number.
+//
+// A redirect rather than a JS island: an <input type="color"> in a plain GET form gives the
+// browser's own picker, and the only missing step is composing the query.
+func (s *Server) handleColourSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	hex, ok := parseColourInput(q.Get("typed"))
+	if !ok {
+		hex, ok = parseColourInput(q.Get("hex"))
+	}
+	if !ok {
+		// Neither input carried a colour. The library itself is the honest answer, not an
+		// error page for a form somebody submitted empty.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	query := fmt.Sprintf("color:%s~%d", hex, swatchTolerance)
+	target := "/?q=" + url.QueryEscape(query)
+	if kind := q.Get("kind"); kind != "" {
+		target += "&kind=" + url.QueryEscape(kind)
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// parseColourInput reads the ways somebody actually writes a colour down, and returns the
+// six lowercase hex digits `color:` wants.
+//
+// Accepting more than one notation is not indulgence: these are the forms a colour arrives
+// in. `#aabbcc` is what every design tool copies, `rgb(170, 187, 204)` is what a browser's
+// dev tools and CSS give you, and the three-digit shorthand is what people type from memory.
+func parseColourInput(raw string) (string, bool) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return "", false
+	}
+
+	// rgb(r, g, b) and rgba(...), the CSS forms. The alpha is read and discarded: a
+	// palette has no opacity, and refusing the string over a fourth number would be
+	// pedantry.
+	if strings.HasPrefix(v, "rgb") {
+		open := strings.IndexByte(v, '(')
+		close := strings.LastIndexByte(v, ')')
+		if open < 0 || close < open {
+			return "", false
+		}
+		parts := strings.FieldsFunc(v[open+1:close], func(r rune) bool {
+			return r == ',' || r == ' ' || r == '/'
+		})
+		if len(parts) < 3 {
+			return "", false
+		}
+		var rgb [3]int
+		for i := 0; i < 3; i++ {
+			n, err := strconv.Atoi(parts[i])
+			if err != nil || n < 0 || n > 255 {
+				return "", false
+			}
+			rgb[i] = n
+		}
+		return fmt.Sprintf("%02x%02x%02x", rgb[0], rgb[1], rgb[2]), true
+	}
+
+	v = strings.TrimPrefix(v, "#")
+	for _, c := range v {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return "", false
+		}
+	}
+	switch len(v) {
+	case 3:
+		// #abc is #aabbcc.
+		return string([]byte{v[0], v[0], v[1], v[1], v[2], v[2]}), true
+	case 6:
+		return v, true
+	case 8:
+		// #rrggbbaa: drop the alpha, as above.
+		return v[:6], true
+	}
+	return "", false
 }

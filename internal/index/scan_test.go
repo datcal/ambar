@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/datcal/ambar/internal/db"
+	"github.com/datcal/ambar/internal/library"
 )
 
 // fixture is a library root plus a migrated database, with helpers for the
@@ -1136,4 +1137,74 @@ func testPNG(t *testing.T, w, h int) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// TestTrashIsIgnoredAndPurgedIfPreviouslyIndexed covers both halves of the change.
+//
+// The target NAS had a `.Trash-1000` at the library root with a deleted pack inside it,
+// and the ignore list did not know the name — so a scan indexed deleted files and served
+// them as search results. Adding the glob stops new ones. It does not help the rows that
+// were already there: they simply stop appearing in the walk, which the reconciler reads
+// as "the file is gone" and records as missing, forever, in the same banner that warns
+// about an unmounted share. So a path that is now ignored has its row dropped instead.
+func TestTrashIsIgnoredAndPurgedIfPreviouslyIndexed(t *testing.T) {
+	f := newFixture(t)
+
+	// Indexed before the ignore list knew the name: an Indexer whose matcher has none
+	// of the NAS rules is exactly the old behaviour.
+	permissive, err := library.NewMatcher([]string{"__MACOSX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write("2d/pack/hero.png", "hero")
+	// A second real asset, so removing the first later does not empty the library and
+	// trip the "this looks like an unmounted share" guard — which is itself the right
+	// behaviour, and worth not disabling for a test.
+	f.write("2d/pack/villain.png", "villain")
+	f.write("2d/.Trash-1000/files/oldpack/deleted.png", "deleted art")
+	f.write("3d/kenney/@eaDir/thumb.png", "synology thumbnail")
+
+	old := New(f.db, Options{Root: f.root, Ignore: permissive})
+	if _, err := old.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.assetCount(); got != 4 {
+		t.Fatalf("the permissive scan indexed %d assets, want 4 (the fixture is wrong)", got)
+	}
+
+	// Now scan with the real defaults.
+	report := f.scan()
+
+	if report.PurgedIgnored != 2 {
+		t.Errorf("purged %d rows, want 2 (the trash file and the @eaDir thumbnail)", report.PurgedIgnored)
+	}
+	if report.MarkedMissing != 0 {
+		t.Errorf("marked %d missing; junk must be dropped, not parked in the missing banner",
+			report.MarkedMissing)
+	}
+	if got := f.assetCount(); got != 2 {
+		t.Errorf("%d assets remain, want 2 — only the real ones", got)
+	}
+
+	// The files themselves are untouched: invariant 1 and invariant 3 are about bytes on
+	// disk, and this only ever removed rows.
+	for _, rel := range []string{"2d/.Trash-1000/files/oldpack/deleted.png", "3d/kenney/@eaDir/thumb.png"} {
+		if _, err := os.Stat(filepath.Join(f.root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s was removed from disk; nothing here may delete a file: %v", rel, err)
+		}
+	}
+
+	// A real file that goes missing still goes missing — the purge must not have
+	// swallowed that path.
+	f.remove("2d/pack/hero.png")
+	if report := f.scan(); report.MarkedMissing != 1 || report.PurgedIgnored != 0 {
+		t.Errorf("a genuinely absent file: missing=%d purged=%d, want 1 and 0",
+			report.MarkedMissing, report.PurgedIgnored)
+	}
+
+	// Scanning again is quiet: nothing left to purge, nothing new to report.
+	if report := f.scan(); report.PurgedIgnored != 0 {
+		t.Errorf("a second scan purged %d more rows; the first should have been complete",
+			report.PurgedIgnored)
+	}
 }

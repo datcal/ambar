@@ -35,6 +35,8 @@
   <script src="/static/openwith.js?v={{.Version}}" defer></script>
   {{/* Paints colour chips from data-hex (sidebar filter, pack strips, palette). */}}
   <script src="/static/palette-strip.js?v={{.Version}}" defer></script>
+  {{/* Adds the eyedropper to the sidebar's colour picker, where the browser has one. */}}
+  <script src="/static/colourpick.js?v={{.Version}}" defer></script>
 </head>
 {{/*
   §11: configure hx-headers globally so every htmx request carries the CSRF

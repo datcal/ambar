@@ -1666,6 +1666,33 @@ body.app .model-stage { min-height: 24rem; }
 .folders[open] summary::before { content: "▾"; }
 .folders summary h2 { display: inline; margin: 0; }
 
+/* Pick a colour, search for it (M17). The native <input type="color"> is deliberate:
+   every browser already has a good picker and an eyedropper, and none of it is ours to
+   maintain. */
+.colour-pick {
+    display: flex;
+    gap: var(--s2);
+    align-items: center;
+    margin: 0 0 var(--s3);
+}
+.colour-pick input[type="color"] {
+    inline-size: 2.2rem;
+    block-size: 2rem;
+    padding: 2px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    cursor: pointer;
+}
+.colour-pick { flex-wrap: wrap; }
+.colour-pick input[type="text"] {
+    flex: 1;
+    min-inline-size: 5rem;
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+}
+.colour-pick button { flex: 0 0 auto; }
+
 /* The library's dominant colours, as a filter. Swatches are painted from data-hex by
    palette-strip.js, never an inline style (§11 CSP). */
 .colour-filter {

@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/png"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,4 +360,69 @@ func TestModelTileWithoutAPictureAsksForOne(t *testing.T) {
 	if strings.Contains(body, itoa(`data-asset="%d"`, objID)) {
 		t.Error("a model with a thumbnail is still being queued for rendering")
 	}
+}
+
+// TestModelThumbnailGivesTheModelAPalette is M17's answer to "colour search only works
+// on 2D, doesn't it?" — it did, and the reason was structural: swatches come from
+// images, and a model's derive produces a preview.glb and never an image. Measured on
+// the real library: 926 models, zero swatches, so `color:` could not return a model at
+// all. The browser's render is an image, so the palette comes from that.
+func TestModelThumbnailGivesTheModelAPalette(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedLibrary(t, map[string]string{"pack/models/barrel.obj": "v 0 0 0\n"})
+	id := ts.assetID(t, "pack/models/barrel.obj")
+
+	// A render that is mostly one recognisable colour, the way a model of one material is.
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: 0x2e, G: 0x8b, B: 0x57, A: 0xff})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before: no swatches, and colour search cannot see it.
+	if got := ts.swatchCount(t, id); got != 0 {
+		t.Fatalf("the model already has %d swatches; the fixture is wrong", got)
+	}
+
+	resp := ts.postRaw(t, itoa("/assets/%d/thumb", id), "image/png", buf.Bytes())
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	if got := ts.swatchCount(t, id); got == 0 {
+		t.Fatal("the render produced no swatches, so colour search still cannot find this model")
+	}
+	var r, g, b int
+	if err := ts.db.Reader.QueryRow(
+		`SELECT r, g, b FROM asset_swatches WHERE asset_id = ? ORDER BY rank LIMIT 1`,
+		id).Scan(&r, &g, &b); err != nil {
+		t.Fatal(err)
+	}
+	if r != 0x2e || g != 0x8b || b != 0x57 {
+		t.Errorf("dominant swatch = #%02x%02x%02x, want #2e8b57", r, g, b)
+	}
+
+	// The point of all of it: the model now answers a colour search.
+	body := readBody(t, ts.get(t, "/assets?q="+url.QueryEscape("color:2e8b57~12")))
+	if !strings.Contains(body, itoa("/assets/%d", id)) {
+		t.Error("colour search still does not return the model")
+	}
+}
+
+func (ts *testServer) swatchCount(t *testing.T, assetID int64) int {
+	t.Helper()
+	var n int
+	if err := ts.db.Reader.QueryRow(
+		`SELECT count(*) FROM asset_swatches WHERE asset_id = ?`, assetID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

@@ -2,6 +2,10 @@ package server
 
 import (
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -102,5 +106,93 @@ func TestAssetPageOffersLaunchButtons(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the open-in panel is missing %q", want)
 		}
+	}
+}
+
+// TestLinuxHelperFindsASteamInstall runs the generated script, which is the only way to
+// know whether it works — this is a shell program shipped as a Go string literal, and no
+// amount of reading it caught the bug it is written against.
+//
+// The bug: "open in Aseprite" opened Aseprite with nothing in it. Aseprite takes files
+// perfectly well ("aseprite [OPTIONS] [FILES]..."), but it was bought on Steam, so there
+// is no `aseprite` on PATH and no Flatpak — and the script fell through to xdg-open,
+// which honours Steam's own .desktop entry:
+//
+//	Exec=steam steam://rungameid/431730
+//
+// That carries no file argument. The application launched, empty, every time, which is
+// indistinguishable from the ambar:// scheme not being registered at all.
+//
+// The fixture is a Steam library with a space in the install directory ("Godot Engine",
+// which is what Steam really calls it), because the resolved command used to be expanded
+// unquoted and would have split into two arguments.
+func TestLinuxHelperFindsASteamInstall(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the linux helper is a POSIX shell script")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no POSIX shell available")
+	}
+
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	script := filepath.Join(t.TempDir(), "ambar-open.sh")
+	if err := os.WriteFile(script, []byte(ts.body(t, ts.get(t, "/settings/open-helper?platform=linux"))), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fake HOME holding a fake Steam library, reachable the way the real one is.
+	home := t.TempDir()
+	steam := filepath.Join(home, ".local", "share", "Steam")
+	for dir, binary := range map[string]string{"Aseprite": "aseprite", "Godot Engine": "godot.x11.opt.tools.64"} {
+		full := filepath.Join(steam, "steamapps", "common", dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stub := "#!/bin/sh\nprintf 'args=%d first=[%s]\\n' \"$#\" \"$1\"\n"
+		if err := os.WriteFile(filepath.Join(full, binary), []byte(stub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The file being opened, with a space in its name for the same reason.
+	asset := filepath.Join(t.TempDir(), "a sprite.aseprite")
+	if err := os.WriteFile(asset, []byte("not really an aseprite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := func(app string) string {
+		return "ambar://open?app=" + app + "&path=" + strings.ReplaceAll(asset, " ", "%20")
+	}
+
+	// tolerateExit, because --check reports a non-zero status when the scheme is not
+	// registered — which it is not, inside a temporary HOME, and that is the honest answer.
+	run := func(t *testing.T, tolerateExit bool, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(sh, append([]string{script}, args...)...)
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		out, err := cmd.CombinedOutput()
+		if err != nil && !tolerateExit {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	// It launches the Steam binary, and the stub reports exactly one argument — so
+	// neither the space in "Godot Engine" nor the one in the filename split.
+	for _, app := range []string{"aseprite", "godot"} {
+		got := run(t, false, link(app))
+		want := "args=1 first=[" + asset + "]"
+		if strings.TrimSpace(got) != want {
+			t.Errorf("%s: helper produced %q, want %q", app, strings.TrimSpace(got), want)
+		}
+	}
+
+	// And --check names the command, because "the editor opened empty" needs a line
+	// somebody can read rather than a guess about which of three failures it was.
+	report := run(t, true, "--check")
+	if !strings.Contains(report, filepath.Join(steam, "steamapps", "common", "Aseprite", "aseprite")) {
+		t.Errorf("--check does not report where aseprite was found:\n%s", report)
 	}
 }
