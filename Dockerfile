@@ -7,7 +7,11 @@
 
 # --- build ------------------------------------------------------------------
 
-FROM golang:1.26-alpine AS build
+# $BUILDPLATFORM keeps `go build` native on the machine doing the build (fast,
+# no qemu) while the go toolchain cross-compiles for $TARGETOS/$TARGETARCH. The
+# alternative — letting the build stage inherit $TARGETPLATFORM — routes every
+# go compile through user-space emulation and periodically panics under load.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -20,24 +24,35 @@ COPY . .
 
 ARG VERSION=dev
 ARG COMMIT=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 # CGO_ENABLED=0 is the whole reason modernc.org/sqlite is used
 # (CLAUDE.md invariant 6). FTS5 availability under this configuration is
 # asserted by internal/db/fts5_test.go.
-RUN CGO_ENABLED=0 go build \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
         -o /ambar ./cmd/ambar
 
 # Fail the build rather than shipping a dynamically linked binary, which would
-# not run on a scratch or musl base and would mean CGO crept back in.
-RUN ! ldd /ambar 2>/dev/null | grep -q "=>" || (echo "binary is dynamically linked; CGO_ENABLED=0 was not honoured" && exit 1)
+# not run on a scratch or musl base and would mean CGO crept back in. `file`
+# reads the ELF header, so it works when the build stage's arch differs from
+# the binary's — `ldd` on a foreign-arch binary refuses to run at all.
+RUN apk add --no-cache file && \
+    file /ambar | grep -q "statically linked" || \
+    (echo "binary is not statically linked; CGO_ENABLED=0 was not honoured" && exit 1)
 
 # --- runtime ----------------------------------------------------------------
 
+# The deployment target is a Synology / generic Linux amd64 NAS (§17). Pinning
+# the runtime FROM keeps a `docker build` on an arm64 developer machine from
+# producing an arm64 image the NAS cannot exec — the failure mode is the
+# container going into a restart loop with "exec format error".
+#
 # alpine rather than scratch: §17 documents `docker exec ambar /ambar backup`,
 # and having a shell for that and for diagnosing a mount problem is worth ~8 MB.
-FROM alpine:3.22
+FROM --platform=linux/amd64 alpine:3.22
 
 # ca-certificates for the optional URL-fetch ingest path (§5) and the Blender
 # download (§6); tzdata so log timestamps and acquired_at dates are readable in

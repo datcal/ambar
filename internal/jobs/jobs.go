@@ -320,15 +320,17 @@ func (q *Queue) work(ctx context.Context, worker int) {
 			if !ran {
 				break
 			}
+			// Several workers may be idle and there may be more than one job
+			// waiting. Cascade the nudge only when we actually claimed work —
+			// doing it in the empty-queue branch below busy-loops both workers
+			// through the claim SELECT forever.
+			q.Nudge()
 		}
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-q.nudge:
-			// Pass the nudge along: several workers may be idle and there may be
-			// more than one job waiting.
-			q.Nudge()
 		case <-ticker.C:
 		}
 	}

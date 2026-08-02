@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	netpprof "net/http/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -213,6 +214,16 @@ func (s *Server) routes() http.Handler {
 
 	// Background work (§12). POST /scan enqueues and returns immediately, which is
 	// what invariant 8 requires of every scan trigger.
+	// Runtime profiling behind auth. Only trusted users have accounts (§11), so the
+	// same session gate the rest of the app uses is enough — /debug/pprof/profile
+	// can pin a core for its sample window, so it must not be reachable anonymously.
+	mux.Handle("GET /debug/pprof/", auth.RequireUser(http.HandlerFunc(netpprof.Index)))
+	mux.Handle("GET /debug/pprof/cmdline", auth.RequireUser(http.HandlerFunc(netpprof.Cmdline)))
+	mux.Handle("GET /debug/pprof/profile", auth.RequireUser(http.HandlerFunc(netpprof.Profile)))
+	mux.Handle("GET /debug/pprof/symbol", auth.RequireUser(http.HandlerFunc(netpprof.Symbol)))
+	mux.Handle("POST /debug/pprof/symbol", auth.RequireUser(http.HandlerFunc(netpprof.Symbol)))
+	mux.Handle("GET /debug/pprof/trace", auth.RequireUser(http.HandlerFunc(netpprof.Trace)))
+
 	mux.Handle("GET /jobs", auth.RequireUser(http.HandlerFunc(s.handleJobs)))
 	// M16: answers in place instead of redirecting to /jobs, and /api/v1/jobs/status is what
 	// the sidebar and the jobs page poll while work is in flight.
