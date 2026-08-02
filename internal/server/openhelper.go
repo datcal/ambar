@@ -358,6 +358,44 @@ fi
 
 # --- the link ----------------------------------------------------------------------
 
+# url_decode prints its argument with %XX escapes turned back into the bytes they stand for.
+#
+# The obvious one-liner — sed rewriting %XX to \xXX, then printf '%b' — is a bashism, and this
+# script runs under whatever /bin/sh is. On Debian and Ubuntu that is dash, whose printf knows
+# octal escapes but not \x, so "a%20sprite.aseprite" came back as the literal
+# "a\x20sprite.aseprite" and every path with a space in it failed with "not found on this
+# machine". Octal via $((0x..)) is POSIX and reads the same in both shells.
+#
+# One byte at a time on purpose: a non-ASCII filename arrives as several %XX in a row, each one
+# a byte of a UTF-8 sequence, so nothing here may route through a character conversion.
+url_decode() {
+    # Backslashes are doubled up front because the result is assembled as a printf format
+    # string, and a filename is allowed to contain one.
+    rest=$(printf '%s' "$1" | sed 's/\\/\\\\/g')
+    fmt=""
+    while [ -n "$rest" ]; do
+        literal=${rest%%\%*}
+        if [ "$literal" = "$rest" ]; then
+            fmt=$fmt$rest
+            break
+        fi
+        fmt=$fmt$literal
+        rest=${rest#*%}
+        case $rest in
+            [0-9A-Fa-f][0-9A-Fa-f]*)
+                hex=${rest%"${rest#??}"}
+                fmt=$fmt$(printf '\\%03o' "$((0x$hex))")
+                rest=${rest#??}
+                ;;
+            *)
+                # Not an escape, just a percent sign; %% is how printf spells one.
+                fmt=$fmt%%
+                ;;
+        esac
+    done
+    printf "$fmt"
+}
+
 dry_run=""
 if [ "${1:-}" = "--test" ]; then
     dry_run=1
@@ -376,7 +414,7 @@ for pair in $query; do
     key=${pair%%=*}
     value=${pair#*=}
     # %XX only: Ambar encodes spaces as %20, so a literal "+" in a filename stays a "+".
-    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/%\(..\)/\\x\1/g')")
+    value=$(url_decode "$value")
     case $key in
         app) app=$value ;;
         path) path=$value ;;
@@ -475,6 +513,37 @@ set -eu
 url=${1:-}
 [ -n "$url" ] || exit 2
 
+# url_decode prints its argument with %XX escapes turned back into the bytes they stand for,
+# one byte at a time so that a non-ASCII filename — several %XX in a row making up one UTF-8
+# sequence — survives. Octal escapes rather than "printf '%b' '\xNN'", which is a bashism: it
+# happens to work under macOS's /bin/sh and silently does not under dash.
+url_decode() {
+    # Backslashes are doubled up front because the result is assembled as a printf format
+    # string, and a filename is allowed to contain one.
+    rest=$(printf '%s' "$1" | sed 's/\\/\\\\/g')
+    fmt=""
+    while [ -n "$rest" ]; do
+        literal=${rest%%\%*}
+        if [ "$literal" = "$rest" ]; then
+            fmt=$fmt$rest
+            break
+        fi
+        fmt=$fmt$literal
+        rest=${rest#*%}
+        case $rest in
+            [0-9A-Fa-f][0-9A-Fa-f]*)
+                hex=${rest%"${rest#??}"}
+                fmt=$fmt$(printf '\\%03o' "$((0x$hex))")
+                rest=${rest#??}
+                ;;
+            *)
+                fmt=$fmt%%
+                ;;
+        esac
+    done
+    printf "$fmt"
+}
+
 query=${url#*\?}
 app=""
 path=""
@@ -483,7 +552,7 @@ for pair in $query; do
     key=${pair%%=*}
     value=${pair#*=}
     # %XX only: Ambar encodes spaces as %20, so a literal "+" in a filename stays a "+".
-    value=$(printf '%b' "$(printf '%s' "$value" | sed 's/%\(..\)/\\x\1/g')")
+    value=$(url_decode "$value")
     case $key in
         app) app=$value ;;
         path) path=$value ;;
