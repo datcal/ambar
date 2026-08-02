@@ -152,7 +152,11 @@ ssh_nas "mkdir -p '$HOST_DATA' && test -w '$HOST_DATA'" ||
 
 if [ "$DO_BUILD" = 1 ]; then
     step "building $IMAGE with $BUILDER ($VERSION, $COMMIT)"
+    # --platform pins the runtime image to what the NAS actually runs (§17,
+    # amd64). The Dockerfile cross-compiles the Go binary from $BUILDPLATFORM,
+    # so this stays fast on an arm64 developer machine.
     "$BUILDER" build \
+        --platform=linux/amd64 \
         --build-arg "VERSION=$VERSION" \
         --build-arg "COMMIT=$COMMIT" \
         -t "$IMAGE" .

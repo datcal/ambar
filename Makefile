@@ -219,6 +219,7 @@ deploy-config:
 
 docker:
 	$(DOCKER) build \
+		--platform=linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
