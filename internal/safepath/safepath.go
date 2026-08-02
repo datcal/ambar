@@ -1,4 +1,4 @@
-// Package safepath contains the path-traversal defence required by CLAUDE.md
+// Package safepath contains the path-traversal defence required by ARCHITECTURE.md
 // invariant 9 and spec §11: never build a filesystem path from user input
 // without resolving it and confirming it stays under the configured root.
 //

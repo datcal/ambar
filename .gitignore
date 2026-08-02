@@ -41,3 +41,14 @@ __MACOSX/
 *.test
 *.out
 coverage.*
+
+# The Godot plugin's test project (godot-test/). The harnesses and the project file are
+# committed; everything the editor or a run generates is not — including the server URL
+# and anything imported into it, which are local facts.
+/godot-test/.godot/
+/godot-test/assets/
+/godot-test/.ambar/
+/godot-test/ambar.cfg
+/godot-test/CREDITS.md
+/godot-test/*.png
+/godot-test/*.png.import

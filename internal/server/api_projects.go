@@ -40,6 +40,44 @@ func (s *Server) handleAPIRecordUse(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"id": id})
 }
 
+// handleAPIProjectUses is GET /api/v1/projects/{project}/uses (§10, M18).
+//
+// What a project holds, from the server's side, so the plugin's "in this project" screen can
+// compare it against the committed manifest. Two answers come only from here:
+//
+//   - `outdated`: the library's content hash differs from the one recorded at import, so the
+//     project is holding an older copy of the asset.
+//   - anything in the manifest and *not* in this response was imported while the server was
+//     unreachable. §10 promised the manifest made that replayable; until this endpoint there
+//     was no way to find out which entries needed replaying.
+//
+// An unknown project is an empty list, not a 404: a project that has never imported anything is
+// a perfectly ordinary state and the plugin should show an empty screen, not an error.
+func (s *Server) handleAPIProjectUses(w http.ResponseWriter, r *http.Request) {
+	uuid := r.PathValue("project")
+	uses, err := s.projects.UsesOfProject(r.Context(), uuid)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "listing project uses failed", "project", uuid, "error", err)
+		s.apiError(w, http.StatusInternalServerError, "could not list this project's assets")
+		return
+	}
+
+	out := make([]map[string]any, 0, len(uses))
+	for _, u := range uses {
+		out = append(out, map[string]any{
+			"id": u.ID, "asset_id": u.AssetID, "res_path": u.ResPath,
+			"added_at": u.AddedAt.Unix(),
+			"filename": u.Filename, "ext": u.Ext, "kind": u.Kind, "size": u.Size,
+			"pack": u.PackName,
+			// Both hashes, not just the verdict: a client that wants to explain *why*
+			// something is outdated has the two values to show.
+			"imported_sha256": u.ImportedSHA256, "sha256": u.SHA256,
+			"outdated": u.Outdated(), "missing": u.Missing,
+		})
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"uses": out, "project": uuid})
+}
+
 // handleAPIRemoveUse is DELETE /api/v1/projects/{project}/uses/{id} (§10).
 func (s *Server) handleAPIRemoveUse(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("project")

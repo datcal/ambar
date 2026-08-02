@@ -1,6 +1,6 @@
 @tool
 extends RefCounted
-## Project identity and manifest (§10). The project is identified by a UUID that
+## Project identity and manifest. The project is identified by a UUID that
 ## lives in res://.ambar/project.json and is committed to git — never by a
 ## filesystem path (invariant 10), because two people check the project out at
 ## different paths. The manifest maps asset_id → provenance and is merged
@@ -38,7 +38,7 @@ static func name_hint() -> String:
 	return _project_name()
 
 
-## record adds an entry to the manifest, merging additively (§10: "treat it as
+## record adds an entry to the manifest, merging additively ("treat it as
 ## shared state and merge additively, never rewrite the whole file").
 static func record(asset_id: int, entry: Dictionary) -> void:
 	var manifest = _read_json(MANIFEST_FILE)
@@ -53,6 +53,21 @@ static func record(asset_id: int, entry: Dictionary) -> void:
 static func manifest() -> Dictionary:
 	var m = _read_json(MANIFEST_FILE)
 	return m if m is Dictionary else {}
+
+
+## forget removes one entry from the manifest.
+##
+## Only ever called from an explicit, confirmed "remove from this project" — never as a
+## side effect of anything. It is also the only *subtractive* write to a file the specification says to merge
+## additively, which is fine for the case it is for: two people cannot disagree about a file one
+## of them has just deleted from the checkout.
+static func forget(asset_id: int) -> void:
+	var m = _read_json(MANIFEST_FILE)
+	if not m is Dictionary or not m.has(str(asset_id)):
+		return
+	m.erase(str(asset_id))
+	_ensure_dir()
+	_write_json(MANIFEST_FILE, m)
 
 
 static func _project_name() -> String:

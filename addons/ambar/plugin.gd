@@ -1,10 +1,10 @@
 @tool
 extends EditorPlugin
-## Ambar editor plugin (§10).
+## Ambar editor plugin.
 ##
-## M16 rebuilt this. The previous version added a dock in DOCK_SLOT_LEFT_UR and kept its
-## connection settings in Editor Settings, and the report from actually installing it was "hiçbir
-## şey olmadı" — nothing happened. Three reasons, all of them fair:
+## This was rebuilt once already. The first version added a dock in DOCK_SLOT_LEFT_UR and kept its
+## connection settings in Editor Settings; installing it appeared to do nothing at all. Three
+## reasons, all of them fair:
 ##
 ##   1. It reached for the `EditorInterface` singleton, which exists only in Godot 4.2+. On 4.1
 ##      the script fails to load, so the plugin does not appear at all. editor_compat.gd now
@@ -87,5 +87,11 @@ func _get_plugin_icon() -> Texture2D:
 
 
 func _make_visible(visible: bool) -> void:
-	if _main != null:
-		_main.visible = visible
+	if _main == null:
+		return
+	_main.visible = visible
+	# Switching to the tab is the last chance to notice that the first page was never fetched —
+	# after a connection was configured in another session, say. It loads once and then stops
+	# asking, so flipping between 2D and Ambar does not re-query the library every time.
+	if visible and _main.has_method("on_shown"):
+		_main.on_shown()

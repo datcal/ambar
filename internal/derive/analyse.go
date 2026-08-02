@@ -67,7 +67,7 @@ const ColorCountCap = 4096
 //     their own; a size-based relaxation just re-admits antialiased vector art, which
 //     genuinely should be smoothly downscaled.
 //
-// Recorded as a deviation in docs/decisions.md.
+// Recorded as a deviation in docs/spec.md.
 const (
 	// Few enough colours to be a hand-picked palette rather than a photograph.
 	pixelArtMaxColors = 256

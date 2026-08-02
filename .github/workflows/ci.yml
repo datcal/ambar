@@ -1,0 +1,71 @@
+# Tests on every push and pull request.
+#
+# The release workflow runs the same `make check` before publishing, but a tag is far too
+# late to find out: by then somebody is waiting for an image. This is the fast feedback,
+# and it is also what makes a green tick on a pull request mean something.
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"] # tags are the release workflow's job, and it runs check itself
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt + vet + the full suite, including the assertion that FTS5 works under
+      # modernc.org/sqlite with CGO_ENABLED=0 — the one architectural dependency that
+      # would break silently.
+      - name: check
+        run: make check
+
+      # The image is what gets deployed, and a Dockerfile that no longer builds is worth
+      # finding here rather than at release time. Not pushed.
+      - name: docker build
+        run: docker build -t ambar:ci .
+
+  godot:
+    # A GDScript parse error leaves an addon that is enabled and does nothing at all,
+    # with the only evidence in the editor's Output panel. Twenty seconds of headless
+    # Godot is the cheapest test in this repository and it has caught that failure twice.
+    #
+    # Only the parse pass runs here: the API, import, project-screen and rendering passes
+    # need a live server with a real library, which CI has no business inventing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: fetch Godot
+        env:
+          # The version the plugin is verified against locally. Bump both together.
+          GODOT_VERSION: "4.7.1"
+        run: |
+          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fsSL -o godot.zip "$url"
+          unzip -q godot.zip
+          mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 godot
+          chmod +x godot
+
+      - name: parse check
+        run: |
+          # `--editor --quit` imports the project and compiles every script. It exits 0
+          # even when scripts fail, so the errors are what is inspected, not the status.
+          ./godot --headless --editor --quit --path godot-test 2>&1 | tee godot.log || true
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error" godot.log; then
+            echo "::error::the Godot plugin has script errors"
+            exit 1
+          fi
+          echo "no script errors"

@@ -99,3 +99,73 @@ func TestRemoveUseUnknownProject(t *testing.T) {
 		t.Error("expected an error removing a use from an unknown project")
 	}
 }
+
+// TestRecordUseResolvesByContent covers the attribution bug that produced a CREDITS.md
+// naming a pack nobody had chosen: a use recorded against one asset id while the project
+// actually held a different asset's bytes.
+//
+// The content hash travels with the import, so it can say which asset the row is really
+// about — and, just as importantly, when it cannot.
+func TestRecordUseResolvesByContent(t *testing.T) {
+	s, database, fields := fixture(t)
+	ctx := context.Background()
+	const uuid = "33333333-3333-3333-3333-333333333333"
+
+	// A second asset, in the same pack for brevity, with different content. In the case
+	// this is written for the two were in different packs — which is exactly why the wrong
+	// row credited the wrong licence.
+	now := time.Now().Unix()
+	var packID int64
+	database.Reader.QueryRow(`SELECT pack_id FROM assets WHERE id = ?`, fields).Scan(&packID)
+	res, err := database.Writer.Exec(`
+		INSERT INTO assets (pack_id, rel_path, filename, ext, kind, size, mtime, sha256,
+		                    first_seen_at, last_verified_at, created_at, updated_at)
+		VALUES (?, 'shadow.png', 'Ship2_shadow1.png', 'png', 'image', 1, ?, 'seabed-content', ?, ?, ?, ?)`,
+		packID, now, now, now, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seabed, _ := res.LastInsertId()
+
+	// Recorded against one id while carrying the hash of what was actually downloaded: the
+	// row must end up on the asset the bytes came from, or the credits name the wrong pack.
+	if _, err := s.RecordUse(ctx, uuid, "My Game", fields, "res://assets/image/fields/3.png",
+		"seabed-content"); err != nil {
+		t.Fatal(err)
+	}
+	uses, err := s.UsesOfProject(ctx, uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uses) != 1 || uses[0].AssetID != seabed {
+		t.Fatalf("recorded %+v, want one row against asset %d", uses, seabed)
+	}
+
+	// An id that agrees with its hash is left exactly alone.
+	if _, err := s.RecordUse(ctx, uuid, "My Game", fields, "res://assets/image/fields/ok.png",
+		"abc"); err != nil {
+		t.Fatal(err)
+	}
+	// A hash nothing in the library has is an *older* copy than the library holds — §10's
+	// outdated case, and what Sync replays. Recorded as given, not rejected, not re-pointed.
+	if _, err := s.RecordUse(ctx, uuid, "My Game", fields, "res://assets/image/fields/old.png",
+		"a-hash-from-before"); err != nil {
+		t.Fatal(err)
+	}
+
+	uses, _ = s.UsesOfProject(ctx, uuid)
+	byPath := map[string]ProjectUse{}
+	for _, u := range uses {
+		byPath[u.ResPath] = u
+	}
+	if got := byPath["res://assets/image/fields/ok.png"]; got.AssetID != fields {
+		t.Errorf("a matching id and hash was re-pointed to %d, want %d", got.AssetID, fields)
+	}
+	old := byPath["res://assets/image/fields/old.png"]
+	if old.AssetID != fields {
+		t.Errorf("an outdated hash re-pointed the row to asset %d, want %d", old.AssetID, fields)
+	}
+	if !old.Outdated() {
+		t.Error("an outdated row does not report itself as outdated")
+	}
+}

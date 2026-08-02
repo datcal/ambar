@@ -14,7 +14,7 @@
 //     it. Nothing is deleted in place — files move to the trash with a JSON record
 //     of where they came from and why (trash.go).
 //
-// The safety rules of §9.1 and CLAUDE.md invariants 3–5, 9 live in Plan and are
+// The safety rules of §9.1 and ARCHITECTURE.md rules 3–5, 9 live in Plan and are
 // enforced as code, not as a UI flow:
 //
 //   - Nothing is ever selected by this package. Targets come from a human.

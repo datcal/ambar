@@ -53,6 +53,12 @@ type assetJSON struct {
 	IsPixelArt  bool   `json:"is_pixel_art,omitempty"`
 	HasAlpha    bool   `json:"has_alpha,omitempty"`
 
+	// Group identity, set only when the search collapsed format variants (§5.1). A
+	// client that asked for one row per file gets neither, which is the honest answer:
+	// in that mode the row it is holding is a file, not a logical asset.
+	GroupID      int64 `json:"group_id,omitempty"`
+	VariantCount int   `json:"variant_count,omitempty"`
+
 	// Kind-specific.
 	DurationMS int     `json:"duration_ms,omitempty"`
 	SampleRate int     `json:"sample_rate,omitempty"`
@@ -89,6 +95,20 @@ func toAssetJSON(a index.Asset) assetJSON {
 }
 
 // handleAPISearch is GET /api/v1/search (§10).
+//
+// Two modes, and which one you get is decided by the request rather than by a default
+// that changed under existing callers:
+//
+//   - `q`, `kind`, `tags`, `limit`, `cursor` alone behave exactly as they always have —
+//     one row per *file*, filename order, keyset cursor.
+//   - `group=1`, `page=` or `sort=` switch to the grid's query: one row per logical
+//     asset (§5.1, invariant 7), any of the nine browse orders, numbered pages.
+//
+// M18 added the second mode because the Godot plugin had the first one's limits and
+// nothing else: no order but filename, no way back to a page, and the same sprite listed
+// three times because it ships as PNG, PSD and ASEPRITE. Any of the three parameters
+// implies the whole mode — silently ignoring `page=3` and answering with page 1 is worse
+// than either supporting it or refusing it.
 func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := index.ListOptions{
@@ -108,6 +128,58 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	rawSort, rawPage := q.Get("sort"), q.Get("page")
+	grouped := rawSort != "" || rawPage != "" ||
+		q.Get("group") == "1" || q.Get("group") == "true"
+	if !grouped {
+		s.searchFlat(w, r, opts)
+		return
+	}
+
+	opts.Sort = index.ParseSort(rawSort)
+	// Page 0 is what ListGroups reads as "the cursor caller", so a grouped search
+	// without an explicit page must still ask for page 1 — otherwise it silently pages
+	// by cursor in filename order and the sort is ignored.
+	opts.Page = 1
+	if n, err := strconv.Atoi(rawPage); err == nil && n > 1 {
+		opts.Page = n
+	}
+
+	page, err := s.index.ListGroups(r.Context(), opts)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "api grouped search failed", "error", err)
+		s.apiError(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+
+	assets := make([]assetJSON, 0, len(page.Groups))
+	for _, g := range page.Groups {
+		j := toAssetJSON(g.Primary)
+		j.GroupID, j.VariantCount = g.ID, g.VariantCount
+		assets = append(assets, j)
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"assets": assets,
+		"total":  page.Total,
+		// Empty in this mode, and deliberately still present: a client that walks pages
+		// must not also follow a cursor, and an empty string is how it finds that out.
+		"next_cursor": "",
+		"grouped":     true,
+		"sort":        string(page.Sort),
+		"page":        page.Page,
+		"pages":       page.Pages(),
+		"page_size":   page.PageSize,
+		// The pager's own numbers, with 0 standing for a gap — computed here because
+		// GroupPage already does it for the web grid, and two implementations of "which
+		// page links does a 57-page result show" is one too many.
+		"page_numbers": page.PageNumbers(),
+		"first_shown":  page.FirstShown(),
+		"last_shown":   page.LastShown(),
+	})
+}
+
+// searchFlat is the original per-file, cursor-paged search (§10), unchanged.
+func (s *Server) searchFlat(w http.ResponseWriter, r *http.Request, opts index.ListOptions) {
 	page, err := s.index.List(r.Context(), opts)
 	if err != nil {
 		if strings.Contains(err.Error(), "cursor") {
@@ -125,6 +197,28 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"assets": assets, "total": page.Total, "next_cursor": page.NextCursor,
+	})
+}
+
+// sortJSON is one entry of the browse-order list a client renders as a dropdown.
+type sortJSON struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// handleAPISorts is GET /api/v1/sorts: the orders `sort=` accepts, with their labels.
+//
+// Served rather than hardcoded in the plugin because the list has grown twice already
+// (M16 added six, M17 added the two triangle-count orders), and a dropdown that has to be
+// edited in a second language every time is a dropdown that goes stale.
+func (s *Server) handleAPISorts(w http.ResponseWriter, r *http.Request) {
+	orders := index.SortOrders()
+	out := make([]sortJSON, 0, len(orders))
+	for _, o := range orders {
+		out = append(out, sortJSON{Value: string(o), Label: o.Label()})
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"sorts": out, "default": string(index.SortDefault),
 	})
 }
 
@@ -151,7 +245,43 @@ func (s *Server) handleAPIAsset(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tagsList {
 		canon = append(canon, t.Tag.Canonical())
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"asset": dto, "tags": canon})
+
+	out := map[string]any{"asset": dto, "tags": canon}
+
+	// Everything a detail panel needs, in one response. M18: the alternative was the
+	// plugin firing three requests per click — asset, variants, licence — on a NAS, for
+	// a panel that opens every time somebody moves the selection.
+	//
+	// A missing group is not an error: an asset indexed but not yet regrouped still has
+	// a usable detail panel, exactly as the web page treats it.
+	if group, err := s.index.GroupOf(r.Context(), id); err == nil {
+		dto.GroupID, dto.VariantCount = group.ID, group.VariantCount
+		out["asset"] = dto
+		if variants, err := s.index.Variants(r.Context(), group.ID); err == nil {
+			list := make([]assetJSON, 0, len(variants))
+			for _, v := range variants {
+				list = append(list, toAssetJSON(v))
+			}
+			out["variants"] = list
+		}
+	}
+
+	// Provenance is pack-level (§9), and the panel says so rather than implying the
+	// licence was recorded for this one file.
+	if prov, err := s.prov.Get(r.Context(), asset.PackID); err == nil {
+		license := ""
+		if prov.LicenseID != nil {
+			if l, ok, _ := s.prov.LicenseByID(r.Context(), *prov.LicenseID); ok {
+				license = l.SPDXID
+			}
+		}
+		out["provenance"] = map[string]any{
+			"source_url": prov.SourceURL, "author": prov.SourceAuthor,
+			"license": license, "state": prov.State,
+		}
+	}
+
+	s.writeJSON(w, r, http.StatusOK, out)
 }
 
 // handleAPIPack is GET /api/v1/packs/{id} (§10).

@@ -113,6 +113,10 @@ func TestIsFormatFolder(t *testing.T) {
 		// The prefix form: a known token followed by _ or -.
 		"PNG_Animations", "PNG_Parts&Spriter_Animation", "png-animations",
 		"PSD_Layers", "OBJ-files",
+		// The parenthesised form, which 3D packs use constantly. KayKit ships
+		// Assets/fbx(unity)/ beside Assets/fbx/, Assets/gltf/ and Assets/obj/; missing
+		// this left every one of those files in a group of its own.
+		"fbx(unity)", "FBX(Unity)", "FBX (Unity)", "OBJ (legacy)", "PNG(transparent)",
 	}
 	for _, s := range yes {
 		if !IsFormatFolder(s) {
@@ -130,6 +134,13 @@ func TestIsFormatFolder(t *testing.T) {
 		"Environment", "Rocks", "2 Objects", "4 Stone",
 		"Characters", "Enemies", "Tiles",
 		"", "  ",
+		// A parenthesis does not make an ordinary folder a format folder. The first is
+		// a real pack directory in this library — a duplicate download — and treating
+		// it as a format folder would merge two whole packs into one.
+		"craftpix-net-665895-free-pixel-dungeon-props-and-objects-asset-pack (1)",
+		"Objects (large)", "Characters(new)", "(unsorted)",
+		// Only a parenthesis, never a bare space: "ai generated" is not Illustrator.
+		"ai generated", "png files",
 	}
 	for _, s := range no {
 		if IsFormatFolder(s) {
@@ -153,6 +164,11 @@ func TestStripFormatFolders(t *testing.T) {
 		// The final segment is never stripped, so a file named PNG survives.
 		{"Plant1/PNG", "Plant1/PNG"},
 		{"Source/Sources/deep.psd", "deep.psd"},
+		// The 3D case: four format folders, one model.
+		{"Assets/fbx/decoration/props/barrel.fbx", "Assets/decoration/props/barrel.fbx"},
+		{"Assets/fbx(unity)/decoration/props/barrel.fbx", "Assets/decoration/props/barrel.fbx"},
+		{"Assets/gltf/decoration/props/barrel.gltf", "Assets/decoration/props/barrel.gltf"},
+		{"Assets/obj/decoration/props/barrel.obj", "Assets/decoration/props/barrel.obj"},
 	}
 	for _, tc := range tests {
 		if got := StripFormatFolders(tc.in); got != tc.want {
@@ -168,6 +184,16 @@ func TestStripFormatFolders(t *testing.T) {
 	base := func(s string) string { return strings.TrimSuffix(s, filepath.Ext(s)) }
 	if base(png) != base(psd) || base(psd) != base(ase) {
 		t.Errorf("format variants did not collapse to one key: %q %q %q", png, psd, ase)
+	}
+
+	// The same property for a 3D pack, which is where it was failing: one model
+	// shipped four ways must be one asset, not two groups of two.
+	fbx := StripFormatFolders("Assets/fbx/decoration/props/barrel.fbx")
+	unity := StripFormatFolders("Assets/fbx(unity)/decoration/props/barrel.fbx")
+	gltf := StripFormatFolders("Assets/gltf/decoration/props/barrel.gltf")
+	obj := StripFormatFolders("Assets/obj/decoration/props/barrel.obj")
+	if base(fbx) != base(unity) || base(unity) != base(gltf) || base(gltf) != base(obj) {
+		t.Errorf("model variants did not collapse to one key: %q %q %q %q", fbx, unity, gltf, obj)
 	}
 }
 

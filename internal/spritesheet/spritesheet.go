@@ -3,7 +3,7 @@
 // *guesser* — §6 insists "never silently guess wrong", so it returns a
 // confidence and the UI confirms or corrects before the guess is trusted.
 //
-// The scoring heuristic (recorded in docs/decisions.md) is:
+// The scoring heuristic (recorded in docs/spec.md §6) is:
 //
 //   - candidate column/row counts are the divisors of each dimension that yield
 //     a cell no smaller than minCell and no more than maxCount cells per axis;

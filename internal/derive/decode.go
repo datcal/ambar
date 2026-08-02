@@ -127,7 +127,7 @@ func Decode(absPath, ext string, opts DecodeOptions) (*Source, error) {
 		// §6 lists tga among the image formats, but x/image has no TGA decoder and
 		// the only pure-Go options were last touched in 2015. Surfaced as
 		// unsupported rather than silently skipped; a minimal decoder is a contained
-		// follow-up. See docs/decisions.md.
+		// follow-up. See docs/spec.md.
 		return nil, fmt.Errorf("%w: .tga decoding is not implemented yet", ErrUnsupported)
 	case "hdr", "exr":
 		// §6 groups HDRI tone-mapping with the 3D work, which is M6.

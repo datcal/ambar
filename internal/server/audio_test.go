@@ -121,7 +121,7 @@ func TestAudioDetailAndServing(t *testing.T) {
 // TestAudioTileMarkup is what is left of TestAuditionGridMarkup.
 //
 // M16 removed §8's keyboard audition along with the sidebar's "Tools" section, which was
-// its only entry point — see docs/decisions.md. The per-tile audio source is not part of
+// its only entry point — see docs/spec.md. The per-tile audio source is not part of
 // that feature: it is how any future preview-on-hover or player finds the file, so it is
 // still asserted here.
 func TestAudioTileMarkup(t *testing.T) {

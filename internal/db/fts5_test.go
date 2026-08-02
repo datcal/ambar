@@ -7,7 +7,7 @@ import (
 )
 
 // These assertions resolved §15 item 1: FTS5 is available in modernc.org/sqlite
-// without CGO, so the static binary and CLAUDE.md invariant 6 hold.
+// without CGO, so the static binary and ARCHITECTURE.md rule 6 hold.
 //
 // They are kept permanently rather than discarded with the spike, because the
 // failure mode they guard against is silent. If a dependency bump ever ships a

@@ -1,0 +1,20 @@
+; A throwaway Godot project whose only purpose is testing addons/ambar.
+;
+; `addons` is a symlink to ../addons, so the plugin under test is the working copy — edit a
+; script, run the harness, no copying. Open this in the editor to try the panel by hand, or run
+; the three harnesses headlessly with `make godot-test` (see godot-test/README.md).
+
+config_version=5
+
+[application]
+
+config/name="AmbarPluginTest"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/ambar/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
