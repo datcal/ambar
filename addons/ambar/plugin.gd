@@ -20,6 +20,12 @@ extends EditorPlugin
 const Main := preload("res://addons/ambar/main.gd")
 const Compat := preload("res://addons/ambar/editor_compat.gd")
 
+# The tab mark, drawn on a 16-unit grid because 16 px is the size it is used at. See _mark().
+const MARK_SVG := """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+<g fill="#c8cedb"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></g>
+<rect x="8" y="2" width="6" height="6" rx="1.4" fill="#f0b429"/>
+</svg>"""
+
 var _main: Control
 # Whether the dock fallback was used. remove_control_from_docks() errors on a control it never
 # received, and Godot 4.7 reports that as a condition failure on shutdown.
@@ -78,12 +84,39 @@ func _get_plugin_name() -> String:
 
 
 func _get_plugin_icon() -> Texture2D:
-	# An editor icon rather than a shipped image: it follows the editor's theme and scale, and
-	# there is no asset to keep in sync. "FileThumbnail" reads as "a library of files".
-	var icon := Compat.theme_icon(self, "FileThumbnail")
+	var icon := _mark()
 	if icon != null:
 		return icon
+	# The editor's own icons, if we could not draw ours. "FileThumbnail" reads as "a library of
+	# files" and follows the theme, which is what the tab used before it had a mark of its own.
+	var themed := Compat.theme_icon(self, "FileThumbnail")
+	if themed != null:
+		return themed
 	return Compat.theme_icon(self, "Filesystem")
+
+
+## _mark rasterises the Ambar mark at the editor's scale.
+##
+## Drawn from a string rather than shipped as icon.svg, because a resource file has to go through
+## Godot's importer before `preload` can resolve it — and a plugin whose script fails to compile is
+## enabled, inert, and silent apart from one line in the Output panel. This addon has shipped that
+## failure once already; a string cannot fail to import.
+##
+## The mark is the library grid with one tile selected. The selected tile is *larger* as well as
+## amber, because Godot tints main-screen button icons: where the tint wins, the colour is gone and
+## the size is all that is left to say which tile is the one you picked.
+##
+## Not the same drawing as docs/icon.png, which is the Asset Library listing icon. That one has a
+## 3x3 grid on a dark plate, which is right at 128 px and a smudge at 16.
+func _mark() -> Texture2D:
+	var img := Image.new()
+	# Godot builds without the SVG module cannot do this. Editor builds always can, but asking
+	# costs nothing and the fallback above is already there.
+	if not img.has_method("load_svg_from_string"):
+		return null
+	if img.call("load_svg_from_string", MARK_SVG, Compat.editor_scale(self)) != OK:
+		return null
+	return ImageTexture.create_from_image(img)
 
 
 func _make_visible(visible: bool) -> void:

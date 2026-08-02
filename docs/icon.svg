@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Ambar</title>
+  <!-- The listing icon for the Godot Asset Library. The editor tab icon is not this:
+       plugin.gd borrows the editor theme's own FileThumbnail so it follows the theme
+       and the display scale. -->
+  <rect width="256" height="256" rx="48" fill="#1b1f26"/>
+  <!-- The library grid, which is what the plugin actually shows. -->
+  <g fill="#8e9aab">
+    <rect x="40" y="40" width="48" height="48" rx="10"/>
+    <rect x="104" y="40" width="48" height="48" rx="10"/>
+    <rect x="168" y="40" width="48" height="48" rx="10"/>
+    <rect x="40" y="104" width="48" height="48" rx="10"/>
+    <rect x="168" y="104" width="48" height="48" rx="10"/>
+    <rect x="40" y="168" width="48" height="48" rx="10"/>
+    <rect x="104" y="168" width="48" height="48" rx="10"/>
+    <rect x="168" y="168" width="48" height="48" rx="10"/>
+  </g>
+  <!-- One tile selected, larger than the rest so the whole thing does not read as an
+       apps menu. Amber because that is the colour the panel already uses to flag a
+       row that wants attention. -->
+  <rect x="96" y="96" width="64" height="64" rx="14" fill="#f0b429"/>
+</svg>

@@ -58,6 +58,20 @@ static func reveal(plugin: EditorPlugin, res_path: String) -> void:
 	ei.call("select_file", res_path)
 
 
+## editor_scale is the editor's display scale: 1.0 normally, 2.0 on a hiDPI screen, and the
+## fractional steps in between. Anything this plugin rasterises itself has to be drawn at this
+## size or it arrives soft on exactly the screens people notice softness on.
+##
+## 1.0 where the editor does not offer it, which is the right guess and never worse than not
+## drawing at all.
+static func editor_scale(plugin: EditorPlugin) -> float:
+	var ei = editor_interface(plugin)
+	if ei == null or not ei.has_method("get_editor_scale"):
+		return 1.0
+	var scale := float(ei.call("get_editor_scale"))
+	return scale if scale > 0.0 else 1.0
+
+
 ## theme_icon fetches an editor icon by name, or null. Used so the tab and the buttons look like
 ## the rest of the editor instead of shipping images.
 static func theme_icon(plugin: EditorPlugin, name: String) -> Texture2D:
