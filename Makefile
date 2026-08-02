@@ -27,7 +27,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # still carries function names.
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-# CGO_ENABLED=0 is not optional. It is CLAUDE.md invariant 6 and the reason
+# CGO_ENABLED=0 is not optional. It is ARCHITECTURE.md rule 6 and the reason
 # modernc.org/sqlite is used; see internal/db/fts5_test.go.
 export CGO_ENABLED := 0
 
@@ -35,7 +35,7 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check
+.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check godot-test plugin-zip release-artifacts
 
 all: check build
 
@@ -51,7 +51,7 @@ test:
 # path, so the race detector earns its runtime here.
 #
 # -race requires cgo and a C toolchain, so this one target overrides the global
-# CGO_ENABLED=0. That does NOT weaken CLAUDE.md invariant 6: the invariant is
+# CGO_ENABLED=0. That does NOT weaken ARCHITECTURE.md rule 6: the invariant is
 # about the binary that ships, and `make build` and the Dockerfile both stay at
 # CGO_ENABLED=0. Skipped rather than failed where no C compiler exists.
 test-race:
@@ -77,6 +77,80 @@ tidy:
 
 # What CI should run.
 check: fmt-check vet test
+
+# The Godot plugin, packaged the way a Godot user expects it: unzip at the project root
+# and you have res://addons/ambar/plugin.cfg. Nothing else from this repository goes in —
+# the server is not the plugin's business.
+#
+# .uid files are included deliberately: Godot 4.4+ keys script references to them, and
+# shipping stable ones means a project that upgrades the addon does not re-resolve every
+# reference.
+# Built with python3 rather than `zip`, which is not installed everywhere (it is absent
+# from this repository's own CI image and from a plain Alpine).
+PLUGIN_ZIP := dist/ambar-godot-plugin-$(VERSION).zip
+
+plugin-zip:
+	@mkdir -p dist
+	@rm -f $(PLUGIN_ZIP)
+	@python3 -c "import pathlib, zipfile; \
+	root = pathlib.Path('addons/ambar'); \
+	files = sorted(p for p in root.rglob('*') if p.is_file() and p.name != '.DS_Store'); \
+	z = zipfile.ZipFile('$(PLUGIN_ZIP)', 'w', zipfile.ZIP_DEFLATED); \
+	[z.write(p, p.as_posix()) for p in files]; \
+	z.close(); \
+	print('built $(PLUGIN_ZIP) — %d files' % len(files))"
+
+# The Godot plugin's own suite. Not part of `check`: it needs a Godot binary, and two
+# of the three passes need a running server to talk to. See godot-test/README.md.
+#
+#   make godot-test GODOT="/path/to/godot"                 parse check + API + import
+#   make godot-test GODOT=… ARGS="ui"                      also render a screenshot
+#
+# The parse check alone catches the failure mode that made the M16 plugin appear to do
+# nothing at all: a GDScript parse error leaves the addon enabled and inert, and says so
+# only in the Output panel.
+godot-test:
+	@test -n "$(GODOT)" || { echo "usage: make godot-test GODOT=/path/to/godot"; exit 2; }
+	@echo "== parse check"
+	@"$(GODOT)" --headless --editor --quit --path $(CURDIR)/godot-test 2>&1 | grep -E "SCRIPT ERROR|Parse Error|Compile Error" && exit 1 || echo "   no script errors"
+	@echo "== opening the tab"
+	"$(GODOT)" --headless --script res://test_open.gd --path $(CURDIR)/godot-test
+	@echo "== api"
+	"$(GODOT)" --headless --script res://test_api.gd --path $(CURDIR)/godot-test
+	@echo "== import"
+	"$(GODOT)" --headless --script res://test_import.gd --path $(CURDIR)/godot-test
+	@echo "== project screen"
+	"$(GODOT)" --headless --script res://test_project.gd --path $(CURDIR)/godot-test
+ifneq (,$(findstring ui,$(ARGS)))
+	@echo "== models (needs a display: it renders)"
+	"$(GODOT)" --script res://test_model.gd --path $(CURDIR)/godot-test
+	@echo "== ui (needs a display)"
+	"$(GODOT)" --script res://test_ui.gd --path $(CURDIR)/godot-test -- "" $(CURDIR)/godot-test/ui.png
+endif
+
+# Everything a release ships. Built here rather than inline in the workflow, so a release
+# can be reproduced — and debugged — on a laptop with the same command CI runs.
+#
+# VERSION comes from `git describe`, so a tagged checkout produces the tag; pass it
+# explicitly (VERSION=v1.0.0) to build what a tag would build without one.
+RELEASE_PLATFORMS := linux/amd64 linux/arm64
+
+release-artifacts: plugin-zip
+	@rm -rf dist/stage && mkdir -p dist/stage
+	@cp README.md LICENSE CHANGELOG.md dist/stage/
+	@for platform in $(RELEASE_PLATFORMS); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		echo "building $$os/$$arch"; \
+		GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' \
+			-o dist/stage/ambar $(PKG) || exit 1; \
+		tar -C dist/stage -czf dist/ambar_$(VERSION)_$${os}_$${arch}.tar.gz \
+			ambar README.md LICENSE CHANGELOG.md || exit 1; \
+		rm dist/stage/ambar; \
+	done
+	@rm -rf dist/stage
+	@cd dist && sha256sum ambar_$(VERSION)_*.tar.gz ambar-godot-plugin-$(VERSION).zip > checksums-$(VERSION).txt
+	@echo
+	@ls -lh dist/ambar_$(VERSION)_*.tar.gz dist/ambar-godot-plugin-$(VERSION).zip dist/checksums-$(VERSION).txt
 
 $(TESTDATA_LIBRARY) $(TESTDATA_DATA):
 	@mkdir -p $@

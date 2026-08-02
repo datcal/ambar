@@ -244,7 +244,7 @@ func (s *SessionStore) DestroyAllForUser(ctx context.Context, userID int64) erro
 // DeleteExpired removes rows that can no longer authenticate anything.
 //
 // Called once at startup, not from a background ticker. Nothing in this
-// application deletes on a schedule — see invariant 3 in CLAUDE.md. These rows
+// application deletes on a schedule — see rule 3 in ARCHITECTURE.md. These rows
 // are already dead as far as Lookup is concerned, so this is bookkeeping.
 func (s *SessionStore) DeleteExpired(ctx context.Context) (int64, error) {
 	now := s.now().Unix()

@@ -15,7 +15,12 @@ extends RefCounted
 ## editor_interface returns the EditorInterface, whichever way this Godot exposes it.
 static func editor_interface(plugin: EditorPlugin):
 	# 4.2+: a global singleton. Checked with a string so 4.1 never has to resolve the name.
-	if Engine.has_singleton("EditorInterface"):
+	#
+	# `has_singleton` answers true outside the editor too — the name is registered, the object is
+	# not — and fetching it there prints "Can't retrieve singleton 'EditorInterface' outside of
+	# editor" into the Output panel. Harmless, and exactly the kind of red text that gets blamed
+	# for whatever else went wrong that day.
+	if Engine.is_editor_hint() and Engine.has_singleton("EditorInterface"):
 		return Engine.get_singleton("EditorInterface")
 	# 4.0/4.1: a method on the plugin. `has_method` keeps this from being an error either way.
 	if plugin != null and plugin.has_method("get_editor_interface"):
@@ -42,6 +47,15 @@ static func rescan(plugin: EditorPlugin) -> void:
 	var fs = ei.call("get_resource_filesystem")
 	if fs != null and fs.has_method("scan"):
 		fs.call("scan")
+
+
+## reveal selects a file in the editor's FileSystem dock, so "where did this land" is one click
+## rather than a path to go and find by hand. Silent where the editor does not offer it.
+static func reveal(plugin: EditorPlugin, res_path: String) -> void:
+	var ei = editor_interface(plugin)
+	if ei == null or not ei.has_method("select_file"):
+		return
+	ei.call("select_file", res_path)
 
 
 ## theme_icon fetches an editor icon by name, or null. Used so the tab and the buttons look like

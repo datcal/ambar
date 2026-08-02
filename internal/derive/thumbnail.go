@@ -96,7 +96,7 @@ func Dir(sha256hex string) (string, error) {
 type Result struct {
 	Analysis Analysis
 	// PHash is the 64-bit perceptual hash as 16 hex characters. Written in M2 and
-	// read by M13's near-duplicate view; see docs/decisions.md §15.4 for why it is
+	// read by M13's near-duplicate view; see docs/spec.md §15 for why it is
 	// computed here rather than later.
 	PHash string
 
@@ -349,7 +349,7 @@ func CompositeOver(src image.Image, bg color.Color) image.Image {
 // Lossless is the right default here rather than a compromise: for pixel art, lossy
 // compression destroys exactly the hard edges §6 cares about, and at thumbnail sizes
 // the file is small either way. §15's encoder decision is recorded in
-// docs/decisions.md.
+// docs/spec.md.
 //
 // Written to a temporary file and renamed, so a crash mid-write cannot leave a
 // half-encoded thumbnail that later looks valid.

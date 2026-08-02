@@ -140,7 +140,7 @@ func (f *fixture) assetByPath(libPath string) (Asset, bool) {
 	return Asset{}, false
 }
 
-// --- the required reconciliation table (CLAUDE.md) -------------------------
+// --- the required reconciliation table -------------------------
 
 func TestReconcileNewFiles(t *testing.T) {
 	f := newFixture(t)

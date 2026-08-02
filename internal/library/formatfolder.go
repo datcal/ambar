@@ -45,11 +45,34 @@ var formatFolderTokens = []string{
 // "Objects" would match the "obj" token and a perfectly ordinary folder would be
 // treated as a format variant — which in M2 would collapse unrelated assets into
 // one group.
+//
+// A parenthesised qualifier counts too: `fbx(unity)` and `FBX (Unity)` are the same
+// statement as `fbx_unity`, and 3D packs write it that way constantly. Missing it was
+// not cosmetic — one KayKit pack shipped `Assets/fbx/`, `Assets/gltf/`, `Assets/obj/`
+// and `Assets/fbx(unity)/`, and the first three collapsed into one asset per model
+// while every `fbx(unity)` file became its own group, alone, with no thumbnail of its
+// own to show. That is 592 blank tiles in a library of 1,852 models, and it reads as
+// "the plugin cannot show models" rather than as a grouping bug.
+//
+// Only a parenthesis, not a bare space. `ai (upscaled)` should match the Illustrator
+// token; `ai generated` should not, and a space-separated rule cannot tell them apart.
 func IsFormatFolder(segment string) bool {
 	s := strings.ToLower(strings.TrimSpace(segment))
 	if s == "" {
 		return false
 	}
+	if matchesFormatToken(s) {
+		return true
+	}
+	if i := strings.IndexByte(s, '('); i > 0 {
+		return matchesFormatToken(strings.TrimSpace(s[:i]))
+	}
+	return false
+}
+
+// matchesFormatToken is IsFormatFolder without the parenthesis handling: an exact
+// token, or a token followed by `_` or `-`.
+func matchesFormatToken(s string) bool {
 	for _, token := range formatFolderTokens {
 		if s == token {
 			return true

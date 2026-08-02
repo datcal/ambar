@@ -63,6 +63,7 @@ func (s *Store) RecordUse(ctx context.Context, uuid, projectName string, assetID
 	if err != nil {
 		return 0, err
 	}
+	assetID = s.resolveByContent(ctx, assetID, sha256)
 	now := s.now().Unix()
 	if _, err := s.db.Writer.ExecContext(ctx, `
 		INSERT INTO project_uses (project_id, asset_id, res_path, asset_sha256, added_at)
@@ -81,6 +82,48 @@ func (s *Store) RecordUse(ctx context.Context, uuid, projectName string, assetID
 		return 0, err
 	}
 	return id, nil
+}
+
+// resolveByContent corrects an asset id that disagrees with the content hash recorded
+// with it, and otherwise returns the id unchanged.
+//
+// A use row is an attribution: it is what CREDITS.md is built from and what keeps an
+// asset off every removal list (invariant 5). Recording one against the wrong asset
+// credits the wrong pack — silently, and in a file people ship. That happened: a project
+// recorded asset A while holding the bytes of asset B, and the credits named a pack
+// nobody had ever chosen.
+//
+// The hash discriminates the two cases that look alike:
+//
+//   - the hash belongs to *another* asset → the id is wrong and the content says which
+//     one is right, so record that one.
+//   - the hash belongs to nothing here → the client is holding an older copy than the
+//     library has (§10's outdated badge, and what `Sync` replays). Record it as given;
+//     that is a legitimate state, not a mistake.
+//
+// A hash shared by several assets — exact duplicates, which §9.1 says this library is
+// full of — resolves to the lowest id, deterministically. Any of them is the same bytes;
+// the pack they are credited to may differ, and a stable choice at least means two
+// clients agree.
+func (s *Store) resolveByContent(ctx context.Context, assetID int64, sha256 string) int64 {
+	if sha256 == "" {
+		return assetID
+	}
+	var current string
+	err := s.db.Reader.QueryRowContext(ctx,
+		`SELECT sha256 FROM assets WHERE id = ?`, assetID).Scan(&current)
+	if err != nil || current == sha256 {
+		// Unknown id or an exact match: nothing to correct. An id that names no asset is
+		// left alone so the insert fails on its foreign key rather than here.
+		return assetID
+	}
+
+	var byContent int64
+	if err := s.db.Reader.QueryRowContext(ctx,
+		`SELECT id FROM assets WHERE sha256 = ? ORDER BY id LIMIT 1`, sha256).Scan(&byContent); err != nil {
+		return assetID // no asset has this content: an outdated copy, recorded as given
+	}
+	return byContent
 }
 
 // RemoveUse soft-removes a use by id, scoped to the project so an id from another
@@ -205,6 +248,76 @@ type AssetUse struct {
 	// Outdated is true when the content hash recorded at import time no longer
 	// matches the library's current one (§10's outdated badge).
 	Outdated bool
+}
+
+// ProjectUse is one asset a project holds, as the project's own side needs to see it.
+//
+// The reverse of UsesOfAsset, and it exists for the editor plugin's "in this project"
+// screen (§10, M18). The plugin has always had `res://.ambar/manifest.json` — committed,
+// merged additively, the local record of every import — and no way to compare it with
+// anything. Without this it cannot answer the two questions that matter: has the library
+// moved on since I imported this, and did the server ever hear about it?
+type ProjectUse struct {
+	// ID is the use row, which is what DELETE /uses/{id} takes.
+	ID      int64
+	AssetID int64
+	ResPath string
+	AddedAt time.Time
+	// ImportedSHA256 is the content hash recorded when it was imported; SHA256 is the
+	// library's now. Different means the library has a newer version (§10's outdated
+	// badge) — the plugin holds the old bytes.
+	ImportedSHA256 string
+	SHA256         string
+
+	Filename string
+	Ext      string
+	Kind     string
+	Size     int64
+	PackName string
+	// Missing is the library's own missing-file state (§12), not the project's: the file
+	// this was imported from is no longer on disk in the library.
+	Missing bool
+}
+
+// Outdated reports whether the library's copy has changed since the import.
+func (u ProjectUse) Outdated() bool {
+	return u.ImportedSHA256 != "" && u.ImportedSHA256 != u.SHA256
+}
+
+// UsesOfProject lists everything one project holds, newest import first.
+func (s *Store) UsesOfProject(ctx context.Context, uuid string) ([]ProjectUse, error) {
+	rows, err := s.db.Reader.QueryContext(ctx, `
+		SELECT u.id, u.asset_id, u.res_path, u.added_at, u.asset_sha256,
+		       a.filename, a.ext, a.kind, a.size, a.sha256,
+		       p.name, a.missing_since IS NOT NULL
+		FROM project_uses u
+		JOIN projects pr ON pr.id = u.project_id
+		JOIN assets a ON a.id = u.asset_id
+		JOIN packs p ON p.id = a.pack_id
+		WHERE pr.uuid = ? AND u.removed_at IS NULL
+		ORDER BY u.added_at DESC, u.id DESC`, strings.TrimSpace(uuid))
+	if err != nil {
+		return nil, fmt.Errorf("list uses of project %s: %w", uuid, err)
+	}
+	defer rows.Close()
+
+	var out []ProjectUse
+	for rows.Next() {
+		var (
+			use     ProjectUse
+			addedAt int64
+			missing int
+		)
+		if err := rows.Scan(&use.ID, &use.AssetID, &use.ResPath, &addedAt, &use.ImportedSHA256,
+			&use.Filename, &use.Ext, &use.Kind, &use.Size, &use.SHA256,
+			&use.PackName, &missing); err != nil {
+			return nil, fmt.Errorf("scan project use: %w", err)
+		}
+		use.AddedAt = time.Unix(addedAt, 0)
+		use.Missing = missing == 1
+		out = append(out, use)
+	}
+	return out, rows.Err()
 }
 
 // UsesOfAsset lists the active project uses of one asset, newest first.

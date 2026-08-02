@@ -1,13 +1,17 @@
 # Ambar — Self-Hosted Game Asset Library
 
-> Build specification. Hand this to a coding agent one milestone at a time, not all at once.
-> `ambar` is used throughout as the binary name, config prefix, and Godot plugin folder name.
-> Rename freely.
+> **The design specification.** This is the long-form reference: what each part is supposed to
+> do, and *why* — including the decisions that were reversed, kept with their reasons, because a
+> specification that still argues for an abandoned idea costs more than one that admits the
+> change.
 >
-> **Revised 2026-08-01, after M16.** §8, §10, §12, §13, §15 and §17 now describe what is built
-> rather than what was planned, and where a decision was reversed the reversal is stated with
-> its reason. `docs/decisions.md` carries the reasoning and the measurements at length; read it
-> before revisiting anything here that looks arbitrary.
+> It is not a getting-started guide. [../README.md](../README.md) is that, and
+> [../ARCHITECTURE.md](../ARCHITECTURE.md) is the map of how the pieces fit. Read a section here
+> before changing behaviour it describes, or before revisiting a choice that looks arbitrary —
+> most of them are load-bearing and the reason is written down.
+>
+> Section numbers are stable and are referenced from code comments. `ambar` is used throughout as
+> the binary name, config prefix and Godot plugin folder name.
 
 ## 0. Settled decisions
 
@@ -419,6 +423,13 @@ describes it, or the filename matches `_sheet`, `_atlas`, `-anim`, trailing fram
   CPU-only, no GPU needed in a container. Secondary path: when the browser viewer renders a
   model with no turntable, capture N canvas frames and POST them back for caching. Build
   the server path first; the client path is a good backfill for `.glb` when Blender is absent.
+- **The client path is what actually carries this library.** Blender was never installed, so
+  every model's picture comes from somebody's renderer: the browser's three.js viewer (M15) or
+  the Godot plugin (M18, §10), both posting to `/assets/{id}/thumb`. Measured on the real
+  library after the M18 grouping fix: 526 model groups, of which 178 had a picture — every one
+  of them a model somebody had happened to open. All 526 have a `preview.glb`, which is what
+  makes the client path able to finish the job. The endpoint refuses to overwrite an existing
+  thumbnail, so "whoever looks first draws it" needs no coordination between clients.
 
 ### HDRI — `hdr exr`
 
@@ -478,7 +489,7 @@ to use the asset.
 **M16 rewrote this section against the real library rather than against an idea of one.**
 What follows is what exists. Where something was reversed or dropped it says so, because a
 specification that still describes an abandoned idea is worse than one that admits it. The
-measurements behind each change are in `docs/decisions.md`.
+measurements behind each change are in `docs/spec.md`.
 
 ### 2D
 
@@ -757,21 +768,45 @@ removal. Linking is still only ever triggered by an explicit selection.
 
 ```
 GET    /api/v1/search?q=&tags=&kind=&limit=&cursor=
-GET    /api/v1/assets/{id}
+GET    /api/v1/search?…&group=1&sort=&page=  -> grouped, ordered, numbered (M18)
+GET    /api/v1/sorts                       -> the orders `sort=` accepts, with labels
+GET    /api/v1/assets/{id}                 -> asset + tags + variants + pack licence
 GET    /api/v1/assets/{id}/thumb?size=256
+GET    /api/v1/assets/{id}/preview.webp    -> full-size preview
+GET    /api/v1/assets/{id}/anim.gif
+GET    /api/v1/assets/{id}/sheet.gif
 GET    /api/v1/assets/{id}/file            -> original bytes, ETag + Range support
 GET    /api/v1/assets/{id}/preview.glb
+GET    /api/v1/assets/{id}/peaks.json
 GET    /api/v1/packs/{id}
 GET    /api/v1/packs/{id}/download         -> zip of the pack
 GET    /api/v1/tags?prefix=&namespace=     -> autocomplete
 POST   /api/v1/projects/{project}/uses     -> {asset_id, res_path, sha256}
 DELETE /api/v1/projects/{project}/uses/{id}
+GET    /api/v1/projects/{project}/uses      -> what a project holds, with the current hashes
 GET    /api/v1/projects/{project}/credits.md
+GET    /api/v1/ping                        -> healthz for a token rather than a cookie
 GET    /api/v1/healthz
 ```
 
 `Range` support on `/file` matters: a 200 MB model download that drops should resume, not
 restart.
+
+**Search has two modes, and the request picks one.** `q`, `kind`, `tags`, `limit` and `cursor`
+alone behave as they always have: one row per *file*, filename order, keyset cursor. Any of
+`group=1`, `sort=` or `page=` switches to the grid's own query — one row per logical asset
+(§5.1), any of the nine browse orders, numbered pages — and the response gains `grouped`, `sort`,
+`page`, `pages`, `page_size`, `page_numbers` (with `0` for a gap), `first_shown` and `last_shown`,
+plus `variant_count` and `group_id` per row. `next_cursor` is empty there: a client that pages by
+number must not also follow a cursor, or it skips rows.
+
+The default was deliberately *not* changed to grouped. There is one client today and it would
+have been safe, but "the same request now returns different rows" is the kind of break an API
+version exists to prevent, and any of three parameters opts in explicitly.
+
+`/assets/{id}` answers with the asset, its tags, its other formats and the pack's provenance in
+one response, because it backs a detail panel that opens on every selection change and three
+round trips per click to a NAS is a panel that feels broken.
 
 ### Godot 4 editor plugin — `addons/ambar/`
 
@@ -782,6 +817,34 @@ result, and the reasons are worth keeping.
 - **A main-screen tab, not a dock.** `_has_main_screen()` puts "Ambar" beside 2D, 3D and Script,
   which is where a library belongs and what was actually asked for. A dock tab in
   `DOCK_SLOT_LEFT_UR` is easy to never notice.
+- **The grid is a browser, not a preview strip** (M18). The first version showed five or six tiles
+  across a window that fits fifteen, at one fixed thumbnail size, in one order, with "Load more"
+  at the bottom and no way to look at anything without importing it first. Each of those is now a
+  control:
+  - `HFlowContainer`, so the number of columns is however many fit.
+  - A thumbnail size picker — 64 to 256 — remembered per person in `user://ambar_prefs.cfg`,
+    along with the sort, the page size, the kind filter and the inspector's width.
+  - The nine browse orders, fetched from `/api/v1/sorts` rather than hardcoded, so adding one
+    server-side does not need a plugin release.
+  - Numbered pages — `‹ 1 2 … 57 ›` with "101–200 of 5610" — and a page size of 30 to 240. The
+    page links come from the server, which already computes them for the web grid.
+  - At most six thumbnail requests in flight. A page is up to 240 tiles and the server is a NAS.
+- **An inspector panel beside the grid, so an asset can be judged before it is imported.** Full-size
+  preview, pixel dimensions, frame count, duration or triangle count, file size, pack, licence,
+  tags, and the other formats of the same artwork with the one to import selectable. Everything in
+  one request. Small pictures are upscaled by a whole-number factor before display: nearest
+  filtering alone still gives some source pixels eleven screen pixels and others ten, and unevenly
+  scaled pixel art is the same class of failure as §6's bilinear one.
+- **The plugin renders the models nobody has looked at yet, and posts them back.** §6 keeps Blender
+  optional and the server has no renderer, so a model's derive writes a normalised `preview.glb`
+  and never a picture; the web viewer fills thumbnails in as people open assets (M15), which left
+  most of the library's models as blank tiles everywhere. The plugin runs *inside* a renderer:
+  `GLTFDocument` reads that glb, a `SubViewport` draws it, and the result goes to
+  `POST /api/v1/assets/{id}/thumb` — the same endpoint the browser uses, which refuses to
+  overwrite an existing thumbnail. So each model is drawn once, by whoever browses past it first,
+  and every viewer afterwards is served the stored image. FBX has no `preview.glb` and Godot has
+  no runtime FBX importer either; those say "needs Blender on the server" rather than showing an
+  empty box.
 - **Settings live in the plugin's own UI, in two files.** `res://ambar.cfg` holds the base URL and
   is committed, because the server address is a fact about the studio and everyone should get it
   by checking the project out; `user://ambar_token.cfg` holds the API token and is not, for the
@@ -806,6 +869,21 @@ result, and the reasons are worth keeping.
   two years from now, and — because it travels through git — how each person's editor knows what
   the others already imported. Merge additively; never rewrite the whole file from one client's
   view of the world.
+- **An "In this project" screen, beside the library one** (M18). All of the above was true and
+  none of it was visible: the only trace of an import was a tile going grey somewhere in a search.
+  The screen is the manifest and `GET /projects/{uuid}/uses` side by side, one row per asset, and
+  the disagreements between them are the content:
+  - *library has a newer version* — the recorded hash is not the library's current one. An
+    **Update** re-downloads over the same `res://` path, so scenes pointing at it keep working.
+  - *not recorded on the server* — in the manifest, no use row: an import made while the server
+    was unreachable. **Sync** replays those, which is the reconcile the offline tolerance above
+    has always promised and never had a trigger for.
+  - *missing from this project* — the manifest describes a file that is no longer in the checkout.
+  - *gone from the library* — the asset it came from is missing at the source (§12).
+  - **Remove** deletes this project's copy, forgets the manifest entry and deletes the use row,
+    behind a confirmation naming the file. The library is never touched — that is §9.1's business
+    and it has its own selection and preview.
+  The credits action lives here too, beside the thing it describes.
 - `project_uses` is deduplicated on `(project_id, asset_id, res_path)`, so two people importing
   the same asset independently produces one row, not two.
 - POST each addition to `/projects/{project}/uses`, and **tolerate being offline**: the manifest is
@@ -823,6 +901,14 @@ return type — which fails the compile of every script that preloads that file,
 that is enabled and inert with the only evidence in the Output panel. `godot --headless --editor
 --quit` surfaces exactly that in about twenty seconds, and `godot --headless --script` can drive
 the API client against a running server. Both belong in the loop before a plugin ships.
+
+M18 made that a suite rather than a habit: `godot-test/` is a project whose `addons/` is a symlink
+to the working copy, and `make godot-test GODOT=…` runs three passes — the parse check, an API
+drive, and an import driven through the panel's own button that then checks the file landed, the
+manifest recorded it and the server was told. A fourth pass renders the panel to a PNG, which is
+the only one that needs a display. See `godot-test/README.md`, including the two GDScript traps
+that cost the most time: lambdas capture locals by value, and the root Window is not in the scene
+tree until the first frame.
 
 **Other engines.** The API is the integration surface, and nothing in it is Godot-specific: an
 Unreal plugin would speak the same endpoints, keep the same UUID-in-a-committed-file identity, and
@@ -976,11 +1062,12 @@ Ship something usable early. Do not build all of it before first run.
 | **M14** | Fonts: specimen rendering, per-family grouping, the licence questions fonts raise more sharply than anything else in the library. |
 | **M15** | Workspace: saved searches, the removal list as a persistent selection rather than a one-shot form. |
 | **M16** | **The review milestone.** The library was loaded with a real 6,500-asset collection and handed to the people who use it, and most of what came back was not a missing feature — it was the design. Rewritten: the visual language, the shell and its navigation, the 2D viewer, the asset page, the grid (pagination and sort), search autocomplete, upload, background-job visibility, the `ambar://` open-in-app helper, and the Godot plugin. Removed: `/palettes`, `/provenance`, four palette export formats, the sidebar Tools block. Measured and fixed: NAS CPU. Nothing here was speculative; every item traces to somebody trying to use the thing. |
+| **M18** | The Godot plugin's browse: reflowing grid, thumbnail size, the nine sort orders, numbered pages, and an inspector panel that shows an asset — preview, metadata, tags, formats, licence — without importing it. `/api/v1/search` grew a grouped, sorted, numbered mode to serve it, and `godot-test/` grew a `make` target so the plugin has a suite rather than a habit. |
 
 ## 15. Decisions that were open before the code existed
 
 All five are settled; kept as a record of what was decided and why, because each of them still
-constrains the codebase. `docs/decisions.md` has the reasoning at length.
+constrains the codebase. `docs/spec.md` has the reasoning at length.
 
 1. **FTS5 works in `modernc.org/sqlite`.** Verified in M0 before anything was built on it, which
    is the only reason there was never a Dockerfile crisis. No CGO, as invariant 6 requires.
@@ -1012,7 +1099,7 @@ constrains the codebase. `docs/decisions.md` has the reasoning at length.
 - **Originals are never modified.** Add a test that hashes the entire library before and
   after a full ingest-and-scan cycle and asserts nothing changed.
 - **Measure before optimising, and measure the real library.** Every performance claim in
-  `docs/decisions.md` has a number next to it, and the numbers repeatedly contradicted the
+  `docs/spec.md` has a number next to it, and the numbers repeatedly contradicted the
   guess: the CPU complaint was the sidebar, not the workers; 98 ms of a 112 ms query was
   Go-side, and 55% of *that* was a JSON column the grid never displays. A 6,500-asset copy of
   the real library is the fixture; a synthetic one hides exactly the cases that matter.

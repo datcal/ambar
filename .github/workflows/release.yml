@@ -1,16 +1,19 @@
-# Publish the container image to GHCR when a version tag is pushed.
+# Cut a release when a version tag is pushed.
 #
-# This is the credential-free path to "build it and push it to GitHub": the job
-# authenticates with the automatic GITHUB_TOKEN, so no personal access token has to
-# be created, stored on a workstation, or rotated. Pushing the tag is the whole
-# operation:
+#   git tag -a v1.0.0 -m "…" && git push origin v1.0.0
 #
-#   git tag -a v0.1.0 -m "M15" && git push origin v0.1.0
+# That one push produces everything a release is:
 #
-# The NAS then pulls that tag (scripts/deploy.sh, or `docker compose pull`).
+#   ghcr.io/<owner>/ambar:1.0.0, :1.0, :latest      the container
+#   ambar_v1.0.0_linux_{amd64,arm64}.tar.gz         the binaries
+#   ambar-godot-plugin-v1.0.0.zip                   the Godot addon, on its own
+#   checksums-v1.0.0.txt                            sha256 of all of the above
 #
-# The tests run first. An image that gets published is one somebody will deploy, and
-# `make check` is cheap next to debugging a bad image on a NAS.
+# The tests run first and everything else waits on them. An artifact that gets published
+# is one somebody will install, and `make check` is cheap next to debugging a bad release.
+#
+# A manual run (workflow_dispatch) builds and pushes :edge only — for exercising the
+# pipeline without minting a version.
 
 name: release
 
@@ -18,40 +21,41 @@ on:
   push:
     tags:
       - "v*"
-  # A manual run builds and pushes :edge, for trying the pipeline without minting a
-  # version.
   workflow_dispatch:
 
 permissions:
-  contents: read
-  packages: write
+  contents: write # creating the release and uploading assets
+  packages: write # pushing to ghcr.io
 
 jobs:
-  image:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+      # No CGO, and FTS5 must work under modernc.org/sqlite: the suite asserts both.
+      - run: make check
 
-      # Invariant 6: the binary must stay statically linkable, and the FTS5-under-
-      # modernc assertion lives in the test suite. Publishing without running it would
-      # ship the one failure mode the architecture cannot tolerate.
-      - name: check
-        run: make check
+  image:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GH_TOKEN }}
+          # A personal token if one is configured, otherwise the automatic one — which is
+          # enough for pushing to this repository's own package namespace.
+          password: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
-      # ghcr.io/<owner>/ambar:<version> plus :latest for a tag, :edge for a manual run.
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -68,24 +72,84 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # The deployment target is an x86_64 Synology (§17). arm64 is added here the
-          # day there is a machine that needs it, not speculatively — each extra
-          # platform doubles the build.
-          platforms: linux/amd64
+          # amd64 is the deployment target; arm64 covers ARM NAS boxes and Raspberry Pis,
+          # which the binaries are built for anyway.
+          platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  artifacts:
+    needs: check
+    # Only for a tag: :edge has no release to attach anything to.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The same target that builds them on a laptop, so a broken release is reproducible.
+      - name: build
+        run: make release-artifacts VERSION=${{ github.ref_name }}
+
+      # The release notes are the matching section of CHANGELOG.md, because that is where
+      # they were written by hand. If the version has no section — a tag cut before the
+      # changelog was updated — fall back to the generated commit list rather than
+      # publishing an empty release.
+      - name: notes
+        id: notes
+        run: |
+          version="${{ github.ref_name }}"
+          awk -v v="## ${version}" '
+            $0 == v {found = 1; next}
+            found && /^## / {exit}
+            found {print}
+          ' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then
+            echo "generate=" >> "$GITHUB_OUTPUT"
+          else
+            echo "no CHANGELOG.md section for ${version}; using generated notes"
+            echo "generate=--generate-notes" >> "$GITHUB_OUTPUT"
+            : > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo
+            echo '### Install'
+            echo
+            echo '```sh'
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/ambar:${version#v}"
+            echo '```'
+            echo
+            echo "The Godot plugin is \`ambar-godot-plugin-${version}.zip\` below: unzip it at the"
+            echo 'root of your Godot project and enable it in Project Settings → Plugins.'
+          } >> notes.md
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file notes.md \
+            ${{ steps.notes.outputs.generate }} \
+            dist/ambar_${{ github.ref_name }}_linux_amd64.tar.gz \
+            dist/ambar_${{ github.ref_name }}_linux_arm64.tar.gz \
+            dist/ambar-godot-plugin-${{ github.ref_name }}.zip \
+            dist/checksums-${{ github.ref_name }}.txt
+
       - name: summary
         run: |
           {
-            echo "### Published"
+            echo "### Released ${{ github.ref_name }}"
             echo
-            echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
-            echo '```'
+            ls -1 dist/ambar_* dist/ambar-godot-plugin-* dist/checksums-* | sed 's|dist/|- |'
             echo
-            echo "Deploy it with \`make deploy\` (AMBAR_IMAGE pointing at one of these tags)."
+            echo "Image: \`ghcr.io/${{ github.repository_owner }}/ambar:${GITHUB_REF_NAME#v}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -14,7 +14,13 @@ data/
 
 # Not needed to compile.
 docs/
+godot-test/
+addons/
+.github/
 README.md
+ARCHITECTURE.md
+CHANGELOG.md
+LICENSE
 Makefile
 docker-compose.yml
 .dockerignore

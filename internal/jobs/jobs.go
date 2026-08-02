@@ -1,4 +1,4 @@
-// Package jobs is the background work queue required by CLAUDE.md invariant 8:
+// Package jobs is the background work queue required by ARCHITECTURE.md rule 8:
 // "No long-running HTTP handlers. All ingest, scan, and derivative work goes through
 // the job queue with pollable status."
 //
@@ -714,7 +714,7 @@ func (q *Queue) RetryFailed(ctx context.Context, jobType string) (int64, error) 
 
 // Prune deletes finished job rows older than a cutoff.
 //
-// Only ever called from an explicit operator action, never on a timer: CLAUDE.md
+// Only ever called from an explicit operator action, never on a timer: ARCHITECTURE.md
 // invariant 3 says the application never deletes anything on its own. These are the
 // application's own bookkeeping rows rather than user data, but the habit is worth
 // keeping — and a jobs table that quietly forgets its history is exactly what §12

@@ -269,14 +269,26 @@ func (s *Server) routes() http.Handler {
 	// /api/v1/ping is the same report, token-authed.
 	api("GET /api/v1/ping", s.handleHealth)
 	api("GET /api/v1/search", s.handleAPISearch)
+	// M18: the browse orders `search?sort=` accepts, so a client's dropdown is not a
+	// hand-copied list that goes stale the next time one is added.
+	api("GET /api/v1/sorts", s.handleAPISorts)
 	api("GET /api/v1/assets/{id}", s.handleAPIAsset)
 	api("GET /api/v1/assets/{id}/file", s.handleAssetDownload)
 	api("GET /api/v1/assets/{id}/thumb", s.handleThumb)
+	// M18: the full-size preview, for looking at an asset properly *before* importing
+	// it. It existed only behind the session cookie, so the editor plugin could offer a
+	// 96-pixel thumbnail and nothing between that and downloading the file.
+	api("GET /api/v1/assets/{id}/preview.webp", s.handlePreview)
+	api("GET /api/v1/assets/{id}/anim.gif", s.handleAnimation)
+	api("GET /api/v1/assets/{id}/sheet.gif", s.handleSheet)
 	api("GET /api/v1/assets/{id}/preview.glb", s.handleModelPreview)
 	api("GET /api/v1/assets/{id}/peaks.json", s.handlePeaks)
 	api("GET /api/v1/packs/{id}", s.handleAPIPack)
 	api("GET /api/v1/tags", s.handleAPITags)
 	api("GET /api/v1/projects/{project}/credits.md", s.handleAPICredits)
+	// M18: what a project holds, for the plugin's "in this project" screen — and the only way
+	// to find the imports the server was never told about, which §10 promised were replayable.
+	api("GET /api/v1/projects/{project}/uses", s.handleAPIProjectUses)
 
 	// Write endpoints (§10): the Godot plugin records what it imports.
 	apiWrite := func(pattern string, h http.HandlerFunc) {
@@ -284,6 +296,16 @@ func (s *Server) routes() http.Handler {
 	}
 	apiWrite("POST /api/v1/projects/{project}/uses", s.handleAPIRecordUse)
 	apiWrite("DELETE /api/v1/projects/{project}/uses/{id}", s.handleAPIRemoveUse)
+	// M18: the same "somebody's renderer drew this model, keep it" endpoint the browser
+	// has had since M15, for a client with a token instead of a cookie.
+	//
+	// The Godot plugin runs inside a game engine, which is the one thing this server does
+	// not have and deliberately will not add (§6 keeps Blender optional). It can read the
+	// preview.glb derive already writes, so it can fill in the thumbnails nobody has
+	// browsed to yet — and every viewer, web included, gets them from then on. The
+	// handler refuses to overwrite a thumbnail that already exists, so a second client
+	// rendering the same model costs one 204 and nothing else.
+	apiWrite("POST /api/v1/assets/{id}/thumb", s.handleModelThumbUpload)
 
 	// API token management (§11), session-authed like the rest of the UI.
 	// Settings: users (§11 has no self-registration, so creating one is behind auth)

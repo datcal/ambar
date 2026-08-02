@@ -12,13 +12,17 @@ extends RefCounted
 ##
 ##   res://ambar.cfg          the server URL. A fact about the studio, so it is committed and
 ##                            everyone gets it by checking the project out.
-##   user://ambar_token.cfg   the API token. Personal, per machine, never committed — the same
-##                            reasoning §11 applies to the token itself.
+##   user://ambar_token.cfg   the API token. Personal, per machine, never committed, for the
+##                            same reason no password belongs in a repository.
 ##
 ## Both are plain ConfigFile, so either can be fixed in a text editor when something is wrong.
 
 const PROJECT_FILE := "res://ambar.cfg"
 const TOKEN_FILE := "user://ambar_token.cfg"
+## Browse preferences: tile size, sort order, page size. Personal like the token but not secret
+## like it, and a third file rather than a section in the second one because "delete my token"
+## should not also mean "forget how I like the grid".
+const PREFS_FILE := "user://ambar_prefs.cfg"
 
 
 static func base_url() -> String:
@@ -53,8 +57,26 @@ static func set_token(value: String) -> void:
 		push_error("Ambar: could not write the token file (error %d)" % err)
 
 
-## configured reports whether there is enough to try a request. Both halves are required: §11 has
-## no anonymous API, so a URL without a token only produces 401s.
+## pref reads one browse preference, falling back to `fallback` when it was never set or the file
+## is unreadable. Untyped on purpose: the same two functions carry ints and strings.
+static func pref(key: String, fallback):
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_FILE) != OK:
+		return fallback
+	return cfg.get_value("ui", key, fallback)
+
+
+static func set_pref(key: String, value) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(PREFS_FILE)
+	cfg.set_value("ui", key, value)
+	var err := cfg.save(PREFS_FILE)
+	if err != OK:
+		push_error("Ambar: could not write %s (error %d)" % [PREFS_FILE, err])
+
+
+## configured reports whether there is enough to try a request. Both halves are required: Ambar
+## has no anonymous API, so a URL without a token only produces 401s.
 static func configured() -> bool:
 	return base_url() != "" and token() != ""
 

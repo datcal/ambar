@@ -235,7 +235,7 @@ func runServe(args []string) error {
 	}
 
 	// One sweep at startup, not a background ticker. Nothing in this application
-	// deletes on a schedule (CLAUDE.md invariant 3), and Lookup rejects expired
+	// deletes on a schedule (ARCHITECTURE.md rule 3), and Lookup rejects expired
 	// rows anyway, so this is only housekeeping.
 	if n, err := srv.Sessions().DeleteExpired(ctx); err != nil {
 		log.Warn("could not clear expired sessions", "error", err)
