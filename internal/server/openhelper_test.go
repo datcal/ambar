@@ -130,8 +130,8 @@ func TestLinuxHelperFindsASteamInstall(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the linux helper is a POSIX shell script")
 	}
-	sh, err := exec.LookPath("sh")
-	if err != nil {
+	shells := posixShells(t)
+	if len(shells) == 0 {
 		t.Skip("no POSIX shell available")
 	}
 
@@ -157,42 +157,84 @@ func TestLinuxHelperFindsASteamInstall(t *testing.T) {
 		}
 	}
 
-	// The file being opened, with a space in its name for the same reason.
-	asset := filepath.Join(t.TempDir(), "a sprite.aseprite")
+	// The file being opened. The space is the reason for the %20, and the "+" is there
+	// because a literal plus must survive decoding as a plus rather than becoming a space.
+	asset := filepath.Join(t.TempDir(), "a sprite+outline.aseprite")
 	if err := os.WriteFile(asset, []byte("not really an aseprite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link := func(app string) string {
-		return "ambar://open?app=" + app + "&path=" + strings.ReplaceAll(asset, " ", "%20")
+		return "ambar://open?app=" + app + "&path=" +
+			strings.NewReplacer(" ", "%20", "+", "%2B").Replace(asset)
 	}
 
-	// tolerateExit, because --check reports a non-zero status when the scheme is not
-	// registered — which it is not, inside a temporary HOME, and that is the honest answer.
-	run := func(t *testing.T, tolerateExit bool, args ...string) string {
-		t.Helper()
-		cmd := exec.Command(sh, append([]string{script}, args...)...)
-		cmd.Env = append(os.Environ(), "HOME="+home)
-		out, err := cmd.CombinedOutput()
-		if err != nil && !tolerateExit {
-			t.Fatalf("%v: %v\n%s", args, err, out)
+	// Every shell on this machine, not just /bin/sh, because which one that is decides
+	// whether the script works: the decoder used to be written with printf's "\xNN", which
+	// bash understands and dash does not, so it passed on Arch and failed on Ubuntu with a
+	// path that still had a literal "\x20" in it. The one shell being tested was the one
+	// where the bug was invisible.
+	for _, sh := range shells {
+		t.Run(filepath.Base(sh), func(t *testing.T) {
+			// tolerateExit, because --check reports a non-zero status when the scheme is not
+			// registered — which it is not, inside a temporary HOME, and that is the honest answer.
+			run := func(t *testing.T, tolerateExit bool, args ...string) string {
+				t.Helper()
+				cmd := exec.Command(sh, append([]string{script}, args...)...)
+				cmd.Env = append(os.Environ(), "HOME="+home)
+				out, err := cmd.CombinedOutput()
+				if err != nil && !tolerateExit {
+					t.Fatalf("%v: %v\n%s", args, err, out)
+				}
+				return string(out)
+			}
+
+			// It launches the Steam binary, and the stub reports exactly one argument — so
+			// neither the space in "Godot Engine" nor the one in the filename split.
+			for _, app := range []string{"aseprite", "godot"} {
+				got := run(t, false, link(app))
+				want := "args=1 first=[" + asset + "]"
+				if strings.TrimSpace(got) != want {
+					t.Errorf("%s: helper produced %q, want %q", app, strings.TrimSpace(got), want)
+				}
+			}
+
+			// And --check names the command, because "the editor opened empty" needs a line
+			// somebody can read rather than a guess about which of three failures it was.
+			report := run(t, true, "--check")
+			if !strings.Contains(report, filepath.Join(steam, "steamapps", "common", "Aseprite", "aseprite")) {
+				t.Errorf("--check does not report where aseprite was found:\n%s", report)
+			}
+		})
+	}
+}
+
+// posixShells lists the shells the helper should be tried under: /bin/sh first, since that is
+// what the desktop entry runs it with, plus any other one installed here.
+//
+// dash and busybox are the point of the list. /bin/sh is bash on Arch and dash on Debian and
+// Ubuntu, and a bashism in a #!/bin/sh script is invisible on the first of those.
+func posixShells(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	seen := map[string]bool{}
+	for _, name := range []string{"sh", "dash", "busybox", "bash", "ash", "mksh"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
 		}
-		return string(out)
-	}
-
-	// It launches the Steam binary, and the stub reports exactly one argument — so
-	// neither the space in "Godot Engine" nor the one in the filename split.
-	for _, app := range []string{"aseprite", "godot"} {
-		got := run(t, false, link(app))
-		want := "args=1 first=[" + asset + "]"
-		if strings.TrimSpace(got) != want {
-			t.Errorf("%s: helper produced %q, want %q", app, strings.TrimSpace(got), want)
+		// Resolve, so that /bin/sh -> bash is not run twice under two names.
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			path = real
 		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		if strings.HasSuffix(path, "busybox") {
+			// busybox needs its applet named; skip it rather than special-case the exec.
+			continue
+		}
+		found = append(found, path)
 	}
-
-	// And --check names the command, because "the editor opened empty" needs a line
-	// somebody can read rather than a guess about which of three failures it was.
-	report := run(t, true, "--check")
-	if !strings.Contains(report, filepath.Join(steam, "steamapps", "common", "Aseprite", "aseprite")) {
-		t.Errorf("--check does not report where aseprite was found:\n%s", report)
-	}
+	return found
 }
