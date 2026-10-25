@@ -202,6 +202,11 @@ func (s *Server) routes() http.Handler {
 	// M14: the original model plus the files it references, so .obj and .fbx can be
 	// viewed in the browser instead of waiting for Blender.
 	mux.Handle("GET /assets/{id}/file/{name...}", auth.RequireUser(http.HandlerFunc(s.handleAssetFile)))
+	// The texture a model named, found nearby when it is not where the model says
+	// (textures.go). The viewer and the thumbnail renderer send every texture here.
+	mux.Handle("GET /assets/{id}/texture", auth.RequireUser(http.HandlerFunc(s.handleAssetTexture)))
+	// Models whose thumbnail is missing or stale, for the jobs page to redraw (rethumb.go).
+	mux.Handle("GET /models/render-queue", auth.RequireUser(http.HandlerFunc(s.handleModelRenderQueue)))
 	// M15: the browser hands back a thumbnail it rendered for a model, because the
 	// server has no renderer and Blender is optional (§6).
 	mux.Handle("POST /assets/{id}/thumb", auth.RequireUser(http.HandlerFunc(s.handleModelThumbUpload)))

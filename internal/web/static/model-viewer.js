@@ -64,6 +64,8 @@
   // model file itself is a tracked item, and the textures a loader starts during parse
   // are tracked too, so onLoad fires after the whole set has either arrived or failed.
   const manager = new THREE.LoadingManager();
+  // Textures are found by name rather than by the path the model carries (modeltextures.js).
+  if (window.AmbarModelTextures) manager.setURLModifier(window.AmbarModelTextures.modifierFor(src));
   let settled = false;
   const missing = [];
 

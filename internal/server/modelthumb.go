@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/HugoSmits86/nativewebp"
 	"github.com/datcal/ambar/internal/derive"
@@ -39,8 +42,10 @@ import (
 //     nothing: it replaces the extension chip with a blank tile *and* records
 //     derive_state=ok, which hides the fact that the model never rendered. Every .fbx in
 //     the library got exactly that treatment before this check existed.
-//   - Overwrite a thumbnail that already exists. A derivative that is present was
-//     produced by derive (or by an earlier render) and is not the client's to replace.
+//   - Overwrite a thumbnail that is current. A thumbnail is current when it was drawn by
+//     a renderer at least as good as thumbRendererVersion, which thumb.json beside it
+//     records. One drawn before textures were resolved by name — most of the library's
+//     FBX tiles, white — is stale, and a current renderer replacing it is the point.
 
 // maxBrowserThumbBytes caps the upload. A 512×512 PNG of a model is tens of
 // kilobytes; a megabyte is generous and still bounded.
@@ -49,6 +54,60 @@ const maxBrowserThumbBytes = 1 << 20
 // maxBrowserThumbPixels bounds the decode, the same defence §5 applies to archives
 // and §6 to images.
 const maxBrowserThumbPixels = 4096 * 4096
+
+// thumbRendererVersion is the model-thumbnail renderer the server now expects.
+//
+//	1  the original: textures fetched by the path the model carries
+//	2  textures resolved by name through /assets/{id}/texture (textures.go)
+//
+// A client says which it is in the X-Ambar-Renderer header; one that does not is 1.
+const thumbRendererVersion = 2
+
+// fileThumbMeta records, beside a model's thumb.webp, how it was drawn.
+const fileThumbMeta = "thumb.json"
+
+// thumbMeta is fileThumbMeta's content.
+type thumbMeta struct {
+	Renderer int `json:"renderer"`
+	// Untextured is how many of the model's textures could not be found when it was
+	// drawn: a thumbnail with any is drawn again when a better renderer exists.
+	Untextured int   `json:"untextured"`
+	DrawnAt    int64 `json:"drawn_at"`
+}
+
+// readThumbMeta reads the record beside a thumbnail. A thumbnail without one predates
+// the record, which is the same as renderer 1.
+func readThumbMeta(outDir string) thumbMeta {
+	raw, err := os.ReadFile(filepath.Join(outDir, fileThumbMeta))
+	if err != nil {
+		return thumbMeta{Renderer: 1}
+	}
+	var m thumbMeta
+	if json.Unmarshal(raw, &m) != nil || m.Renderer < 1 {
+		return thumbMeta{Renderer: 1}
+	}
+	return m
+}
+
+// thumbStatus is what a model's thumbnail needs: nothing, a first render, or a redraw.
+type thumbStatus int
+
+const (
+	thumbCurrent thumbStatus = iota
+	thumbMissing
+	thumbStale
+)
+
+// modelThumbStatus decides from the derivative directory alone.
+func modelThumbStatus(outDir string) thumbStatus {
+	if _, err := os.Stat(filepath.Join(outDir, derive.FileThumb)); err != nil {
+		return thumbMissing
+	}
+	if readThumbMeta(outDir).Renderer < thumbRendererVersion {
+		return thumbStale
+	}
+	return thumbCurrent
+}
 
 // handleModelThumbUpload stores a browser-rendered thumbnail for a model.
 func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) {
@@ -77,18 +136,24 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	outDir := filepath.Join(s.cfg.DataRoot, relDir)
 	thumbPath := filepath.Join(outDir, derive.FileThumb)
 
-	// Already thumbnailed — by derive, by Blender, or by an earlier render. Not the
-	// client's to replace, and saying so plainly stops a page from looping.
+	// Already thumbnailed, and not the client's to replace — saying so plainly stops a
+	// page from looping. Two ways a present file is still replaceable:
 	//
-	// "Already thumbnailed" means the row says so, not merely that a file is lying
-	// there. The two came apart badly: a blank FBX snapshot wrote a transparent
-	// thumb.webp, and once the row was repaired the file stayed behind and was served
-	// as this model's picture for ever, because the file alone was enough to refuse
-	// every later attempt. A file whose asset is not in state 'ok' is an orphan from a
-	// path that failed, and overwriting it is the point.
+	//   - the row is not 'ok': a blank FBX snapshot once wrote a transparent thumb.webp
+	//     that, with the row repaired, was served for ever because the file alone refused
+	//     every later attempt. A file whose asset is not 'ok' is an orphan of a failed path.
+	//   - it is stale and this client draws better: the white FBX tiles drawn before
+	//     textures were resolved by name. An older client never replaces anything.
+	renderer := 1
+	if v, err := strconv.Atoi(r.Header.Get("X-Ambar-Renderer")); err == nil && v > 0 {
+		renderer = v
+	}
+	untextured, _ := strconv.Atoi(r.Header.Get("X-Ambar-Untextured"))
 	if _, err := os.Stat(thumbPath); err == nil && asset.DeriveState == "ok" {
-		w.WriteHeader(http.StatusNoContent)
-		return
+		if modelThumbStatus(outDir) != thumbStale || renderer < thumbRendererVersion {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 	}
 
 	body := http.MaxBytesReader(w, r.Body, maxBrowserThumbBytes)
@@ -131,6 +196,11 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	if err := writeFileAtomic(filepath.Join(outDir, derive.FilePreview), buf.Bytes()); err != nil {
 		s.log.WarnContext(r.Context(), "could not write the browser preview", "error", err)
 	}
+	// How it was drawn, so a better renderer later knows this one is worth replacing.
+	meta, _ := json.Marshal(thumbMeta{Renderer: renderer, Untextured: max(untextured, 0), DrawnAt: time.Now().Unix()})
+	if err := writeFileAtomic(filepath.Join(outDir, fileThumbMeta), meta); err != nil {
+		s.log.WarnContext(r.Context(), "could not record how a thumbnail was drawn", "error", err)
+	}
 
 	// The grid decides what to show from derive_state, so record that a preview now
 	// exists for this content. Keyed by hash, like every other derivative: every copy
@@ -165,7 +235,7 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.log.InfoContext(r.Context(), "stored a browser-rendered model thumbnail",
-		"asset_id", asset.ID, "bytes", buf.Len())
+		"asset_id", asset.ID, "bytes", buf.Len(), "renderer", renderer, "untextured", untextured)
 	w.WriteHeader(http.StatusNoContent)
 }
 

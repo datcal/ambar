@@ -129,6 +129,22 @@
     </div>
   {{end}}
 
+  {{/* Model thumbnails are drawn by a browser, not by this server. This card redraws, in
+       this tab, every one that is missing or was drawn by an older renderer — the white FBX
+       tiles drawn before textures were found by name (renderqueue.js, rethumb.go). */}}
+  <div class="card" data-role="rethumb" data-version="{{.Version}}">
+    <h2>Model thumbnails</h2>
+    <p class="hint">3D thumbnails are drawn by a browser, not by this server. This draws every model
+      whose thumbnail is missing or was drawn without its textures, here in this tab, with this
+      computer's graphics card. Keep the tab open and visible; you can stop and continue later.</p>
+    <div class="actions-row">
+      <button type="button" class="primary" data-role="rethumb-start">Draw model thumbnails here</button>
+      <button type="button" data-role="rethumb-stop" hidden>Stop</button>
+    </div>
+    <p class="hint" data-role="rethumb-status"></p>
+  </div>
+  <script src="/static/renderqueue.js?v={{.Version}}" defer></script>
+
   {{/* Live (M16): jobs.js polls while anything is running and reloads this page when the queue
        goes idle, because what you came here for is the *result* — what failed and what it said.
        The progress column is the other half: a scan of twenty thousand files used to say

@@ -223,13 +223,14 @@
       {{if .NeedsModelThumbs}}
         {{/* Loaded only when this page holds a model with no thumbnail, so an all-2D
              library never ships 600 KB of three.js to browse a grid. */}}
-        <script src="/static/vendor/three/three.min.js" defer></script>
-        <script src="/static/vendor/three/GLTFLoader.js" defer></script>
-        <script src="/static/vendor/three/OBJLoader.js" defer></script>
-        <script src="/static/vendor/three/MTLLoader.js" defer></script>
-        <script src="/static/vendor/three/fflate.min.js" defer></script>
-        <script src="/static/vendor/three/FBXLoader.js" defer></script>
-        <script src="/static/modelthumb.js" defer></script>
+        <script src="/static/vendor/three/three.min.js?v={{$.Version}}" defer></script>
+        <script src="/static/vendor/three/GLTFLoader.js?v={{$.Version}}" defer></script>
+        <script src="/static/vendor/three/OBJLoader.js?v={{$.Version}}" defer></script>
+        <script src="/static/vendor/three/MTLLoader.js?v={{$.Version}}" defer></script>
+        <script src="/static/vendor/three/fflate.min.js?v={{$.Version}}" defer></script>
+        <script src="/static/vendor/three/FBXLoader.js?v={{$.Version}}" defer></script>
+        <script src="/static/modeltextures.js?v={{$.Version}}" defer></script>
+        <script src="/static/modelthumb.js?v={{$.Version}}" defer></script>
       {{end}}
 
       {{/* Numbered paging (M16), replacing "Load more".

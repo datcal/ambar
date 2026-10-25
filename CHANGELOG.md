@@ -41,6 +41,17 @@ will not change incompatibly without a major bump.
   is one), and a Podman Quadlet unit in `deploy/`. Neither image carries a Blender.
 - Blender's conversion script is written beside its output, not in the system temp
   directory, which a sandboxed Blender cannot see.
+- **Model textures are found by name.** The 3D viewer and the grid's thumbnail renderer send
+  every texture a model names to `/assets/{id}/texture`, which resolves it nearest first:
+  the exact path, the same name up to the pack root, the same name as a browser-readable
+  format (`.psd` → `.png`), then the closest-named colour texture in the nearest Textures
+  folder. Normal, emissive and other non-colour maps are never guessed. On a sample of 640
+  Synty FBX files, textured renders went from 29 to 459. The 3D scripts now carry the
+  version, so a changed loader reaches browsers that cached the old one.
+- **Redraw model thumbnails from the jobs page.** Each thumbnail records which renderer drew
+  it and how many textures were missing (`thumb.json`); one drawn by an older renderer —
+  the white FBX tiles — is replaceable by the current one and nothing else. The "Model
+  thumbnails" card walks the library in the open tab and draws every missing or stale one.
 - **Claiming a job no longer sorts the whole queue.** The claim's index could not deliver
   priority order past its range on `run_after`, so every claim read and sorted every queued
   row: invisible at a few hundred jobs, most of the NAS's CPU at 170,000. Migration 0021

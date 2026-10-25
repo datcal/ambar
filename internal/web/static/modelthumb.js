@@ -19,13 +19,19 @@
 //     mesh whose texture is missing as transparent black, so skipping either of these
 //     produced a fully transparent snapshot — which is exactly what every .fbx tile in
 //     this library got, and what the server now refuses.
+//
+// The drawing itself is exported as window.AmbarModelThumb.render, because the grid is
+// not the only caller: the jobs page's "redraw model thumbnails" works through a queue of
+// models with the same code, in the same tab (renderqueue.js).
 (function () {
     "use strict";
 
-    var pending = Array.prototype.slice.call(
-        document.querySelectorAll(".thumb-pending[data-model]")
-    );
-    if (!pending.length || typeof THREE === "undefined") return;
+    if (typeof THREE === "undefined") return;
+
+    // Which renderer this is, sent with every upload (internal/server/modelthumb.go). 2
+    // resolves textures by name through /assets/{id}/texture; the server lets it replace
+    // a thumbnail drawn by an older one.
+    var RENDERER = 2;
 
     // Fallback cap, used only when the browser has no IntersectionObserver and there is
     // therefore no way to tell what the reader has actually looked at. With one, every
@@ -92,7 +98,11 @@
     // Clear texture slots whose image never arrived. Called only once fetching has
     // settled, so nothing still in flight is discarded. Without this the snapshot is a
     // transparent square: a missing texture multiplies the material down to rgba(0,0,0,0).
+    //
+    // Returns how many were dropped: the server records it, so a thumbnail drawn without
+    // its textures is known to be one.
     function dropMissingTextures(object) {
+        var dropped = 0;
         object.traverse(function (node) {
             if (!node.material) return;
             var mats = Array.isArray(node.material) ? node.material : [node.material];
@@ -101,10 +111,12 @@
                     if (m[slot] && !textureArrived(m[slot])) {
                         m[slot] = null;
                         m.needsUpdate = true;
+                        dropped += 1;
                     }
                 });
             });
         });
+        return dropped;
     }
 
     // Frame the model the way the detail viewer does: fit the bounding sphere, look
@@ -129,11 +141,10 @@
         return true;
     }
 
-    function loaderFor(format, tile, manager) {
+    function loaderFor(format, mtl, manager) {
         switch (format) {
             case "obj":
                 return function (src, done, fail) {
-                    var mtl = tile.dataset.mtl;
                     var base = src.slice(0, src.lastIndexOf("/") + 1);
                     var load = function (materials) {
                         var loader = new THREE.OBJLoader(manager);
@@ -171,15 +182,20 @@
         }
     }
 
-    function upload(assetID, blob, done) {
+    function upload(assetID, blob, untextured, done) {
         var url = "/assets/" + encodeURIComponent(assetID) + "/thumb";
         fetch(url, {
             method: "POST",
-            headers: { "X-CSRF-Token": csrf, "Content-Type": "image/png" },
+            headers: {
+                "X-CSRF-Token": csrf,
+                "Content-Type": "image/png",
+                "X-Ambar-Renderer": String(RENDERER),
+                "X-Ambar-Untextured": String(untextured),
+            },
             body: blob,
             credentials: "same-origin",
         }).then(
-            function () { done(true); },
+            function (response) { done(response.ok); },
             function () { done(false); }
         );
     }
@@ -193,31 +209,32 @@
         if (tile.parentNode) tile.parentNode.replaceChild(img, tile);
     }
 
-    var queue = [];
-    var running = false;
+    var ready = false;
 
-    function next() {
-        if (running) return;
-        var tile = queue.shift();
-        if (!tile) return;
-        running = true;
-
-        var src = tile.dataset.model;
-        var assetID = tile.dataset.asset;
+    // render draws one model off-screen and uploads the picture. item is
+    // {asset, src, format, mtl}; callback(stored, untextured) is called exactly once.
+    function render(item, callback) {
+        if (!ready) ready = setup();
+        var src = item.src;
+        var assetID = item.asset;
         // A manager per model: it is how "have the textures finished?" is answered, and
         // FBXLoader in particular calls back long before its textures are in.
         var manager = new THREE.LoadingManager();
-        var load = loaderFor((tile.dataset.format || "gltf").toLowerCase(), tile, manager);
+        // Textures are found by name rather than by the path the model carries
+        // (modeltextures.js), so a thumbnail is as textured as the viewer.
+        if (window.AmbarModelTextures && src) {
+            manager.setURLModifier(window.AmbarModelTextures.modifierFor(src));
+        }
+        var load = loaderFor((item.format || "gltf").toLowerCase(), item.mtl, manager);
 
         var done = false;
-        var finish = function () {
+        var dropped = 0;
+        var finish = function (stored) {
             if (done) return;
             done = true;
-            running = false;
-            // Yield to the browser between models so scrolling stays smooth.
-            window.setTimeout(next, 50);
+            callback(!!stored, dropped);
         };
-        if (!load || !src || !assetID) return finish();
+        if (!load || !src || !assetID) return finish(false);
 
         var loaded = null;
         var settled = false;
@@ -232,24 +249,21 @@
                     // An empty scene — a loader that read the file but found no meshes.
                     // Uploading a picture of it would replace an honest extension chip
                     // with a blank square.
-                    return finish();
+                    return finish(false);
                 }
-                dropMissingTextures(object);
+                dropped = dropMissingTextures(object);
                 scene.add(object);
                 var framed = frame(object);
                 if (framed) renderer.render(scene, camera);
                 scene.remove(object);
-                if (!framed) return finish();
+                if (!framed) return finish(false);
 
                 renderer.domElement.toBlob(function (blob) {
-                    if (!blob) return finish();
-                    upload(assetID, blob, function (ok) {
-                        if (ok) show(tile, assetID);
-                        finish();
-                    });
+                    if (!blob) return finish(false);
+                    upload(assetID, blob, dropped, finish);
                 }, "image/png");
             } catch (e) {
-                finish();
+                finish(false);
             }
         };
 
@@ -265,13 +279,42 @@
                 snapshot();
             },
             function () {
-                // Unreadable model: leave the chip alone and move on.
-                finish();
+                // Unreadable model: nothing to upload.
+                finish(false);
             }
         );
     }
 
-    if (!setup()) return;
+    window.AmbarModelThumb = { render: render, renderer: RENDERER };
+
+    // --- the grid ---------------------------------------------------------------------
+
+    var pending = Array.prototype.slice.call(
+        document.querySelectorAll(".thumb-pending[data-model]")
+    );
+    if (!pending.length) return;
+
+    var queue = [];
+    var running = false;
+
+    function next() {
+        if (running) return;
+        var tile = queue.shift();
+        if (!tile) return;
+        running = true;
+        render(
+            { asset: tile.dataset.asset, src: tile.dataset.model, format: tile.dataset.format, mtl: tile.dataset.mtl },
+            function (stored) {
+                if (stored) show(tile, tile.dataset.asset);
+                running = false;
+                // Yield to the browser between models so scrolling stays smooth.
+                window.setTimeout(next, 50);
+            }
+        );
+    }
+
+    ready = setup();
+    if (!ready) return;
 
     // Only what has been seen. An IntersectionObserver keeps a 500-model page from
     // rendering anything the user never scrolled to.

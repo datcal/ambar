@@ -109,19 +109,23 @@
       </div>
       <p class="hint viewer-hint">Drag to orbit · scroll to zoom · right-drag to pan.</p>
     </div>
-    <script src="/static/vendor/three/three.min.js" defer></script>
-    <script src="/static/vendor/three/OrbitControls.js" defer></script>
+    <script src="/static/vendor/three/three.min.js?v={{$.Version}}" defer></script>
+    <script src="/static/vendor/three/OrbitControls.js?v={{$.Version}}" defer></script>
     {{if eq .ViewerFormat "gltf"}}
-      <script src="/static/vendor/three/GLTFLoader.js" defer></script>
+      <script src="/static/vendor/three/GLTFLoader.js?v={{$.Version}}" defer></script>
     {{else if eq .ViewerFormat "obj"}}
-      <script src="/static/vendor/three/OBJLoader.js" defer></script>
-      <script src="/static/vendor/three/MTLLoader.js" defer></script>
+      <script src="/static/vendor/three/OBJLoader.js?v={{$.Version}}" defer></script>
+      <script src="/static/vendor/three/MTLLoader.js?v={{$.Version}}" defer></script>
     {{else if eq .ViewerFormat "fbx"}}
       {{/* FBX is a zipped binary format; the loader needs fflate to inflate it. */}}
-      <script src="/static/vendor/three/fflate.min.js" defer></script>
-      <script src="/static/vendor/three/FBXLoader.js" defer></script>
+      <script src="/static/vendor/three/fflate.min.js?v={{$.Version}}" defer></script>
+      <script src="/static/vendor/three/FBXLoader.js?v={{$.Version}}" defer></script>
     {{end}}
-    <script src="/static/model-viewer.js" defer></script>
+    {{/* Every 3D script carries the version: the static handler caches a release's files
+         for a year, so a changed loader would otherwise never reach a browser that had the
+         old one. */}}
+    <script src="/static/modeltextures.js?v={{$.Version}}" defer></script>
+    <script src="/static/model-viewer.js?v={{$.Version}}" defer></script>
   {{end}}
 
   {{if .IsAudio}}

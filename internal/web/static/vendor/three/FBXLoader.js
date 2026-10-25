@@ -353,25 +353,21 @@
 			let texture;
 			const extension = textureNode.FileName.slice( - 3 ).toLowerCase();
 
-			if ( extension === 'tga' ) {
+			// AMBAR PATCH: a texture with no Video node still has a name worth asking for.
+			if ( fileName === undefined ) fileName = textureNode.RelativeFilename || textureNode.FileName;
 
-				const loader = this.manager.getHandler( '.tga' );
+			if ( extension === 'tga' && this.manager.getHandler( '.tga' ) !== null ) {
 
-				if ( loader === null ) {
+				texture = this.manager.getHandler( '.tga' ).load( fileName );
 
-					console.warn( 'FBXLoader: TGA loader not found, creating placeholder texture for', textureNode.RelativeFilename );
-					texture = new THREE.Texture();
+			} else if ( extension === 'tga' || extension === 'psd' ) {
 
-				} else {
-
-					texture = loader.load( fileName );
-
-				}
-
-			} else if ( extension === 'psd' ) {
-
-				console.warn( 'FBXLoader: PSD textures are not supported, creating placeholder texture for', textureNode.RelativeFilename );
-				texture = new THREE.Texture();
+				// AMBAR PATCH: upstream gives up here with an empty placeholder. Ambar's
+				// viewer routes every texture URL through a LoadingManager URL modifier to
+				// /assets/{id}/texture, which answers a .psd or .tga with the browser-readable
+				// image it was exported as (internal/server/textures.go) — so ask anyway.
+				// A miss still ends as a texture the viewer drops, exactly as before.
+				texture = this.textureLoader.load( fileName );
 
 			} else {
 
