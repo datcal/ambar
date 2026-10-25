@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/remote"
 	"github.com/datcal/ambar/internal/safepath"
+	"golang.org/x/image/webp"
 )
 
 // handleThumb serves a generated thumbnail.
@@ -102,6 +105,16 @@ func (s *Server) serveDerivative(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// ?format=png: clients with no WebP decoder (the Unreal plugin — its image wrapper reads
+	// PNG, JPEG and a few others) ask for the same picture as PNG. Transcoded per request from
+	// the immutable WebP: thumbnails are small, and the client caches what it gets.
+	if r.URL.Query().Get("format") == "png" && contentType == "image/webp" {
+		if s.servePNG(w, r, asset, filename, file) {
+			return
+		}
+		_, _ = file.Seek(0, 0)
+	}
+
 	w.Header().Set("Content-Type", contentType)
 	// Derivatives are immutable for a given content hash and derive version, so a
 	// long private cache is safe and makes the grid feel instant on a second visit.
@@ -110,6 +123,26 @@ func (s *Server) serveDerivative(w http.ResponseWriter, r *http.Request,
 	w.Header().Set("ETag", fmt.Sprintf(`"%s-%d-%s"`, asset.SHA256[:16], derive.Version, filename))
 
 	http.ServeContent(w, r, filename, info.ModTime(), file)
+}
+
+// servePNG answers with the WebP derivative re-encoded as PNG. It reports false, having
+// written nothing, when the file cannot be decoded, so the caller falls back to the original.
+func (s *Server) servePNG(w http.ResponseWriter, r *http.Request, asset index.Asset,
+	filename string, file *os.File) bool {
+
+	img, err := webp.Decode(file)
+	if err != nil {
+		return false
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return false
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("ETag", fmt.Sprintf(`"%s-%d-%s-png"`, asset.SHA256[:16], derive.Version, filename))
+	http.ServeContent(w, r, filename+".png", time.Time{}, bytes.NewReader(buf.Bytes()))
+	return true
 }
 
 // derivativeMissing explains why there is no image, using the asset's derive state.

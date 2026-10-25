@@ -47,6 +47,7 @@ Three ways in, one library:
 | --- | --- | --- |
 | Browser | `http://nas:8973/` | Search, view, tag, ingest, review duplicates |
 | Godot | `addons/ambar` → `/api/v1` | Browse and import into a project; records the use |
+| Unreal | `unreal/Ambar` → `/api/v1` | Same, with a folder tree and an on-disk cache |
 | SMB / Finder | drop a zip in `_inbox/` | Ambar extracts, classifies and indexes it |
 
 The application knows nothing about how it is reached. It binds plain HTTP and leaves
@@ -136,6 +137,18 @@ What it does:
   never told about, and what is missing from the checkout; plus **Write CREDITS.md**
 
 Requires Godot 4. Verified on 4.7.
+
+## The Unreal Engine plugin
+
+Download `ambar-unreal-plugin-<version>.zip` from [Releases](https://github.com/datcal/ambar/releases),
+unzip it into your project's `Plugins/` folder (so you have `Plugins/Ambar/Ambar.uplugin`) and open
+the project; Unreal offers to build it. **Window → Ambar Asset Library** opens the browser.
+
+It does what the Godot plugin does, with a folder tree: search, open folders one level at a time,
+preview, multi-select and import through the editor's own importers (glTF, FBX, PNG, WAV …),
+record the project's uses on the server and write `CREDITS.md`. Folder names and pictures are
+cached on disk so a second visit is instant; each person on the team uses their own API token.
+See [unreal/Ambar/README.md](unreal/Ambar/README.md) for setup, tunnels and the cache.
 
 ## What it does with a library
 

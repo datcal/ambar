@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "Ambar",
+	"Description": "Browse a self-hosted Ambar asset library from inside the Unreal Editor: search, open folders, preview and import into the project. Several people can share one server, each with their own token.",
+	"Category": "Editor",
+	"CreatedBy": "Ambar",
+	"CreatedByURL": "https://github.com/datcal/ambar",
+	"DocsURL": "https://github.com/datcal/ambar/blob/main/unreal/Ambar/README.md",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/datcal/ambar/issues",
+	"EngineVersion": "5.8.0",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"SupportedTargetPlatforms": [ "Win64", "Linux" ],
+	"Modules": [
+		{
+			"Name": "AmbarEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [ "Win64", "Linux", "Mac" ]
+		}
+	]
+}

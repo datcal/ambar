@@ -114,6 +114,7 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	opts := index.ListOptions{
 		Query:  strings.TrimSpace(q.Get("q")),
 		Kind:   q.Get("kind"),
+		Dir:    q.Get("dir"),
 		Cursor: q.Get("cursor"),
 	}
 	// tags= is folded into the query language: each tag becomes a term.

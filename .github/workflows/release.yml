@@ -7,6 +7,7 @@
 #   ghcr.io/<owner>/ambar:1.0.0, :1.0, :latest      the container
 #   ambar_v1.0.0_linux_{amd64,arm64}.tar.gz         the binaries
 #   ambar-godot-plugin-v1.0.0.zip                   the Godot addon, on its own
+#   ambar-unreal-plugin-v1.0.0.zip                  the Unreal Engine plugin, on its own
 #   checksums-v1.0.0.txt                            sha256 of all of the above
 #
 # The tests run first and everything else waits on them. An artifact that gets published
@@ -129,6 +130,9 @@ jobs:
             echo
             echo "The Godot plugin is \`ambar-godot-plugin-${version}.zip\` below: unzip it at the"
             echo 'root of your Godot project and enable it in Project Settings → Plugins.'
+            echo
+            echo "The Unreal plugin is \`ambar-unreal-plugin-${version}.zip\`: unzip it into your project's"
+            echo '`Plugins/` folder (so you have `Plugins/Ambar/Ambar.uplugin`) and open the project.'
           } >> notes.md
 
       - name: release
@@ -142,6 +146,7 @@ jobs:
             dist/ambar_${{ github.ref_name }}_linux_amd64.tar.gz \
             dist/ambar_${{ github.ref_name }}_linux_arm64.tar.gz \
             dist/ambar-godot-plugin-${{ github.ref_name }}.zip \
+            dist/ambar-unreal-plugin-${{ github.ref_name }}.zip \
             dist/checksums-${{ github.ref_name }}.txt
 
       - name: summary
@@ -149,7 +154,7 @@ jobs:
           {
             echo "### Released ${{ github.ref_name }}"
             echo
-            ls -1 dist/ambar_* dist/ambar-godot-plugin-* dist/checksums-* | sed 's|dist/|- |'
+            ls -1 dist/ambar_* dist/ambar-godot-plugin-* dist/ambar-unreal-plugin-* dist/checksums-* | sed 's|dist/|- |'
             echo
             echo "Image: \`ghcr.io/${{ github.repository_owner }}/ambar:${GITHUB_REF_NAME#v}\`"
           } >> "$GITHUB_STEP_SUMMARY"

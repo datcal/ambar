@@ -6,6 +6,19 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
+  editor with live search, a folder tree opened one level at a time, kind and sort filters,
+  multi-select, an inspector (large preview, licence, tags, other formats), import through the
+  editor's own importers with the hash checked against the server's, a project manifest and
+  `CREDITS.md` like the Godot plugin's, and an "In project" screen for updates. Folder names,
+  thumbnails and previews are cached on disk (size-capped, with a Cache menu to clear them).
+  Each person uses their own API token; Cloudflare Access service tokens are supported for
+  tunnels.
+- **API: `GET /api/v1/folders?path=`** lists one level of the library tree with asset counts,
+  **`search?dir=`** limits a search to a folder and everything beneath it, and
+  **`thumb`/`preview.webp?format=png`** serves the picture as PNG for clients with no WebP
+  decoder.
+
 - **`.ambarignore`**: a per-folder hide list with the everyday `.gitignore` syntax
   (names, `dir/`, anchored paths, `**`). Hidden files leave the index on the next scan
   instead of being marked missing; nothing on disk is touched, and removing the rule

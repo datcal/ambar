@@ -52,3 +52,7 @@ coverage.*
 /godot-test/CREDITS.md
 /godot-test/*.png
 /godot-test/*.png.import
+
+# Unreal builds the plugin in place when a project opens it.
+/unreal/**/Binaries/
+/unreal/**/Intermediate/

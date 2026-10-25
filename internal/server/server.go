@@ -47,6 +47,7 @@ type Server struct {
 	build BuildInfo
 
 	index    *index.Indexer
+	folders  folderTreeCache
 	tags     *tags.Store
 	saved    *savedsearch.Store
 	prov     *provenance.Store
@@ -306,6 +307,8 @@ func (s *Server) routes() http.Handler {
 	api("GET /api/v1/assets/{id}/peaks.json", s.handlePeaks)
 	api("GET /api/v1/packs/{id}", s.handleAPIPack)
 	api("GET /api/v1/tags", s.handleAPITags)
+	// The Unreal plugin's folder browser: one level of the library tree per request.
+	api("GET /api/v1/folders", s.handleAPIFolders)
 	api("GET /api/v1/projects/{project}/credits.md", s.handleAPICredits)
 	// M18: what a project holds, for the plugin's "in this project" screen — and the only way
 	// to find the imports the server was never told about, which §10 promised were replayable.

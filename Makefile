@@ -35,7 +35,7 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check godot-test plugin-zip release-artifacts
+.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check godot-test plugin-zip unreal-plugin-zip release-artifacts
 
 all: check build
 
@@ -88,6 +88,7 @@ check: fmt-check vet test
 # Built with python3 rather than `zip`, which is not installed everywhere (it is absent
 # from this repository's own CI image and from a plain Alpine).
 PLUGIN_ZIP := dist/ambar-godot-plugin-$(VERSION).zip
+UNREAL_ZIP := dist/ambar-unreal-plugin-$(VERSION).zip
 
 plugin-zip:
 	@mkdir -p dist
@@ -99,6 +100,19 @@ plugin-zip:
 	[z.write(p, p.as_posix()) for p in files]; \
 	z.close(); \
 	print('built $(PLUGIN_ZIP) — %d files' % len(files))"
+
+# The Unreal plugin, zipped so it unpacks to <Project>/Plugins/Ambar. Source only: Unreal builds it
+# on first open of the project, for whichever engine version and platform the person runs.
+unreal-plugin-zip:
+	@mkdir -p dist
+	@rm -f $(UNREAL_ZIP)
+	@python3 -c "import pathlib, zipfile; \
+	root = pathlib.Path('unreal/Ambar'); \
+	files = sorted(p for p in root.rglob('*') if p.is_file() and p.name != '.DS_Store'); \
+	z = zipfile.ZipFile('$(UNREAL_ZIP)', 'w', zipfile.ZIP_DEFLATED); \
+	[z.write(p, 'Ambar/' + p.relative_to(root).as_posix()) for p in files]; \
+	z.close(); \
+	print('built $(UNREAL_ZIP) — %d files' % len(files))"
 
 # The Godot plugin's own suite. Not part of `check`: it needs a Godot binary, and two
 # of the three passes need a running server to talk to. See godot-test/README.md.
@@ -135,7 +149,7 @@ endif
 # explicitly (VERSION=v1.0.0) to build what a tag would build without one.
 RELEASE_PLATFORMS := linux/amd64 linux/arm64
 
-release-artifacts: plugin-zip
+release-artifacts: plugin-zip unreal-plugin-zip
 	@rm -rf dist/stage && mkdir -p dist/stage
 	@cp README.md LICENSE CHANGELOG.md dist/stage/
 	@for platform in $(RELEASE_PLATFORMS); do \
