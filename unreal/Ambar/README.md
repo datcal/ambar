@@ -14,8 +14,10 @@ It is an editor-only plugin: it adds nothing to your packaged game.
 2. Open the project. Unreal asks to build the plugin; say yes. A C++ toolchain is needed once —
    Visual Studio 2022 on Windows, the Unreal-supported clang on Linux. A Blueprint-only project
    becomes a C++ project the first time; nothing else about it changes.
-3. **Window → Ambar Asset Library** (or the **Ambar** button in the toolbar, or `Ambar.Open` in the
-   console).
+3. Click **Ambar** on the status bar at the bottom, beside the Content Drawer: the library slides up
+   over the viewport and goes away when it loses focus, like the Content Drawer. **Dock in layout**
+   in its header keeps it open as a tab next to the Content Browser instead. Also: **Window → Ambar
+   Asset Library**, the **Ambar** toolbar button, or `Ambar.Drawer` / `Ambar.Open` in the console.
 
 ## Connect
 
@@ -61,25 +63,38 @@ and secret into the plugin's connection panel; they are sent as `CF-Access-Clien
 ## Using it
 
 - **Search** is Ambar's own language: `sword type:model`, `32x32`, `color:#8b3a3a~20`,
-  `-style:realistic`. Kind chips and the sort menu sit beside it.
+  `-style:realistic`, `ext:uasset`. Kind chips and the sort menu sit beside it. **All** is everything
+  in the folder — Blueprints, maps, code and notes included; **Unreal** is the `.uasset`/`.umap`
+  packages and **Code** is the source (C++, shaders, scripts). Those show their extension instead of a
+  picture.
 - **Folders** open one level at a time, with asset counts. Click one to browse it; the breadcrumb
   above the grid goes back up. Format variants of one artwork (PNG, PSD, ASEPRITE) are one tile.
+  **Right-click a folder** to import all of it — the folder and its subfolders, or only what the
+  current filters show. You are told how many files and where they go before anything happens, and a
+  running import can be cancelled from the status line; it reports once at the end.
 - **Select** one tile to inspect it — large preview, size, triangle count, licence, tags (click a
   tag to search for it), other formats — or several (Ctrl/Shift-click) to import them together.
 - **Import** with the button, by double-clicking a tile, or from the right-click menu. The original is
-  downloaded, **checked against the hash the server listed**, and imported with Unreal's own
-  importers — exactly as if you had dragged the file into the Content Browser — into
-  `/Game/Ambar/<kind>/<pack>` (change the root in the settings). The Content Browser then shows it.
-  Pixel-art textures (as detected by the server) get nearest filtering, no mipmaps and UI
-  compression, unless you turn that off.
+  downloaded and **checked against the hash the server listed**; then, by what it is:
+  - models, images, sound and fonts go through Unreal's own importers — exactly as if you had dragged
+    the file into the Content Browser — into `/Game/Ambar/<the asset's folder in the library>` (change
+    the root in the settings). Mirroring the library keeps two packs' `SM_Prop_Raft_01` apart.
+    Pixel-art textures (as detected by the server) get nearest filtering, no mipmaps and UI
+    compression, unless you turn that off.
+  - `.uasset` and `.umap` are Unreal packages, which find their dependencies by path, so they are
+    copied into this project's `Content` at the same place they had under their pack's `Content`
+    folder — what the editor's own Migrate does. A file of yours already there is never replaced.
+  - everything else — code, configs, notes — is copied as a plain file to `<Project>/Ambar/`,
+    mirroring the library. Not into `Source/`: whether code gets compiled is your decision.
 - **In project** lists everything the project holds from the library: what the library has since
-  replaced (**Update** re-imports it over the same asset, so references survive), what was imported
+  replaced (**Update** re-imports it into the folder it is already in, over the same asset, so
+  references survive), what was imported
   while the server was unreachable (**Tell server**), and **Write CREDITS.md**, built by the server
   from the licences of what the project actually uses.
 
 What Unreal can import is up to Unreal: `.glb`, `.fbx`, `.obj`, `.png`, `.jpg`, `.tga`, `.wav` and
-the like work; Unreal has no importer for `.ogg`/`.mp3` or Aseprite files, and says so rather than
-guessing. A `.gltf` that points at separate `.bin` and texture files needs those files beside it,
+the like work; for what it has no importer for (`.ogg`, `.mp3`, Aseprite files) the file is copied to
+`<Project>/Ambar/` instead, and the message says so. A `.gltf` that points at separate `.bin` and texture files needs those files beside it,
 so prefer `.glb`.
 
 ## The cache

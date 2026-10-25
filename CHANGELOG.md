@@ -43,6 +43,19 @@ will not change incompatibly without a major bump.
   keys (Shift for bigger steps); double-click resets it. The width is remembered per browser.
   It starts a little wider (18rem), and deep folders indent less.
 
+- **Unreal plugin: a status bar drawer, folder imports, and everything in a folder.** Ambar sits on
+  the status bar beside the Content Drawer and slides up the same way; **Dock in layout** keeps it as
+  a tab beside the Content Browser. Right-click a folder to import it with its subfolders (counted and
+  confirmed first, cancellable, one report at the end). Imports go by kind: models, images and sound
+  through Unreal's importers into `/Game/Ambar/<the library's folders>` (two Synty packs' files of the
+  same name no longer overwrite each other); `.uasset`/`.umap` copied into `Content` where their
+  references resolve; code and other files copied to `<Project>/Ambar/`. **Update** re-imports into
+  the folder an asset already lives in. New **Unreal** and **Code** chips; tiles with no picture show
+  their extension. Fixed: model tiles showed a checkerboard (the plugin asked for a size a
+  browser-drawn thumbnail never has — and the server now falls back to the size it does), and
+  **Update all** in "In project" stopped after the first asset and stayed busy.
+- **`ext:` in the query language** (`ext:uasset,umap`, `-ext:psd`), and C/C++ and Unreal shader
+  source are `script` (shown as Code) rather than `other`; migration 0022 moves rows indexed before.
 - Fixed: the Unreal plugin did not compile against UE 5.8.4 ("could not be compiled. Try
   rebuilding from source manually"). 5.8 keys `FJsonObject::Values` by `FSharedString`, and
   `SImage::Image` binds only const getters. Verified by building a project's

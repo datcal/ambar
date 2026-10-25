@@ -676,3 +676,33 @@ func TestIdenticalFilesShareOneDerivative(t *testing.T) {
 		t.Errorf("%d derivative directories for two identical files, want 1", dirs)
 	}
 }
+
+// A model's picture is drawn by a browser and comes in one size. The Unreal plugin asked
+// every tile for the large one and showed a checkerboard for every model, while the
+// inspector, asking for the preview, showed it fine.
+func TestLargeThumbFallsBackToTheOneThatExists(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedWithDerivatives(t, map[string][]byte{"pack/sprite.png": spritePNG(t, 64, 64)})
+	id := ts.assetID(t, "pack/sprite.png")
+
+	// Take the large one away, as a browser-rendered model never had it.
+	var sum string
+	if err := ts.db.Reader.QueryRow(`SELECT sha256 FROM assets WHERE id = ?`, id).Scan(&sum); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := derive.Dir(sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(ts.cfg.DataRoot, dir, derive.FileThumb2x)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The API route is the same handler behind a token.
+	resp := ts.get(t, fmt.Sprintf("/assets/%d/thumb?size=2x", id))
+	if resp.StatusCode != http.StatusOK || len(ts.body(t, resp)) == 0 {
+		t.Errorf("GET thumb?size=2x = %d, want the smaller thumbnail", resp.StatusCode)
+	}
+}

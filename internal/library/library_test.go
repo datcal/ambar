@@ -209,6 +209,9 @@ func TestKindForExt(t *testing.T) {
 		"mp4": KindVideo, "webm": KindVideo,
 		"ttf": KindFont, "otf": KindFont,
 		"gd": KindScript, "gdshader": KindScript,
+		// Unreal packs ship C++ source; their packages stay "other" (found with ext:).
+		"cpp": KindScript, "h": KindScript, "hpp": KindScript, "usf": KindScript,
+		"uasset": KindOther, "umap": KindOther,
 		"tres": KindMaterial, "mtl": KindMaterial,
 		// §5.1's additions.
 		"tmx": KindTilemap, "tsx": KindTilemap,

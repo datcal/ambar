@@ -110,6 +110,14 @@ func compileTerm(ctx context.Context, t Term, alias string, r TagResolver, sr Sw
 		return tagExpr(alias, ids, term.Neg), tagArgs(ids), nil
 	case KindTerm:
 		return negate(fmt.Sprintf("%s.kind = ?", alias), term.Neg), []any{term.Kind}, nil
+	case ExtTerm:
+		args := make([]any, len(term.Exts))
+		for i, e := range term.Exts {
+			args[i] = e
+		}
+		// ext is stored lowercased at scan time (library.Ext), so no lower() here and the
+		// comparison stays index-friendly.
+		return negate(fmt.Sprintf("%s.ext IN (?%s)", alias, strings.Repeat(", ?", len(args)-1)), term.Neg), args, nil
 	case HasTerm:
 		return negate(hasExpr(alias, term.Flag), term.Neg), nil, nil
 	case StyleTerm:

@@ -20,7 +20,12 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 	// The hash is in the key: a replaced file gets a new picture instead of a stale cached one.
 	ImageKey = FString::Printf(TEXT("t%lld-%s"), Asset->Id, *Asset->Sha256.Left(8));
 
-	if (Images.IsValid())
+	// A .uasset, a header or a config has no picture on the server and never will: asking for one
+	// is a 404 every twenty seconds per tile, and a checkerboard says "still loading". Those tiles
+	// show their extension instead.
+	static const TSet<FString> Pictureless = {TEXT("other"), TEXT("script"), TEXT("material"), TEXT("tilemap"), TEXT("rig")};
+	bHasPicture = !Pictureless.Contains(Asset->Kind);
+	if (Images.IsValid() && bHasPicture)
 	{
 		Images->Request(ImageKey, FAmbarClient::ThumbUrl(Asset->Id), TEXT("thumbs"), ImageKey, Asset->bPixelArt);
 	}
@@ -67,6 +72,14 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 											.Image(this, &SAmbarTile::GetPicture)
 										]
 									]
+								]
+								+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+								[
+									SNew(STextBlock)
+									.Visibility(bHasPicture ? EVisibility::Collapsed : EVisibility::HitTestInvisible)
+									.Text(FText::FromString(TEXT(".") + Asset->Ext.ToUpper()))
+									.Font(AmbarUI::Font(14, true))
+									.ColorAndOpacity(AmbarUI::TextDim())
 								]
 								+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(FMargin(6.f))
 								[
@@ -121,6 +134,10 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 // pointer, so asking it to fetch is still allowed.
 const FSlateBrush* SAmbarTile::GetPicture() const
 {
+	if (!bHasPicture)
+	{
+		return FAppStyle::GetNoBrush();
+	}
 	if (Images.IsValid())
 	{
 		if (const FSlateBrush* Brush = Images->Find(ImageKey))

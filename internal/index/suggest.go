@@ -72,6 +72,7 @@ var suggestKeywords = []Suggestion{
 	{Kind: SuggestKeyword, Insert: "type:", Display: "type:", Detail: "image, model, audio, font…"},
 	{Kind: SuggestKeyword, Insert: "style:pixel-art", Display: "style:pixel-art", Detail: "pixel art only"},
 	{Kind: SuggestKeyword, Insert: "has:alpha", Display: "has:alpha", Detail: "transparency"},
+	{Kind: SuggestKeyword, Insert: "ext:", Display: "ext:", Detail: "file extension — ext:uasset, ext:png,psd"},
 	{Kind: SuggestKeyword, Insert: "has:animation", Display: "has:animation", Detail: "more than one frame"},
 	{Kind: SuggestKeyword, Insert: "has:source-file", Display: "has:source-file", Detail: "an editable .psd/.aseprite exists"},
 	{Kind: SuggestKeyword, Insert: "dim:32x32", Display: "32x32", Detail: "exact pixel size — or just type it"},

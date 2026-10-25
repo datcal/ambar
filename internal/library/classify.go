@@ -83,10 +83,17 @@ var extKinds = map[string]Kind{
 	"ttf": KindFont, "otf": KindFont, "woff": KindFont, "woff2": KindFont,
 	"fnt": KindFont, "bmfont": KindFont,
 
-	// Scripts and shaders
+	// Scripts, shaders and code. C and C++ because Unreal packs ship source: a plugin's
+	// Source/ folder, a sample's game module. Unreal's own shader files (.ush/.usf) too.
 	"gd": KindScript, "cs": KindScript, "lua": KindScript, "py": KindScript,
 	"js": KindScript, "gdshader": KindScript, "shader": KindScript,
 	"glsl": KindScript, "hlsl": KindScript, "frag": KindScript, "vert": KindScript,
+	"c": KindScript, "cc": KindScript, "cpp": KindScript, "cxx": KindScript,
+	"h": KindScript, "hh": KindScript, "hpp": KindScript, "hxx": KindScript,
+	"inl": KindScript, "ush": KindScript, "usf": KindScript,
+	// Unreal's .uasset/.umap stay `other` on purpose: the kinds are a CHECK constraint on
+	// the assets table, and a new one is a rebuild of the largest table in the index.
+	// `ext:uasset,umap` finds them, which is what the Unreal plugin's filter uses.
 
 	// Godot resources (§10 writes .import files; .tres/.material describe materials)
 	"tres": KindMaterial, "material": KindMaterial, "mtl": KindMaterial,

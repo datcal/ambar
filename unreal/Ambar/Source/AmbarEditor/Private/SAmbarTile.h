@@ -29,4 +29,6 @@ private:
 	TAttribute<float> Edge;
 	TAttribute<bool> Selected;
 	FString ImageKey;
+	/** False for kinds the server draws no picture for; the tile shows the extension. */
+	bool bHasPicture = true;
 };

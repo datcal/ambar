@@ -35,6 +35,14 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("size") {
 	case "1024", "2x":
 		name = derive.FileThumb2x
+		// A model's picture is drawn by a browser (modelthumb.go), which writes one size.
+		// Asking for the large one then found nothing, and the Unreal plugin — which
+		// asked for it on every tile — showed a checkerboard for every model while its
+		// inspector, asking for the preview, showed the picture. The smaller one is a
+		// better answer than none.
+		if !s.derivativeExists(asset.SHA256, derive.FileThumb2x) {
+			name = derive.FileThumb
+		}
 	case "alpha":
 		// The transparent version §6 wants kept alongside the composited one.
 		name = derive.FileThumbAlpha

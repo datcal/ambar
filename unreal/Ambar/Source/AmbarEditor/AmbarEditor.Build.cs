@@ -22,12 +22,16 @@ public class AmbarEditor : ModuleRules
 			"ContentBrowser",
 			"HTTP",
 			"ImageWrapper",
+			"EditorSubsystem",
 			"InputCore",
 			"Json",
+			"LevelEditor",
 			"Projects",
 			"Slate",
 			"SlateCore",
+			"StatusBar",
 			"ToolMenus",
+			"ToolWidgets",
 			"UnrealEd",
 		});
 	}

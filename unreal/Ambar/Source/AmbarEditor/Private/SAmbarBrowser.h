@@ -32,7 +32,12 @@ struct FAmbarFolderNode
 class SAmbarBrowser : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SAmbarBrowser) {}
+	SLATE_BEGIN_ARGS(SAmbarBrowser)
+		: _InDrawer(false)
+	{}
+		/** Shown in the status bar drawer: the header gets a button that docks it as a tab instead. */
+		SLATE_ARGUMENT(bool, InDrawer)
+		SLATE_EVENT(FSimpleDelegate, OnDockInLayout)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -54,12 +59,13 @@ private:
 	TSharedRef<SWidget> BuildStatusBar();
 	TSharedRef<SWidget> BuildCacheMenu();
 	TSharedPtr<SWidget> BuildContextMenu();
+	TSharedPtr<SWidget> BuildFolderMenu();
 
 	// Library
 	void Activate();
 	void LoadSorts();
 	void DoSearch();
-	void SetKind(const FString& Kind);
+	void SetKind(const FString& Kind, const FString& Extra);
 	void SelectFolder(const FString& Path);
 	void RebuildPager();
 	void RebuildCrumbs();
@@ -77,9 +83,13 @@ private:
 	TSharedRef<ITableRow> GenerateFolderRow(TSharedPtr<FAmbarFolderNode> Node, const TSharedRef<STableViewBase>& Owner);
 
 	// Import
-	void QueueImport(const FAmbarAsset& Asset);
+	bool QueueImport(const FAmbarAsset& Asset);
 	void StartNextImport();
 	void RefreshImported();
+	void CancelImports();
+	/** Lists a folder (and its subfolders) page by page, asks, then queues it. bShown keeps the
+	 *  current kind filter and search; otherwise everything in the folder. */
+	void ImportFolder(const FString& Path, const FString& Name, bool bShown);
 
 	// Setup
 	void SaveAndTestConnection();
@@ -99,6 +109,17 @@ private:
 	bool bImporting = false;
 	FString LastImportFolder;
 	int32 ImportedThisRun = 0;
+	/** A run of more than one import (a selection, a folder) reports once at the end instead of
+	 *  raising a notification per file. */
+	int32 RunTotal = 0;
+	int32 RunFailed = 0;
+	FString RunFirstFailure;
+	/** Bumped to abandon a folder listing that is still paging. */
+	int32 ListingSerial = 0;
+	bool bListing = false;
+
+	bool bInDrawer = false;
+	FSimpleDelegate OnDockInLayout;
 
 	FString StatusText;
 	bool bStatusError = false;

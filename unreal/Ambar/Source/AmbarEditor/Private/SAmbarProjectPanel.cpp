@@ -7,12 +7,22 @@
 #include "AmbarStyle.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
+
+namespace
+{
+	/** The content folder a recorded import lives in, or "" when it was not imported into Content. */
+	FString ExistingFolder(const FString& ResPath)
+	{
+		return ResPath.StartsWith(TEXT("/")) ? FPackageName::GetLongPackagePath(ResPath) : FString();
+	}
+}
 
 void SAmbarProjectPanel::Construct(const FArguments& InArgs)
 {
@@ -244,8 +254,11 @@ void SAmbarProjectPanel::UpdateOne(const TSharedPtr<FAmbarProjectRow>& Row)
 	bBusy = true;
 	SetStatus(FString::Printf(TEXT("Updating %s..."), *Row->Use.Filename), false);
 	const TWeakPtr<SAmbarProjectPanel> Weak = StaticCastSharedRef<SAmbarProjectPanel>(AsShared());
+	// Into the folder it already lives in, so the update replaces it and references survive — even
+	// if it was imported before the import root or the folder layout changed.
+	const FString Folder = ExistingFolder(Row->Use.ResPath);
 	FAmbarClient::GetAsset(Row->Use.AssetId,
-		[Weak](bool bOk, const FString& Message, const TSharedPtr<FJsonObject>& Json)
+		[Weak, Folder](bool bOk, const FString& Message, const TSharedPtr<FJsonObject>& Json)
 		{
 			const TSharedPtr<SAmbarProjectPanel> Self = Weak.Pin();
 			if (!Self.IsValid())
@@ -268,7 +281,7 @@ void SAmbarProjectPanel::UpdateOne(const TSharedPtr<FAmbarProjectRow>& Row)
 					S->OnChanged.ExecuteIfBound();
 					S->Refresh();
 				}
-			});
+			}, nullptr, Folder);
 		});
 }
 
@@ -358,14 +371,20 @@ FReply SAmbarProjectPanel::UpdateAllOutdated()
 		const TSharedPtr<FAmbarProjectRow> Row = (*Queue)[0];
 		Queue->RemoveAt(0);
 		Self->SetStatus(FString::Printf(TEXT("Updating %s (%d left)..."), *Row->Use.Filename, Queue->Num()), false);
+		const FString Folder = ExistingFolder(Row->Use.ResPath);
+		// The request in flight holds the chain. It used to hold only a weak pointer, and the one
+		// strong pointer was a local of the function that started it — gone before the first answer
+		// came back — so "Update all" updated one asset and stayed busy for ever. A strong pointer
+		// here is no cycle: nothing holds this callback once it has run.
+		const TSharedPtr<TFunction<void()>> Strong = NextWeak.Pin();
 		FAmbarClient::GetAsset(Row->Use.AssetId,
-			[NextWeak](bool bOk, const FString&, const TSharedPtr<FJsonObject>& Json)
+			[Strong, Folder](bool bOk, const FString&, const TSharedPtr<FJsonObject>& Json)
 			{
-				auto Continue = [NextWeak]()
+				auto Continue = [Strong]()
 				{
-					if (const TSharedPtr<TFunction<void()>> N = NextWeak.Pin())
+					if (Strong.IsValid())
 					{
-						(*N)();
+						(*Strong)();
 					}
 				};
 				if (!bOk)
@@ -380,7 +399,7 @@ FReply SAmbarProjectPanel::UpdateAllOutdated()
 						AmbarUI::Notify(R.Message, false);
 					}
 					Continue();
-				});
+				}, nullptr, Folder);
 			});
 	};
 	(*Next)();

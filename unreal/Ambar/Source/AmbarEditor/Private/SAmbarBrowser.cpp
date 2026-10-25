@@ -9,11 +9,13 @@
 #include "AmbarStyle.h"
 #include "ContentBrowserModule.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "IContentBrowserSingleton.h"
 #include "Misc/FileHelper.h"
+#include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 #include "Modules/ModuleManager.h"
@@ -46,17 +48,26 @@ namespace
 	struct FKindChip
 	{
 		const TCHAR* Label;
-		const TCHAR* Value;
+		const TCHAR* Kind;
+		/** Query terms for a filter no kind expresses. */
+		const TCHAR* Extra;
 	};
 	const FKindChip KindChips[] = {
-		{TEXT("All"), TEXT("")},
-		{TEXT("Images"), TEXT("image")},
-		{TEXT("Sprites"), TEXT("spritesheet")},
-		{TEXT("Textures"), TEXT("texture")},
-		{TEXT("Models"), TEXT("model")},
-		{TEXT("Audio"), TEXT("audio")},
-		{TEXT("Fonts"), TEXT("font")},
+		{TEXT("All"), TEXT(""), TEXT("")},
+		{TEXT("Images"), TEXT("image"), TEXT("")},
+		{TEXT("Sprites"), TEXT("spritesheet"), TEXT("")},
+		{TEXT("Textures"), TEXT("texture"), TEXT("")},
+		{TEXT("Models"), TEXT("model"), TEXT("")},
+		{TEXT("Audio"), TEXT("audio"), TEXT("")},
+		{TEXT("Fonts"), TEXT("font"), TEXT("")},
+		// Unreal packages have no kind of their own on the server (they are "other"); the
+		// extension is what tells a Blueprint, a material or a map apart from a loose file.
+		{TEXT("Unreal"), TEXT(""), TEXT("ext:uasset,umap,uproject,uplugin")},
+		{TEXT("Code"), TEXT("script"), TEXT("")},
 	};
+
+	/** A folder import past this many files asks twice as clearly. */
+	constexpr int32 LargeFolderImport = 1000;
 
 	FString FolderKey(const FString& Path)
 	{
@@ -76,6 +87,8 @@ namespace
 void SAmbarBrowser::Construct(const FArguments& InArgs)
 {
 	const UAmbarSettings* Settings = UAmbarSettings::Get();
+	bInDrawer = InArgs._InDrawer;
+	OnDockInLayout = InArgs._OnDockInLayout;
 	Query.PageSize = FMath::Clamp(Settings->PageSize, 12, 200);
 	Imported = FAmbarProject::ImportedIds();
 
@@ -143,13 +156,17 @@ TSharedRef<SWidget> SAmbarBrowser::BuildHeader()
 	const TSharedRef<SHorizontalBox> Chips = SNew(SHorizontalBox);
 	for (const FKindChip& Chip : KindChips)
 	{
-		const FString Value = Chip.Value;
+		const FString Kind = Chip.Kind;
+		const FString Extra = Chip.Extra;
 		Chips->AddSlot().AutoWidth().Padding(FMargin(0.f, 0.f, 4.f, 0.f))
 		[
 			SNew(SCheckBox)
 			.Style(&FAppStyle::Get().GetWidgetStyle<FCheckBoxStyle>("ToggleButtonCheckbox"))
-			.IsChecked_Lambda([this, Value]() { return Query.Kind == Value ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-			.OnCheckStateChanged_Lambda([this, Value](ECheckBoxState) { SetKind(Value); })
+			.IsChecked_Lambda([this, Kind, Extra]()
+			{
+				return Query.Kind == Kind && Query.Extra == Extra ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			})
+			.OnCheckStateChanged_Lambda([this, Kind, Extra](ECheckBoxState) { SetKind(Kind, Extra); })
 			[
 				SNew(STextBlock).Text(FText::FromString(Chip.Label)).Font(AmbarUI::Font(9, true))
 				.Margin(FMargin(8.f, 3.f))
@@ -204,6 +221,16 @@ TSharedRef<SWidget> SAmbarBrowser::BuildHeader()
 						UAmbarSettings::Get()->TileSize = 64 + FMath::RoundToInt(V * 256.f);
 					})
 					.OnMouseCaptureEnd_Lambda([]() { UAmbarSettings::Get()->SaveConfig(); })
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(2.f, 0.f))
+			[
+				SNew(SButton)
+				.Visibility(bInDrawer ? EVisibility::Visible : EVisibility::Collapsed)
+				.ToolTipText(FText::FromString(TEXT("Keep Ambar open as a tab in the editor layout, like the Content Browser")))
+				.OnClicked_Lambda([this]() { OnDockInLayout.ExecuteIfBound(); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(FText::FromString(TEXT("Dock in layout")))
 				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(2.f, 0.f))
@@ -285,6 +312,7 @@ TSharedRef<SWidget> SAmbarBrowser::BuildFolderPane()
 			.TreeItemsSource(&RootItems)
 			.SelectionMode(ESelectionMode::Single)
 			.OnGenerateRow(this, &SAmbarBrowser::GenerateFolderRow)
+			.OnContextMenuOpening(this, &SAmbarBrowser::BuildFolderMenu)
 			.OnGetChildren_Lambda([this](TSharedPtr<FAmbarFolderNode> Node, TArray<TSharedPtr<FAmbarFolderNode>>& OutChildren)
 			{
 				EnsureChildren(Node);
@@ -366,6 +394,16 @@ TSharedRef<SWidget> SAmbarBrowser::BuildStatusBar()
 			.Text_Lambda([this]() { return FText::FromString(StatusText); })
 			.ColorAndOpacity_Lambda([this]() { return bStatusError ? AmbarUI::Bad() : AmbarUI::TextDim(); })
 			.Font(AmbarUI::Font(9))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(0.f, 0.f, 12.f, 0.f))
+		[
+			SNew(SButton)
+			.Visibility_Lambda([this]() { return (bListing || ImportQueue.Num() > 0) ? EVisibility::Visible : EVisibility::Collapsed; })
+			.ToolTipText(FText::FromString(TEXT("Stop after the file being imported now; nothing already imported is undone")))
+			.OnClicked_Lambda([this]() { CancelImports(); return FReply::Handled(); })
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("Cancel import"))).Font(AmbarUI::Font(9))
+			]
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
@@ -474,9 +512,10 @@ void SAmbarBrowser::OnSortChosen(TSharedPtr<FString> Chosen, ESelectInfo::Type I
 	}
 }
 
-void SAmbarBrowser::SetKind(const FString& Kind)
+void SAmbarBrowser::SetKind(const FString& Kind, const FString& Extra)
 {
 	Query.Kind = Kind;
+	Query.Extra = Extra;
 	Query.Page = 1;
 	DoSearch();
 }
@@ -782,21 +821,41 @@ void SAmbarBrowser::RefreshImported()
 	}
 }
 
-void SAmbarBrowser::QueueImport(const FAmbarAsset& Asset)
+bool SAmbarBrowser::QueueImport(const FAmbarAsset& Asset)
 {
 	for (const FAmbarAsset& Queued : ImportQueue)
 	{
 		if (Queued.Id == Asset.Id)
 		{
-			return;
+			return false;
 		}
 	}
-	ImportQueue.Add(Asset);
 	if (!bImporting)
 	{
 		ImportedThisRun = 0;
+		RunTotal = 0;
+		RunFailed = 0;
+		RunFirstFailure.Reset();
+	}
+	ImportQueue.Add(Asset);
+	++RunTotal;
+	if (!bImporting)
+	{
 		StartNextImport();
 	}
+	return true;
+}
+
+void SAmbarBrowser::CancelImports()
+{
+	++ListingSerial;
+	bListing = false;
+	const int32 Dropped = ImportQueue.Num();
+	ImportQueue.Reset();
+	RunTotal -= Dropped;
+	SetStatus(Dropped > 0
+		? FString::Printf(TEXT("Cancelled: %d not imported. The one in progress finishes."), Dropped)
+		: FString(TEXT("Cancelled.")));
 }
 
 void SAmbarBrowser::StartNextImport()
@@ -804,14 +863,25 @@ void SAmbarBrowser::StartNextImport()
 	if (ImportQueue.Num() == 0)
 	{
 		bImporting = false;
-		if (ImportedThisRun > 0)
+		if (RunTotal > 1)
+		{
+			// One report for the run: a folder of four hundred files is not four hundred toasts.
+			FString Summary = FString::Printf(TEXT("Imported %d of %d."), ImportedThisRun, RunTotal);
+			if (RunFailed > 0)
+			{
+				Summary += FString::Printf(TEXT(" %d failed — the first: %s"), RunFailed, *RunFirstFailure);
+			}
+			AmbarUI::Notify(Summary, RunFailed == 0);
+			SetStatus(Summary, RunFailed > 0);
+		}
+		else if (ImportedThisRun > 0)
 		{
 			SetStatus(FString::Printf(TEXT("Imported %d asset%s."), ImportedThisRun, ImportedThisRun == 1 ? TEXT("") : TEXT("s")));
-			if (UAmbarSettings::Get()->bSyncContentBrowser && !LastImportFolder.IsEmpty())
-			{
-				FContentBrowserModule& CB = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
-				CB.Get().SyncBrowserToFolders({LastImportFolder});
-			}
+		}
+		if (ImportedThisRun > 0 && UAmbarSettings::Get()->bSyncContentBrowser && !LastImportFolder.IsEmpty())
+		{
+			FContentBrowserModule& CB = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+			CB.Get().SyncBrowserToFolders({LastImportFolder});
 		}
 		RefreshImported();
 		return;
@@ -820,24 +890,42 @@ void SAmbarBrowser::StartNextImport()
 	bImporting = true;
 	const FAmbarAsset Asset = ImportQueue[0];
 	ImportQueue.RemoveAt(0);
-	SetStatus(FString::Printf(TEXT("Importing %s ..."), *Asset.Filename));
+	const int32 Position = RunTotal - ImportQueue.Num();
+	const FString Counter = RunTotal > 1 ? FString::Printf(TEXT("%d of %d: "), Position, RunTotal) : FString();
+	SetStatus(FString::Printf(TEXT("Importing %s%s ..."), *Counter, *Asset.Filename));
 
 	const TWeakPtr<SAmbarBrowser> Weak = StaticCastSharedRef<SAmbarBrowser>(AsShared());
 	FAmbarImporter::Import(
 		Asset,
 		[Weak, Asset](const FAmbarImportResult& Result)
 		{
-			AmbarUI::Notify(Result.bOk ? Result.Message : FString::Printf(TEXT("%s: %s"), *Asset.Filename, *Result.Message), Result.bOk);
-			if (const TSharedPtr<SAmbarBrowser> Self = Weak.Pin())
+			const TSharedPtr<SAmbarBrowser> Self = Weak.Pin();
+			const bool bRun = Self.IsValid() && Self->RunTotal > 1;
+			if (!bRun)
+			{
+				AmbarUI::Notify(Result.bOk ? Result.Message : FString::Printf(TEXT("%s: %s"), *Asset.Filename, *Result.Message), Result.bOk);
+			}
+			if (Self.IsValid())
 			{
 				if (Result.bOk)
 				{
 					++Self->ImportedThisRun;
-					Self->LastImportFolder = Result.Folder;
+					if (!Result.Folder.IsEmpty())
+					{
+						Self->LastImportFolder = Result.Folder;
+					}
 				}
 				else
 				{
-					Self->SetStatus(Result.Message, true);
+					++Self->RunFailed;
+					if (Self->RunFirstFailure.IsEmpty())
+					{
+						Self->RunFirstFailure = FString::Printf(TEXT("%s: %s"), *Asset.Filename, *Result.Message);
+					}
+					if (!bRun)
+					{
+						Self->SetStatus(Result.Message, true);
+					}
 				}
 				Self->StartNextImport();
 			}
@@ -846,9 +934,192 @@ void SAmbarBrowser::StartNextImport()
 		{
 			if (const TSharedPtr<SAmbarBrowser> Self = Weak.Pin())
 			{
-				Self->SetStatus(FString::Printf(TEXT("Downloading %s  %d%%"), *Asset.Filename, FMath::RoundToInt(Fraction * 100.f)));
+				const int32 Position = Self->RunTotal - Self->ImportQueue.Num();
+				const FString Counter = Self->RunTotal > 1 ? FString::Printf(TEXT("%d of %d: "), Position, Self->RunTotal) : FString();
+				Self->SetStatus(FString::Printf(TEXT("Downloading %s%s  %d%%"), *Counter, *Asset.Filename, FMath::RoundToInt(Fraction * 100.f)));
 			}
 		});
+}
+
+TSharedPtr<SWidget> SAmbarBrowser::BuildFolderMenu()
+{
+	const TArray<TSharedPtr<FAmbarFolderNode>> Sel = FolderTree.IsValid() ? FolderTree->GetSelectedItems() : TArray<TSharedPtr<FAmbarFolderNode>>();
+	if (Sel.Num() == 0 || !Sel[0].IsValid())
+	{
+		return nullptr;
+	}
+	const TSharedPtr<FAmbarFolderNode> Node = Sel[0];
+	const FString Path = Node->Path;
+	const FString Name = Node->Name;
+
+	FMenuBuilder Menu(/*bShouldCloseWindowAfterMenuSelection*/ true, nullptr);
+	// Not for the library root: a hundred thousand files is not a click.
+	if (!Path.IsEmpty())
+	{
+		Menu.BeginSection("AmbarImport", FText::FromString(TEXT("Library")));
+		Menu.AddMenuEntry(
+			FText::FromString(TEXT("Import this folder into the project")),
+			FText::FromString(TEXT("Everything in it and its subfolders. Models, images and sound go through Unreal's importers; .uasset and .umap are copied into Content where their references resolve; code and other files are copied under <Project>/Ambar. You are asked first.")),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Import"),
+			FUIAction(FExecuteAction::CreateLambda([this, Path, Name]() { ImportFolder(Path, Name, /*bShown*/ false); })));
+		if (!Query.Kind.IsEmpty() || !Query.Extra.IsEmpty() || !Query.Text.TrimStartAndEnd().IsEmpty())
+		{
+			Menu.AddMenuEntry(
+				FText::FromString(TEXT("Import only what the filters show")),
+				FText::FromString(TEXT("The same, limited to the current kind and search.")),
+				FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, Path, Name]() { ImportFolder(Path, Name, /*bShown*/ true); })));
+		}
+		Menu.EndSection();
+	}
+	Menu.AddMenuEntry(
+		FText::FromString(TEXT("Open in Ambar (browser)")), FText::GetEmpty(), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Path]()
+		{
+			const FString Url = FAmbarClient::BaseUrl() + TEXT("/?dir=") + FGenericPlatformHttp::UrlEncode(Path);
+			FPlatformProcess::LaunchURL(*Url, nullptr, nullptr);
+		})));
+	Menu.AddMenuEntry(
+		FText::FromString(TEXT("Copy library path")), FText::GetEmpty(), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Path]() { FPlatformApplicationMisc::ClipboardCopy(*Path); })));
+	return Menu.MakeWidget();
+}
+
+void SAmbarBrowser::ImportFolder(const FString& Path, const FString& Name, bool bShown)
+{
+	FAmbarQuery Listing;
+	Listing.Dir = Path;
+	if (bShown)
+	{
+		Listing.Kind = Query.Kind;
+		Listing.Extra = Query.Extra;
+		Listing.Text = Query.Text;
+	}
+	// The server's largest page: a vendor pack is a few thousand files, a handful of requests.
+	Listing.PageSize = 500;
+	Listing.Page = 1;
+
+	const int32 Mine = ++ListingSerial;
+	bListing = true;
+	SetStatus(FString::Printf(TEXT("Listing %s ..."), *Name));
+
+	const TWeakPtr<SAmbarBrowser> Weak = StaticCastSharedRef<SAmbarBrowser>(AsShared());
+	const TSharedRef<TArray<FAmbarAsset>> Found = MakeShared<TArray<FAmbarAsset>>();
+	const TSharedRef<TFunction<void(FAmbarQuery)>> Fetch = MakeShared<TFunction<void(FAmbarQuery)>>();
+	const TWeakPtr<TFunction<void(FAmbarQuery)>> FetchWeak = Fetch;
+
+	// Called when every page is in: say what is about to happen, and only then queue it.
+	auto Confirm = [Weak, Found, Name, Mine]()
+	{
+		const TSharedPtr<SAmbarBrowser> Self = Weak.Pin();
+		if (!Self.IsValid() || Self->ListingSerial != Mine)
+		{
+			return;
+		}
+		Self->bListing = false;
+
+		TArray<FAmbarAsset> Todo;
+		int32 Already = 0;
+		int32 Imports = 0, Packages = 0, Files = 0;
+		for (const FAmbarAsset& A : *Found)
+		{
+			if (Self->Imported.Contains(A.Id))
+			{
+				++Already;
+				continue;
+			}
+			switch (FAmbarImporter::ModeFor(A))
+			{
+			case EAmbarImportMode::Import: ++Imports; break;
+			case EAmbarImportMode::CopyToContent: ++Packages; break;
+			default: ++Files; break;
+			}
+			Todo.Add(A);
+		}
+		if (Todo.Num() == 0)
+		{
+			Self->SetStatus(Found->Num() == 0
+				? FString::Printf(TEXT("Nothing in %s to import."), *Name)
+				: FString::Printf(TEXT("Everything in %s is already in the project."), *Name));
+			return;
+		}
+
+		FString Message = FString::Printf(TEXT("Import %d file%s from \"%s\" and its subfolders?\n\n"),
+			Todo.Num(), Todo.Num() == 1 ? TEXT("") : TEXT("s"), *Name);
+		if (Imports > 0)
+		{
+			Message += FString::Printf(TEXT("  %d through Unreal's importers, under %s in the library's own folders\n"), Imports,
+				*FAmbarImporter::DestinationFolder(FAmbarAsset()));  // an asset with no folder: the import root
+		}
+		if (Packages > 0)
+		{
+			Message += FString::Printf(TEXT("  %d Unreal package%s (.uasset/.umap) copied into Content\n"), Packages, Packages == 1 ? TEXT("") : TEXT("s"));
+		}
+		if (Files > 0)
+		{
+			Message += FString::Printf(TEXT("  %d other file%s (code, configs, notes) copied to <Project>/Ambar/\n"), Files, Files == 1 ? TEXT("") : TEXT("s"));
+		}
+		if (Already > 0)
+		{
+			Message += FString::Printf(TEXT("\n%d already in the project are skipped."), Already);
+		}
+		if (Todo.Num() >= LargeFolderImport)
+		{
+			Message += TEXT("\n\nThat is a lot of files: it will take a while, and the editor is busy while each one imports. It can be cancelled from the status line.");
+		}
+		if (FMessageDialog::Open(EAppMsgType::OkCancel, FText::FromString(Message), FText::FromString(TEXT("Import folder"))) != EAppReturnType::Ok)
+		{
+			Self->SetStatus(TEXT("Folder import cancelled."));
+			return;
+		}
+		for (const FAmbarAsset& A : Todo)
+		{
+			Self->QueueImport(A);
+		}
+	};
+
+	*Fetch = [Weak, Found, FetchWeak, Confirm, Mine](FAmbarQuery Page)
+	{
+		// The request holds the chain while it is out; see SAmbarProjectPanel::UpdateAll.
+		const TSharedPtr<TFunction<void(FAmbarQuery)>> Strong = FetchWeak.Pin();
+		FAmbarClient::Search(Page, [Weak, Found, Strong, Confirm, Mine, Page](bool bOk, const FString& Message, const TSharedPtr<FJsonObject>& Json)
+		{
+			const TSharedPtr<SAmbarBrowser> Self = Weak.Pin();
+			if (!Self.IsValid() || Self->ListingSerial != Mine)
+			{
+				return; // cancelled, or another listing started
+			}
+			if (!bOk)
+			{
+				Self->bListing = false;
+				Self->SetStatus(Message, true);
+				return;
+			}
+			const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
+			if (Json->TryGetArrayField(TEXT("assets"), Assets) && Assets)
+			{
+				for (const TSharedPtr<FJsonValue>& V : *Assets)
+				{
+					const TSharedPtr<FJsonObject>* Obj = nullptr;
+					if (V.IsValid() && V->TryGetObject(Obj) && Obj)
+					{
+						Found->Add(FAmbarAsset::FromJson(*Obj));
+					}
+				}
+			}
+			const int32 Pages = FMath::Max(1, static_cast<int32>(AmbarJson::Num(Json, TEXT("pages"))));
+			if (Page.Page < Pages && Strong.IsValid())
+			{
+				Self->SetStatus(FString::Printf(TEXT("Listing ... %d files so far"), Found->Num()));
+				FAmbarQuery NextPage = Page;
+				++NextPage.Page;
+				(*Strong)(NextPage);
+				return;
+			}
+			Confirm();
+		});
+	};
+	(*Fetch)(Listing);
 }
 
 TSharedPtr<SWidget> SAmbarBrowser::BuildContextMenu()

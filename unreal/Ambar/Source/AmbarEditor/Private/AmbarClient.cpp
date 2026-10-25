@@ -122,8 +122,10 @@ FString FAmbarClient::BaseUrl()
 
 FString FAmbarClient::ThumbUrl(int64 AssetId)
 {
-	// PNG, because the editor's image wrapper has no WebP decoder; the server transcodes.
-	return FString::Printf(TEXT("%s/api/v1/assets/%lld/thumb?size=2x&format=png"), *BaseUrl(), AssetId);
+	// PNG, because the editor's image wrapper has no WebP decoder; the server transcodes. The
+	// standard size (512 px) — a tile is at most 320, and a model's picture, drawn by a browser,
+	// only ever comes in this size.
+	return FString::Printf(TEXT("%s/api/v1/assets/%lld/thumb?format=png"), *BaseUrl(), AssetId);
 }
 
 FString FAmbarClient::PreviewUrl(int64 AssetId)
@@ -149,8 +151,9 @@ void FAmbarClient::Sorts(FAmbarJsonCallback Done)
 void FAmbarClient::Search(const FAmbarQuery& Query, FAmbarJsonCallback Done)
 {
 	// group=1: the PNG, PSD and ASEPRITE of one sprite are one tile, not three.
+	const FString Text = Query.Extra.IsEmpty() ? Query.Text : (Query.Text + TEXT(" ") + Query.Extra).TrimStartAndEnd();
 	FString Url = FString::Printf(TEXT("%s/api/v1/search?group=1&q=%s&page=%d&limit=%d"),
-		*BaseUrl(), *Enc(Query.Text), FMath::Max(1, Query.Page), FMath::Max(1, Query.PageSize));
+		*BaseUrl(), *Enc(Text), FMath::Max(1, Query.Page), FMath::Max(1, Query.PageSize));
 	if (!Query.Kind.IsEmpty())
 	{
 		Url += TEXT("&kind=") + Enc(Query.Kind);

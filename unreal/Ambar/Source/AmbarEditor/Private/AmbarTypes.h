@@ -36,6 +36,8 @@ struct FAmbarQuery
 	FString Kind;
 	FString Sort;
 	FString Dir;
+	/** Query-language terms a filter chip adds to what was typed, e.g. "ext:uasset,umap". */
+	FString Extra;
 	int32 Page = 1;
 	int32 PageSize = 60;
 };

@@ -80,7 +80,7 @@ var kindLabels = map[string]string{
 	"model": "Models", "image": "Images", "audio": "Audio", "font": "Fonts",
 	"spritesheet": "Spritesheets", "texture": "Textures", "material": "Materials",
 	"tilemap": "Tilemaps", "rig": "Rigs", "video": "Video", "hdri": "HDRIs",
-	"script": "Scripts", "other": "Other",
+	"script": "Code", "other": "Other",
 }
 
 func kindLabel(kind string) string {

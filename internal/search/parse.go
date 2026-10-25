@@ -86,6 +86,14 @@ type KindTerm struct {
 	Kind string
 }
 
+// ExtTerm filters on the file extension (ext:uasset, ext:png,psd): the one question a kind
+// cannot answer, because several formats share a kind and some formats have none of their
+// own — an Unreal .uasset is `other`.
+type ExtTerm struct {
+	base
+	Exts []string
+}
+
 // HasTerm filters on a boolean analysis column: alpha, animation, semitransparent.
 type HasTerm struct {
 	base
@@ -360,6 +368,17 @@ func classify(tk token, q *Query) (Term, string) {
 			return TagTerm{base{neg}, strings.ToLower(text)}, ""
 		}
 		return KindTerm{base{neg}, v}, ""
+	case "ext":
+		var exts []string
+		for _, e := range strings.Split(strings.ToLower(value), ",") {
+			if e = strings.TrimPrefix(strings.TrimSpace(e), "."); e != "" {
+				exts = append(exts, e)
+			}
+		}
+		if len(exts) == 0 {
+			return nil, "ignored ext: (no extension given)"
+		}
+		return ExtTerm{base{neg}, exts}, ""
 	case "has":
 		v := strings.ToLower(value)
 		if !knownHasFlags[v] {

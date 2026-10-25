@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -293,5 +294,96 @@ func TestSortIndexWalkMatchesThePlanner(t *testing.T) {
 	got, err := f.ix.ListGroups(context.Background(), ListOptions{Limit: 5, Page: 1, TotalHint: 23})
 	if err != nil || got.Total != 23 || len(got.Groups) != 5 {
 		t.Errorf("with a hint: total %d, %d groups, err %v", got.Total, len(got.Groups), err)
+	}
+}
+
+// C and C++ are code; Unreal packages stay "other" and are found with ext:. Rows indexed
+// before that are moved by migration 0022, which also drops the tagger's stale type:other
+// tag but never a person's.
+func TestCodeKindExtSearchAndTheRepair(t *testing.T) {
+	f := newFixture(t)
+	f.write("unreal-pack/Content/BP_Door.uasset", "package")
+	f.write("unreal-pack/Content/Maps/Level.umap", "map")
+	f.write("unreal-pack/Source/Door.cpp", "code")
+	f.write("unreal-pack/Source/Door.h", "header")
+	f.write("unreal-pack/notes.ini", "ini")
+	f.scan()
+	ctx := context.Background()
+
+	kindOf := func(name string) string {
+		var kind string
+		if err := f.db.Reader.QueryRow(`SELECT kind FROM assets WHERE filename = ?`, name).Scan(&kind); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return kind
+	}
+	want := map[string]string{"BP_Door.uasset": "other", "Level.umap": "other", "Door.cpp": "script", "Door.h": "script", "notes.ini": "other"}
+	for name, kind := range want {
+		if got := kindOf(name); got != kind {
+			t.Errorf("%s indexed as %q, want %q", name, got, kind)
+		}
+	}
+
+	// ext: finds the Unreal packages, alone or with a negation.
+	if got := f.searchPaths("ext:uasset,umap"); len(got) != 2 {
+		t.Errorf("ext:uasset,umap => %v, want the two packages", got)
+	}
+	if got := f.searchPaths("ext:.UASSET"); len(got) != 1 {
+		t.Errorf("ext:.UASSET => %v, want one (case and the dot do not matter)", got)
+	}
+	if got := f.searchPaths("-ext:uasset,umap,cpp,h"); len(got) != 1 {
+		t.Errorf("-ext:… => %v, want only notes.ini", got)
+	}
+
+	// As an older index had the code: "other", with the tagger's type:other.
+	if _, err := f.db.Writer.Exec(`UPDATE assets SET kind = 'other' WHERE ext IN ('cpp', 'h')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.Exec(`INSERT OR IGNORE INTO tags (namespace, name, created_at, updated_at) VALUES ('type', 'other', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	var otherTag int64
+	if err := f.db.Reader.QueryRow(`SELECT id FROM tags WHERE namespace = 'type' AND name = 'other'`).Scan(&otherTag); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.Exec(`DELETE FROM asset_tags WHERE tag_id = ?`, otherTag); err != nil {
+		t.Fatal(err)
+	}
+	tag := func(source, filename string) {
+		if _, err := f.db.Writer.Exec(`INSERT INTO asset_tags (asset_id, tag_id, source, created_at)
+			SELECT id, ?, ?, 0 FROM assets WHERE filename = ?`, otherTag, source, filename); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tag("auto_type", "Door.h")
+	tag("auto_type", "BP_Door.uasset")
+	tag("manual", "Door.cpp")
+
+	sqlText, err := os.ReadFile("../db/migrations/0022_code_kind.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.ExecContext(ctx, string(sqlText)); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+	for name, kind := range want {
+		if got := kindOf(name); got != kind {
+			t.Errorf("after the migration %s is %q, want %q", name, got, kind)
+		}
+	}
+	tagged := func(filename string) bool {
+		var n int
+		f.db.Reader.QueryRow(`SELECT count(*) FROM asset_tags at JOIN assets a ON a.id = at.asset_id
+			WHERE a.filename = ? AND at.tag_id = ?`, filename, otherTag).Scan(&n)
+		return n > 0
+	}
+	if tagged("Door.h") {
+		t.Error("the tagger's type:other stayed on reclassified code")
+	}
+	if !tagged("BP_Door.uasset") {
+		t.Error("a file that is still 'other' lost its tag")
+	}
+	if !tagged("Door.cpp") {
+		t.Error("a person's tag was removed")
 	}
 }
