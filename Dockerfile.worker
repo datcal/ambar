@@ -1,0 +1,62 @@
+# The remote derive worker (`ambar worker`, internal/remote), packaged for a desktop.
+#
+# Not the server image, and it carries no Blender either. A desktop that wants FBX/.blend
+# conversions already has a Blender, and an official Linux build is a self-contained
+# directory — the binary with its own libraries beside it, needing only X11 and the C++
+# runtime from the system. So the machine's own Blender is mounted read-only at
+# /opt/blender instead of a second copy being baked in. That includes the Flathub package,
+# whose files/blender directory is the official build unchanged:
+#
+#   docker build -f Dockerfile.worker -t ambar-worker .
+#   docker run --rm \
+#     -v /mnt/assets:/library:ro \
+#     -v ~/.config/ambar/worker.token:/run/ambar/worker.token:ro \
+#     -v /var/lib/flatpak/app/org.blender.Blender/current/active/files/blender:/opt/blender:ro \
+#     ambar-worker --server http://<nas>:8973 --token-file /run/ambar/worker.token \
+#                  --blender /opt/blender/blender
+#
+# Without the Blender mount (and the --blender flag) the worker still does everything else;
+# FBX and .blend stay needs_blender, as on a server without Blender. deploy/ has a Podman
+# Quadlet unit.
+
+# --- build ------------------------------------------------------------------
+
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+        -trimpath \
+        -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+        -o /ambar ./cmd/ambar
+
+# --- runtime ----------------------------------------------------------------
+
+# glibc rather than Alpine, and the libraries a mounted Blender loads from the system even
+# in --background mode: it renders nothing, but it is linked against X11 and GL all the same.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxext6 libxkbcommon0 \
+        libsm6 libice6 libgl1 libegl1 libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /ambar /usr/local/bin/ambar
+
+# Scratch space for jobs in flight; nothing in it outlives a job.
+ENV AMBAR_LOCAL_LIBRARY_PATH=/library \
+    TMPDIR=/work/tmp
+RUN mkdir -p /work/tmp /opt/blender
+
+ENTRYPOINT ["/usr/local/bin/ambar", "worker"]
+CMD ["--workdir", "/work"]

@@ -29,6 +29,23 @@ will not change incompatibly without a major bump.
   before with the setting off. Migration 0020 adds a partial index for claiming queued jobs
   by type.
 - **`ambar token add`** creates an API token from the command line.
+- **Choose where background work runs from the Background work page** — this server,
+  automatic, or remote workers only — with the connected workers listed beside it: what
+  each is working on, how many it has done, how fast. "Remote workers only" stops the
+  server's own workers entirely. The choice is remembered in the data root and outranks
+  `AMBAR_REMOTE_DERIVE`. A worker told to wait keeps waiting instead of exiting, and a job
+  it was halfway through is still accepted after the switch.
+- **Clear the queue** from the same page: waiting jobs are deleted, running ones finish.
+- **`Dockerfile.worker`**: the worker as a container, using the desktop's own Blender mounted
+  read-only (an official Linux build is self-contained; the Flathub package's `files/blender`
+  is one), and a Podman Quadlet unit in `deploy/`. Neither image carries a Blender.
+- Blender's conversion script is written beside its output, not in the system temp
+  directory, which a sandboxed Blender cannot see.
+- **Claiming a job no longer sorts the whole queue.** The claim's index could not deliver
+  priority order past its range on `run_after`, so every claim read and sorted every queued
+  row: invisible at a few hundred jobs, most of the NAS's CPU at 170,000. Migration 0021
+  adds a partial index in claim order, both claim queries name their index, and a test pins
+  the plans.
 
 ## v1.0.0
 

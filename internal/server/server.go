@@ -233,6 +233,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /scan", auth.RequireUser(http.HandlerFunc(s.handleScanNow)))
 	mux.Handle("GET /api/v1/jobs/status", auth.RequireUser(http.HandlerFunc(s.handleJobStatus)))
 	mux.Handle("POST /jobs/retry-failed", auth.RequireUser(http.HandlerFunc(s.handleRetryFailed)))
+	mux.Handle("POST /jobs/placement", auth.RequireUser(http.HandlerFunc(s.handleWorkPlacement)))
+	mux.Handle("POST /jobs/clear-queue", auth.RequireUser(http.HandlerFunc(s.handleClearQueue)))
 
 	// Junk view (§9.1, M12): reporting only. GET shows the cached report; POST
 	// enqueues a fresh background sweep. No removal path — that is M13.
@@ -483,6 +485,14 @@ type pageData struct {
 	JobStats    *jobs.Stats
 	DeriveStats *derive.Stats
 	JobState    string
+	// Where background work runs, on the jobs page: the choice, who is connected, and
+	// which running job is on which worker. RemoteMode is empty when no coordinator is
+	// attached (tests, the CLI).
+	RemoteMode string
+	Workers    []remote.WorkerStatus
+	JobWorkers map[int64]string
+	// LocalPaused: this server's own workers are stopped (RemoteMode "only").
+	LocalPaused bool
 
 	// Junk view (§9.1, M12). Nil until a sweep has run. JunkRunning is true while a
 	// sweep is queued or in flight, so the page can say so.

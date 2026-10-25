@@ -58,9 +58,13 @@ type WorkerOptions struct {
 	IdleWait time.Duration
 }
 
-// errFatal marks an error no retry will fix: a version mismatch, a rejected token, a
-// server with remote workers turned off.
+// errFatal marks an error no retry will fix: a version mismatch or a rejected token.
 type errFatal struct{ error }
+
+// errNotAccepting is a server whose jobs page says background work runs on the server
+// itself. Not fatal: the choice can change at any moment, and the worker should pick up
+// work again when it does without anyone restarting it.
+var errNotAccepting = errors.New("the server is not taking remote workers right now")
 
 func (e errFatal) Unwrap() error { return e.error }
 
@@ -82,6 +86,9 @@ type worker struct {
 	mu       sync.Mutex
 	inFlight map[int64]bool
 	counts   map[string]int
+	// waiting is whether "the server is not taking workers" has been logged, so eight
+	// slots polling a switched-off server say so once rather than every half minute.
+	waiting bool
 }
 
 func newWorker(opts WorkerOptions) (*worker, error) {
@@ -188,6 +195,10 @@ func (w *worker) loop(ctx context.Context) error {
 		switch {
 		case errors.As(err, &fe):
 			return fe.error
+		case errors.Is(err, errNotAccepting):
+			w.setWaiting(true)
+			sleep(ctx, 30*time.Second)
+			continue
 		case err != nil:
 			if ctx.Err() == nil {
 				w.log.Warn("could not reach the server; retrying", "error", err)
@@ -195,9 +206,11 @@ func (w *worker) loop(ctx context.Context) error {
 			sleep(ctx, 10*time.Second)
 			continue
 		case claim == nil:
+			w.setWaiting(false)
 			sleep(ctx, w.opts.IdleWait)
 			continue
 		}
+		w.setWaiting(false)
 		w.process(ctx, claim)
 	}
 	return nil
@@ -248,6 +261,7 @@ func (w *worker) process(ctx context.Context, claim *ClaimResponse) {
 func (w *worker) claim(ctx context.Context) (*ClaimResponse, error) {
 	body, _ := json.Marshal(ClaimRequest{
 		Worker: w.opts.Name, Session: w.session, DeriveVersion: derive.Version, Blender: w.blender,
+		Concurrency: w.opts.Concurrency,
 	})
 	resp, err := w.do(ctx, http.MethodPost, ClaimPath, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -264,7 +278,9 @@ func (w *worker) claim(ctx context.Context) (*ClaimResponse, error) {
 		return &claim, nil
 	case http.StatusNoContent:
 		return nil, nil
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusServiceUnavailable:
+	case http.StatusServiceUnavailable:
+		return nil, errNotAccepting
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
 		return nil, errFatal{fmt.Errorf("the server refused this worker: %s", errorBody(resp))}
 	default:
 		return nil, fmt.Errorf("claim: %s", errorBody(resp))
@@ -374,6 +390,22 @@ func (w *worker) do(ctx context.Context, method, path, contentType string, body 
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	return w.opts.Client.Do(req)
+}
+
+// setWaiting logs the moment the server stops or starts taking remote workers.
+func (w *worker) setWaiting(waiting bool) {
+	w.mu.Lock()
+	changed := w.waiting != waiting
+	w.waiting = waiting
+	w.mu.Unlock()
+	if !changed {
+		return
+	}
+	if waiting {
+		w.log.Info("the server runs background work itself right now; waiting until its jobs page hands work out again")
+	} else {
+		w.log.Info("the server is handing out work again")
+	}
 }
 
 func (w *worker) track(id int64, running bool) {

@@ -153,8 +153,12 @@ func runServe(args []string) error {
 	deriver.Register(queue)
 	deriver.RegisterPalette(queue)
 
+	// Where background work runs. AMBAR_REMOTE_DERIVE is the default; the jobs page's
+	// choice, once made, is remembered in the data root and wins.
 	coordinator = remote.NewCoordinator(database, queue, deriver, remote.Options{
-		Mode: cfg.RemoteDerive, Log: log,
+		Mode:      cfg.RemoteDerive,
+		StateFile: filepath.Join(cfg.DataRoot, "work-placement"),
+		Log:       log,
 	})
 
 	// A scan enqueues the derivative work it discovered. Passing this in as a
@@ -251,10 +255,8 @@ func runServe(args []string) error {
 		return err
 	}
 	srv.EnableRemoteWorkers(coordinator)
-	if cfg.RemoteDerive != remote.ModeOff {
-		go coordinator.Run(ctx)
-		log.Info("remote derive workers accepted", "mode", cfg.RemoteDerive)
-	}
+	go coordinator.Run(ctx)
+	log.Info("background work placement", "mode", coordinator.Mode(), "local_workers_paused", queue.Paused())
 
 	// One sweep at startup, not a background ticker. Nothing in this application
 	// deletes on a schedule (ARCHITECTURE.md rule 3), and Lookup rejects expired

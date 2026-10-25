@@ -176,22 +176,32 @@ every one with its default. The ones you will actually set:
 ### A faster machine for the heavy work: `ambar worker`
 
 Thumbnails, previews and Blender conversions can run on another computer — a desktop
-beside a slow NAS — while the server keeps the database and every write. Set
-`AMBAR_REMOTE_DERIVE=auto` on the server, create a token, and run the worker where the
-library is mounted:
+beside a slow NAS — while the server keeps the database and every write. Where background
+work runs is chosen on the **Background work** page:
+
+- **This server** — everything runs on the server; workers are not given jobs.
+- **Automatic** — the server runs everything, but leaves preview work to a worker while one
+  is connected.
+- **Remote workers only** — the server starts nothing itself; preview work goes to workers,
+  and scans and sweeps wait until you switch back.
+
+The choice takes effect at once and survives restarts (`AMBAR_REMOTE_DERIVE` is only the
+default). The same page lists each connected worker, what it is working on and how fast,
+and has a button to clear the queue.
+
+The worker runs as a container ([Dockerfile.worker](Dockerfile.worker),
+[deploy/ambar-worker.container](deploy/ambar-worker.container) for Podman) with the
+machine's own Blender mounted into it — the Flathub package works — or as the plain binary:
 
 ```sh
 ssh nas "docker exec ambar /ambar token add <user> --name worker --scope write" \
   > ~/.config/ambar/worker.token
-ambar worker --server http://nas:8973 --library /mnt/game-assets \
-  --blender /var/lib/flatpak/exports/bin/org.blender.Blender
+ambar worker --server http://nas:8973 --library /mnt/game-assets --blender /path/to/blender
 ```
 
-With `auto`, the server's own workers leave derive jobs alone while a worker is connected
-and take them back when it stops; `only` leaves them to workers entirely. A worker with
-Blender is also offered every FBX and `.blend` that was waiting on one. The worker must be
-built from the same version as the server — it is refused otherwise — and never touches the
-database: SQLite over a network share is not something to try.
+A worker with Blender is also offered every FBX and `.blend` that was waiting on one. It
+must be built from the same version as the server — it is refused otherwise — and never
+touches the database: SQLite over a network share is not something to try.
 
 ### Hiding things: `.ambarignore`
 

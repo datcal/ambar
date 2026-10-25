@@ -23,6 +23,16 @@
       <button type="submit" class="primary">Scan the library</button>
     </form>
 
+    {{/* Clearing deletes waiting jobs only. Previews come back at the next scan or restart,
+         because the asset rows still say they have none — see jobs.Queue.ClearQueued. */}}
+    {{if and .JobStats .JobStats.Queued}}
+      <form method="post" action="/jobs/clear-queue" class="inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button type="submit"
+                data-confirm="Delete all {{.JobStats.Queued}} waiting jobs? Running jobs finish. Previews that still need making are queued again at the next scan or restart.">Clear the queue ({{.JobStats.Queued}})</button>
+      </form>
+    {{end}}
+
     {{if and .JobStats (or .JobStats.Failed (and .DeriveStats .DeriveStats.Failed))}}
       <form method="post" action="/jobs/retry-failed" class="inline">
         <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -30,6 +40,39 @@
       </form>
     {{end}}
   </div>
+
+  {{/* Where background work runs (internal/remote). One choice, made here, remembered across
+       restarts; a connected worker picks the change up on its next request. */}}
+  {{if .RemoteMode}}
+    <div class="card">
+      <h2>Where background work runs</h2>
+      <form method="post" action="/jobs/placement" class="stack">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <label class="choice">
+          <input type="radio" name="mode" value="off"{{if eq .RemoteMode "off"}} checked{{end}}>
+          <strong>This server</strong>
+          <span class="hint">— everything runs here; remote workers are not given jobs.</span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="mode" value="auto"{{if eq .RemoteMode "auto"}} checked{{end}}>
+          <strong>Automatic</strong>
+          <span class="hint">— this server runs everything, but leaves preview work to a remote worker
+          while one is connected and takes it back when it stops.</span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="mode" value="only"{{if eq .RemoteMode "only"}} checked{{end}}>
+          <strong>Remote workers only</strong>
+          <span class="hint">— this server starts nothing itself. Preview work goes to remote workers;
+          scans and sweeps wait until you switch back.</span>
+        </label>
+        <div><button type="submit" class="primary">Save</button></div>
+      </form>
+      {{if .LocalPaused}}
+        <p class="hint"><span class="state state-failed">paused</span>
+          This server's own workers are stopped{{if .JobStats}}{{if .JobStats.Queued}}; {{.JobStats.Queued}} jobs are waiting{{end}}{{end}}.</p>
+      {{end}}
+    </div>
+  {{end}}
 
   {{if .DeriveStats}}
     <div class="card">
@@ -45,6 +88,44 @@
         {{end}}
         {{if .DeriveStats.Failed}}<dt>Failed</dt><dd>{{.DeriveStats.Failed}}</dd>{{end}}
       </dl>
+    </div>
+  {{end}}
+
+  {{/* Remote derive workers (internal/remote): who is connected, what each is working on,
+       how fast. jobs.js repaints the body from the status poll, so it stays live through a
+       backlog that keeps this page "working" for hours. */}}
+  {{if .RemoteMode}}
+    <div class="card" data-role="workers">
+      <h2>Remote workers</h2>
+      <div class="tablewrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th scope="col">Worker</th>
+              <th scope="col">Status</th>
+              <th scope="col" class="num">Per minute</th>
+              <th scope="col" class="num">Done</th>
+              <th scope="col">Working on</th>
+            </tr>
+          </thead>
+          <tbody data-role="workers-body">
+            {{range .Workers}}
+              <tr>
+                <td><strong>{{.Name}}</strong>
+                  <span class="hint">{{if .Blender}}Blender · {{end}}{{if .Concurrency}}{{.Concurrency}} slots{{end}}</span></td>
+                <td>{{if .Connected}}<span class="state state-running">connected</span>
+                    <span class="hint">since {{jobAge .Since}}</span>
+                  {{else}}<span class="state">gone</span> <span class="hint">last seen {{jobAge .LastSeen}}</span>{{end}}</td>
+                <td class="num">{{.PerMinute}}</td>
+                <td class="num" title="ok {{.OK}} · no decoder {{.Unsupported}} · needs Blender {{.NeedsBlender}} · failed {{.Failed}}">{{.Done}}{{if .Failed}} <span class="state state-failed">{{.Failed}} failed</span>{{end}}</td>
+                <td class="errorcell">{{range .Current}}<div><code>{{.File}}</code></div>{{else}}—{{end}}</td>
+              </tr>
+            {{else}}
+              <tr><td colspan="5" class="hint">No worker has connected. Run <code>ambar worker</code> on a machine with the library mounted.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
     </div>
   {{end}}
 
@@ -71,7 +152,7 @@
           {{range .Jobs}}
             <tr>
               <td><code>{{.Type}}</code> <span class="dir">#{{.ID}}</span></td>
-              <td><span class="state state-{{.State}}">{{.State}}</span></td>
+              <td><span class="state state-{{.State}}">{{.State}}</span>{{with index $.JobWorkers .ID}} <span class="hint">on {{.}}</span>{{end}}</td>
               <td>
                 {{if ge .Percent 0}}
                   <span class="jobprogress" title="{{.ProgressDone}} of {{.ProgressTotal}}{{with .ProgressNote}} · {{.}}{{end}}">

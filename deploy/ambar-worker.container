@@ -1,0 +1,38 @@
+# Podman Quadlet unit for `ambar worker` on a desktop (Dockerfile.worker).
+#
+# Copy to ~/.config/containers/systemd/ambar-worker.container, fill in the placeholders,
+# then:
+#
+#   podman build -f Dockerfile.worker -t ambar-worker .
+#   systemctl --user daemon-reload
+#   systemctl --user start ambar-worker
+#   journalctl --user -u ambar-worker -f
+#
+# Whether the worker is given jobs is chosen on the server's Background work page, not
+# here: with "This server" selected it waits, and it starts working the moment the page
+# hands work out again. Stop it with `systemctl --user stop ambar-worker`.
+
+[Unit]
+Description=Ambar remote derive worker
+After=network-online.target
+
+[Container]
+Image=localhost/ambar-worker:latest
+ContainerName=ambar-worker
+# The library, as this machine mounts it; read-only, the worker never writes to it.
+Volume=/mnt/assets:/library:ro
+# An API token with the write scope: ambar token add <user> --name worker --scope write
+Volume=%h/.config/ambar/worker.token:/run/ambar/worker.token:ro
+# This machine's own Blender, for FBX and .blend — any official Linux build directory.
+# The Flathub package's files/blender is one. Leave this and --blender out to skip them.
+Volume=/var/lib/flatpak/app/org.blender.Blender/current/active/files/blender:/opt/blender:ro
+# mDNS (.local) names do not resolve inside a container; give the NAS's address.
+AddHost=nas.local:192.0.2.10
+Exec=--server http://nas.local:8973 --token-file /run/ambar/worker.token --library /library --workdir /work --blender /opt/blender/blender --concurrency 8 --name %H
+
+[Service]
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

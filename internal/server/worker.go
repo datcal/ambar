@@ -28,14 +28,19 @@ import (
 // (a converted model's preview.glb) plus room for the rest.
 const maxResultUpload = 1<<30 + 64<<20
 
-// EnableRemoteWorkers attaches the coordinator that answers the worker API. Without it,
-// or with AMBAR_REMOTE_DERIVE=off, every worker request is refused.
+// EnableRemoteWorkers attaches the coordinator that answers the worker API. Without it
+// every worker request is refused; with it, whether a claim is answered is the jobs page's
+// choice, read on each request.
 func (s *Server) EnableRemoteWorkers(c *remote.Coordinator) {
 	s.remote = c
 }
 
+// remoteAvailable gates the worker API. Only a *claim* depends on the current choice
+// (Coordinator.Claim refuses in ModeOff): a result or a release for a job already handed
+// out is accepted whatever the page says now, so switching to "this server" does not
+// throw away work a worker is halfway through.
 func (s *Server) remoteAvailable(w http.ResponseWriter) bool {
-	if s.remote == nil || s.remote.Mode() == remote.ModeOff {
+	if s.remote == nil {
 		s.apiError(w, http.StatusServiceUnavailable, remote.ErrDisabled.Error())
 		return false
 	}

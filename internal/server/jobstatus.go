@@ -8,6 +8,7 @@ import (
 	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
+	"github.com/datcal/ambar/internal/remote"
 )
 
 // Live job status (M16).
@@ -25,6 +26,8 @@ type activeJob struct {
 	Done    int64  `json:"done,omitempty"`
 	Total   int64  `json:"total,omitempty"`
 	Percent int    `json:"percent"`
+	// Worker names the remote worker running it; empty for this server's own workers.
+	Worker string `json:"worker,omitempty"`
 }
 
 // jobStatus is the whole answer: enough to decide whether to keep polling, and enough to
@@ -36,9 +39,15 @@ type jobStatus struct {
 	Active  []activeJob `json:"active"`
 	// Idle is the signal the poller actually cares about: nothing running, nothing queued.
 	Idle bool `json:"idle"`
+	// LocalPaused says this server's own workers are switched off on the jobs page.
+	LocalPaused bool `json:"local_paused,omitempty"`
 	// LastScan is the sidebar's line, so a finished scan updates it without a page load.
 	LastScanAgo    string `json:"last_scan_ago,omitempty"`
 	LastScanAssets int    `json:"last_scan_assets,omitempty"`
+	// RemoteMode and Workers describe remote derive workers (internal/remote), when the
+	// server accepts them.
+	RemoteMode string                `json:"remote_mode,omitempty"`
+	Workers    []remote.WorkerStatus `json:"workers,omitempty"`
 }
 
 func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +63,15 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 		Running: stats.Running,
 		Failed:  stats.Failed,
 		Idle:    stats.Pending() == 0,
+
+		LocalPaused: s.jobs.Paused(),
+	}
+
+	holders := map[int64]string{}
+	if s.remote != nil {
+		out.RemoteMode = s.remote.Mode()
+		out.Workers = s.remote.Workers()
+		holders = s.remote.Holders()
 	}
 
 	if active, err := s.jobs.Active(r.Context()); err != nil {
@@ -67,6 +85,7 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 				Done:    job.ProgressDone,
 				Total:   job.ProgressTotal,
 				Percent: job.Percent(),
+				Worker:  holders[job.ID],
 			})
 		}
 	}

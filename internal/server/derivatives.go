@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/datcal/ambar/internal/auth"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
+	"github.com/datcal/ambar/internal/remote"
 	"github.com/datcal/ambar/internal/safepath"
 )
 
@@ -166,7 +168,56 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	data.JobStats = &jobStats
 	data.DeriveStats = &deriveStats
 	data.JobState = state
+	data.LocalPaused = s.jobs.Paused()
+	if s.remote != nil {
+		data.RemoteMode = s.remote.Mode()
+		data.Workers = s.remote.Workers()
+		data.JobWorkers = s.remote.Holders()
+	}
 	s.render(w, r, "jobs.html", http.StatusOK, data)
+}
+
+// handleWorkPlacement is the jobs page's choice of where background work runs: this
+// server, a remote worker, or both with the server stepping aside (internal/remote). It
+// takes effect at once — the server's own workers stop or start, and a connected worker
+// starts or stops being handed jobs — and it holds across restarts.
+func (s *Server) handleWorkPlacement(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	mode := r.PostForm.Get("mode")
+	if s.remote == nil || !remote.ValidMode(mode) {
+		http.Error(w, "unknown choice", http.StatusBadRequest)
+		return
+	}
+	if err := s.remote.SetMode(mode); err != nil {
+		s.log.ErrorContext(r.Context(), "could not change where background work runs", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	s.log.InfoContext(r.Context(), "background work placement changed", "mode", mode, "by", s.username(r))
+	http.Redirect(w, r, "/jobs", http.StatusSeeOther)
+}
+
+// handleClearQueue deletes every queued job, at the human's request. Running jobs finish;
+// see jobs.Queue.ClearQueued for why nothing is lost by it.
+func (s *Server) handleClearQueue(w http.ResponseWriter, r *http.Request) {
+	n, err := s.jobs.ClearQueued(r.Context())
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "could not clear the queue", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	s.log.InfoContext(r.Context(), "queue cleared", "jobs", n, "by", s.username(r))
+	http.Redirect(w, r, "/jobs", http.StatusSeeOther)
+}
+
+func (s *Server) username(r *http.Request) string {
+	if u, ok := auth.UserFromContext(r.Context()); ok {
+		return u.Username
+	}
+	return ""
 }
 
 // The old handleScan lived here and redirected to /jobs. M16 replaced it with handleScanNow

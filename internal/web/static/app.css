@@ -1803,3 +1803,7 @@ body.app .bulkbar {
     background: none;
 }
 body.app .bulkbar input[type="text"] { flex: 0 1 18rem; }
+
+/* A radio choice with its explanation beside it — the jobs page's "where background work
+   runs". The label is the whole row, so the explanation is clickable too. */
+.choice { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; cursor: pointer; }

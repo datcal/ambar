@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,5 +231,123 @@ func TestWorkerCannotUploadArbitraryFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ts.cfg.DataRoot, "evil.sh")); err == nil {
 		t.Error("a traversing file name escaped the staging directory")
+	}
+}
+
+// TestJobsPageShowsRemoteWorkers: the point of the card is "who is connected and what is it
+// doing", answered on the page and in the poll that keeps it live.
+func TestJobsPageShowsRemoteWorkers(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	token := ts.apiToken(t)
+	ts.attachCoordinator(remote.ModeAuto)
+	ts.seedImages(t, map[string][]byte{"pack/hero.png": spritePNG(t, 32, 32)})
+
+	body, _ := json.Marshal(remote.ClaimRequest{Worker: "linux1", Session: "s1",
+		DeriveVersion: derive.Version, Blender: true, Concurrency: 8})
+	if resp := ts.postWorker(t, remote.ClaimPath, token, "application/json", body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim = %d", resp.StatusCode)
+	}
+
+	page := readBody(t, ts.get(t, "/jobs"))
+	for _, want := range []string{"Remote workers", "linux1", "connected", "pack/hero.png", "on linux1"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the jobs page does not show %q", want)
+		}
+	}
+
+	var status struct {
+		RemoteMode string `json:"remote_mode"`
+		Workers    []remote.WorkerStatus
+		Active     []struct {
+			Worker string `json:"worker"`
+		} `json:"active"`
+	}
+	if err := json.Unmarshal([]byte(readBody(t, ts.get(t, "/api/v1/jobs/status"))), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.RemoteMode != remote.ModeAuto || len(status.Workers) != 1 {
+		t.Fatalf("status = %+v", status)
+	}
+	w := status.Workers[0]
+	if w.Name != "linux1" || !w.Connected || !w.Blender || w.Concurrency != 8 ||
+		len(w.Current) != 1 || w.Current[0].File != "pack/hero.png" {
+		t.Errorf("worker = %+v", w)
+	}
+	if len(status.Active) != 1 || status.Active[0].Worker != "linux1" {
+		t.Errorf("the running job does not say where it runs: %+v", status.Active)
+	}
+}
+
+// TestWorkPlacementOnTheJobsPage: the choice of where background work runs is made on the
+// page, takes effect at once on both sides, and survives a restart.
+func TestWorkPlacementOnTheJobsPage(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	token := ts.apiToken(t)
+	stateFile := filepath.Join(ts.cfg.DataRoot, "work-placement")
+	ts.srv.EnableRemoteWorkers(remote.NewCoordinator(ts.db, ts.queue, ts.deriver,
+		remote.Options{Mode: remote.ModeOff, StateFile: stateFile}))
+	ts.seedImages(t, map[string][]byte{"pack/hero.png": spritePNG(t, 32, 32)})
+
+	claim := func() int {
+		body, _ := json.Marshal(remote.ClaimRequest{Worker: "pc", Session: "s1", DeriveVersion: derive.Version})
+		return ts.postWorker(t, remote.ClaimPath, token, "application/json", body).StatusCode
+	}
+
+	if page := readBody(t, ts.get(t, "/jobs")); !strings.Contains(page, "Where background work runs") {
+		t.Fatal("the jobs page has no placement choice")
+	}
+	if code := claim(); code != http.StatusServiceUnavailable {
+		t.Errorf("with \"this server\" chosen, a claim = %d, want 503", code)
+	}
+
+	if code, body := ts.postForm(t, "/jobs/placement", url.Values{"mode": {"only"}}); code != http.StatusSeeOther {
+		t.Fatalf("placement = %d\n%s", code, body)
+	}
+	if !ts.queue.Paused() {
+		t.Error("\"remote workers only\" did not stop this server's workers")
+	}
+	if code := claim(); code != http.StatusOK {
+		t.Errorf("after choosing remote workers, a claim = %d, want 200", code)
+	}
+	if raw, _ := os.ReadFile(stateFile); strings.TrimSpace(string(raw)) != remote.ModeOnly {
+		t.Errorf("the choice was not remembered: %q", raw)
+	}
+	if status := readBody(t, ts.get(t, "/api/v1/jobs/status")); !strings.Contains(status, `"local_paused":true`) {
+		t.Errorf("the poll does not say paused: %s", status)
+	}
+
+	// A restart reads the choice back, whatever the environment default says.
+	again := remote.NewCoordinator(ts.db, ts.queue, ts.deriver, remote.Options{Mode: remote.ModeOff, StateFile: stateFile})
+	if again.Mode() != remote.ModeOnly {
+		t.Errorf("after a restart the mode is %s, want only", again.Mode())
+	}
+
+	ts.postForm(t, "/jobs/placement", url.Values{"mode": {"off"}})
+	if ts.queue.Paused() {
+		t.Error("choosing this server did not restart its workers")
+	}
+}
+
+// TestClearQueueFromTheJobsPage: the button deletes what is waiting, and only that.
+func TestClearQueueFromTheJobsPage(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	ts.seedImages(t, map[string][]byte{
+		"pack/a.png": spritePNG(t, 16, 16),
+		"pack/b.png": spritePNG(t, 24, 24),
+	})
+	if page := readBody(t, ts.get(t, "/jobs")); !strings.Contains(page, "Clear the queue (2)") {
+		t.Fatal("the jobs page does not offer to clear two waiting jobs")
+	}
+	if code, body := ts.postForm(t, "/jobs/clear-queue", url.Values{}); code != http.StatusSeeOther {
+		t.Fatalf("clear = %d\n%s", code, body)
+	}
+	if n := ts.queuedJobs(t, derive.JobType); n != 0 {
+		t.Errorf("%d jobs still queued", n)
 	}
 }

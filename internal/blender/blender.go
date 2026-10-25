@@ -80,7 +80,11 @@ func Convert(ctx context.Context, bin, src, dest string) error {
 	ctx, cancel := context.WithTimeout(ctx, ConvertTimeout)
 	defer cancel()
 
-	scriptFile, err := os.CreateTemp("", "ambar-blender-*.py")
+	// The script goes beside the output rather than in the system temp directory. A
+	// sandboxed Blender — the flatpak, on a desktop running `ambar worker` — has a /tmp
+	// of its own and cannot see the caller's, but it must be able to write dest, so the
+	// directory dest is in is one it can read.
+	scriptFile, err := os.CreateTemp(filepath.Dir(dest), "ambar-blender-*.py")
 	if err != nil {
 		return fmt.Errorf("blender: temp script: %w", err)
 	}

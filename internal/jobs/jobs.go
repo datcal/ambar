@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/datcal/ambar/internal/db"
@@ -125,6 +126,9 @@ type Queue struct {
 	// skip names job types this process's own workers leave alone; see Options.Skip.
 	skip func() []string
 
+	// paused stops this process's workers taking new jobs; see SetPaused.
+	paused atomic.Bool
+
 	// nudge wakes an idle worker the moment something is enqueued, so the queue is
 	// responsive without polling tightly.
 	nudge chan struct{}
@@ -154,7 +158,7 @@ func New(database *db.DB, opts Options) *Queue {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Queue{
+	q := &Queue{
 		db:       database,
 		log:      log,
 		workers:  workers,
@@ -163,7 +167,39 @@ func New(database *db.DB, opts Options) *Queue {
 		nudge:    make(chan struct{}, 1),
 		skip:     opts.Skip,
 	}
+	return q
 }
+
+// SetPaused stops or restarts this process's own workers. A paused queue still accepts
+// jobs, and still hands them to a remote worker through ClaimTypes; only the local
+// workers stop claiming. A job already running finishes.
+//
+// The jobs page's "where background work runs" choice drives it (internal/remote), and
+// that choice is what is remembered across restarts, not this flag.
+func (q *Queue) SetPaused(paused bool) {
+	q.paused.Store(paused)
+	if !paused {
+		q.Nudge()
+	}
+}
+
+// ClearQueued deletes every job waiting to run, at a human's request from the jobs page.
+// Running jobs finish and are kept, and so is the history of finished and failed ones.
+//
+// Nothing about the work is lost: a derive job is the queue's copy of "this asset has no
+// preview yet", which the asset row still says, so the next scan or restart queues it
+// again. Clearing is for stopping a flood now, not for deciding it never happens.
+func (q *Queue) ClearQueued(ctx context.Context) (int64, error) {
+	res, err := q.db.Writer.ExecContext(ctx, `DELETE FROM jobs WHERE state = 'queued'`)
+	if err != nil {
+		return 0, fmt.Errorf("clear the queue: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// Paused reports whether this process's own workers are stopped.
+func (q *Queue) Paused() bool { return q.paused.Load() }
 
 // WithClock replaces the clock, for tests.
 func (q *Queue) WithClock(now func() time.Time) *Queue {
@@ -349,6 +385,9 @@ func (q *Queue) work(ctx context.Context, worker int) {
 
 // runOne claims and runs a single job, reporting whether one was found.
 func (q *Queue) runOne(ctx context.Context, worker int) (bool, error) {
+	if q.paused.Load() {
+		return false, nil
+	}
 	job, ok, err := q.claim(ctx)
 	if err != nil || !ok {
 		return false, err
@@ -499,6 +538,24 @@ func (q *Queue) Reporter(ctx context.Context) func(done, total int64, note strin
 	}
 }
 
+// The two "what runs next" lookups. Both name their index: left to itself, the planner
+// picked jobs_claim_idx, whose range on run_after cannot deliver the priority order, and
+// sorted the entire queue for every claim — see migrations 0020 and 0021. INDEXED BY also
+// makes a missing index an error rather than a silent return to that.
+const (
+	nextQueuedSQL = `
+		SELECT id FROM jobs INDEXED BY jobs_queued_order_idx
+		WHERE state = 'queued' AND run_after <= ?
+		ORDER BY priority DESC, id
+		LIMIT 1`
+
+	nextQueuedOfTypeSQL = `
+		SELECT id, priority FROM jobs INDEXED BY jobs_queued_type_idx
+		WHERE state = 'queued' AND type = ? AND run_after <= ?
+		ORDER BY priority DESC, id
+		LIMIT 1`
+)
+
 // claim atomically takes the next runnable job.
 //
 // One statement, which is what makes it safe: §4 routes every write through a single
@@ -519,12 +576,7 @@ func (q *Queue) claim(ctx context.Context) (Job, bool, error) {
 	err := q.db.Writer.QueryRowContext(ctx, `
 		UPDATE jobs
 		SET state = 'running', attempts = attempts + 1, started_at = ?, updated_at = ?
-		WHERE id = (
-		    SELECT id FROM jobs
-		    WHERE state = 'queued' AND run_after <= ?
-		    ORDER BY priority DESC, id
-		    LIMIT 1
-		)
+		WHERE id = (`+nextQueuedSQL+`)
 		RETURNING id, type, payload_json, attempts`,
 		now.Unix(), now.Unix(), now.Unix(),
 	).Scan(&job.ID, &job.Type, &job.Payload, &job.Attempts)
@@ -582,11 +634,8 @@ func (q *Queue) ClaimTypes(ctx context.Context, types []string) (Job, bool, erro
 		for _, t := range types {
 			var id int64
 			var priority int
-			err := q.db.Reader.QueryRowContext(ctx, `
-				SELECT id, priority FROM jobs
-				WHERE state = 'queued' AND type = ? AND run_after <= ?
-				ORDER BY priority DESC, id
-				LIMIT 1`, t, now.Unix()).Scan(&id, &priority)
+			err := q.db.Reader.QueryRowContext(ctx, nextQueuedOfTypeSQL, t, now.Unix()).
+				Scan(&id, &priority)
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}

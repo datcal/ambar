@@ -812,3 +812,111 @@ func TestSkipLeavesATypeForSomeoneElse(t *testing.T) {
 		t.Errorf("the skipped job is %s, want queued", state)
 	}
 }
+
+// TestClaimQueriesDoNotSortTheQueue pins the query plans. Both lookups once read every
+// queued row and sorted them to find one — harmless at a few hundred jobs, and most of the
+// NAS's CPU at 170,000. The plan must walk an index in claim order and use no temporary
+// B-tree, however large the queue.
+func TestClaimQueriesDoNotSortTheQueue(t *testing.T) {
+	q, database := newTestQueue(t, 1)
+	ctx := context.Background()
+	for i := 0; i < 500; i++ {
+		typ := "asset.derive"
+		if i%5 == 0 {
+			typ = "asset.modelpalette"
+		}
+		if _, err := q.Enqueue(ctx, typ, nil, EnqueueOptions{Priority: i % 3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, c := range []struct {
+		name, query, index string
+		args               []any
+	}{
+		{"claim", nextQueuedSQL, "jobs_queued_order_idx", []any{time.Now().Unix()}},
+		{"claim by type", nextQueuedOfTypeSQL, "jobs_queued_type_idx", []any{"asset.derive", time.Now().Unix()}},
+	} {
+		rows, err := database.Reader.Query("EXPLAIN QUERY PLAN "+c.query, c.args...)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		var plan []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, detail)
+		}
+		rows.Close()
+
+		joined := strings.Join(plan, " | ")
+		if strings.Contains(joined, "TEMP B-TREE") {
+			t.Errorf("%s sorts the queue: %s", c.name, joined)
+		}
+		if !strings.Contains(joined, c.index) {
+			t.Errorf("%s does not use %s: %s", c.name, c.index, joined)
+		}
+	}
+}
+
+// TestPausedQueueRunsNothingButStillHandsOut: "remote workers only" on the jobs page.
+// Paused, the local workers take no job while a remote claim still gets one.
+func TestPausedQueueRunsNothingButStillHandsOut(t *testing.T) {
+	q, _ := newTestQueue(t, 1)
+	ran := make(chan struct{}, 4)
+	q.Register("work", func(context.Context, []byte) error { ran <- struct{}{}; return nil })
+	q.SetPaused(true)
+
+	ctx := context.Background()
+	first, _ := q.Enqueue(ctx, "work", nil, EnqueueOptions{})
+	if _, err := q.Enqueue(ctx, "work", nil, EnqueueOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := q.runOne(ctx, 0); err != nil || ran {
+		t.Fatalf("a paused queue ran a job: ran=%v err=%v", ran, err)
+	}
+	if job, ok, err := q.ClaimTypes(ctx, []string{"work"}); err != nil || !ok || job.ID != first {
+		t.Errorf("remote claim while paused = %d, %v, %v", job.ID, ok, err)
+	}
+
+	q.SetPaused(false)
+	if ok, err := q.runOne(ctx, 0); err != nil || !ok {
+		t.Errorf("a resumed queue did not run the waiting job: %v, %v", ok, err)
+	}
+}
+
+// TestClearQueuedLeavesRunningAndHistory: clearing is for what is waiting. A running job
+// finishes, and finished and failed jobs stay in the history.
+func TestClearQueuedLeavesRunningAndHistory(t *testing.T) {
+	q, database := newTestQueue(t, 1)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if _, err := q.Enqueue(ctx, "work", nil, EnqueueOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running, _, _ := q.ClaimTypes(ctx, []string{"work"})
+	done, _, _ := q.ClaimTypes(ctx, []string{"work"})
+	if err := q.Settle(ctx, done, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := q.ClearQueued(ctx)
+	if err != nil || n != 3 {
+		t.Fatalf("cleared %d, %v; want 3", n, err)
+	}
+	var states []string
+	rows, _ := database.Reader.Query(`SELECT state FROM jobs ORDER BY id`)
+	for rows.Next() {
+		var st string
+		rows.Scan(&st)
+		states = append(states, st)
+	}
+	rows.Close()
+	if strings.Join(states, ",") != "running,done" {
+		t.Errorf("left %v, want the running job %d and the done one", states, running.ID)
+	}
+}

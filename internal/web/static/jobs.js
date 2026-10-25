@@ -19,7 +19,8 @@
     const line = document.querySelector('[data-role="scan-line"]');
     const table = document.querySelector('[data-role="jobs-table"]');
     const scanForm = document.querySelector('[data-role="scan-form"]');
-    if (!line && !table && !scanForm) return;
+    const workersBody = document.querySelector('[data-role="workers-body"]');
+    if (!line && !table && !scanForm && !workersBody) return;
 
     let timer = 0;
     let stopped = false;
@@ -34,11 +35,91 @@
         return parts.join(" · ");
     }
 
+    // How long ago an ISO timestamp was, in the jobs table's own style.
+    function ago(iso) {
+        const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+        if (seconds < 60) return Math.floor(seconds) + "s ago";
+        if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+        if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+        return Math.floor(seconds / 86400) + "d ago";
+    }
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    // Remote derive workers (internal/remote): one row per worker, rebuilt from the poll.
+    // Built with textContent throughout — a file name is library content, not markup.
+    function paintWorkers(workers) {
+        if (!workersBody) return;
+        workersBody.replaceChildren();
+        if (!workers || workers.length === 0) {
+            const row = el("tr");
+            const cell = el("td", "hint", "No worker has connected. Run ambar worker on a machine with the library mounted.");
+            cell.colSpan = 5;
+            row.append(cell);
+            workersBody.append(row);
+            return;
+        }
+        for (const w of workers) {
+            const row = el("tr");
+
+            const name = el("td");
+            name.append(el("strong", "", w.name));
+            const traits = [];
+            if (w.blender) traits.push("Blender");
+            if (w.concurrency) traits.push(w.concurrency + " slots");
+            if (traits.length) name.append(" ", el("span", "hint", traits.join(" · ")));
+
+            const status = el("td");
+            if (w.connected) {
+                status.append(el("span", "state state-running", "connected"), " ",
+                    el("span", "hint", "since " + ago(w.since)));
+            } else {
+                status.append(el("span", "state", "gone"), " ",
+                    el("span", "hint", "last seen " + ago(w.last_seen)));
+            }
+
+            const rate = el("td", "num", String(w.per_minute || 0));
+
+            const done = el("td", "num", String(w.done || 0));
+            done.title = "ok " + (w.ok || 0) + " · no decoder " + (w.unsupported || 0) +
+                " · needs Blender " + (w.needs_blender || 0) + " · failed " + (w.failed || 0);
+            if (w.failed) done.append(" ", el("span", "state state-failed", w.failed + " failed"));
+
+            const current = el("td", "errorcell");
+            if (w.current && w.current.length) {
+                for (const job of w.current) {
+                    const line = el("div");
+                    line.append(el("code", "", job.file));
+                    current.append(line);
+                }
+            } else {
+                current.textContent = "—";
+            }
+
+            row.append(name, status, rate, done, current);
+            workersBody.append(row);
+        }
+    }
+
     function paint(status) {
+        paintWorkers(status.workers);
         if (line) {
             if (status.running > 0 || status.queued > 0) {
                 const bits = [];
-                for (const job of status.active || []) bits.push(labelFor(job));
+                // A worker running eight derives at once would otherwise be eight copies of
+                // the same word; identical labels collapse into one with a count.
+                const counts = new Map();
+                for (const job of status.active || []) {
+                    const label = labelFor(job) + (job.worker ? " on " + job.worker : "");
+                    counts.set(label, (counts.get(label) || 0) + 1);
+                }
+                for (const [label, n] of counts) bits.push(n > 1 ? label + " ×" + n : label);
+                if (status.local_paused) bits.push("this server paused");
                 if (status.queued > 0) bits.push(status.queued + " queued");
                 line.textContent = bits.join(" · ") || "working…";
                 line.classList.add("is-working");
