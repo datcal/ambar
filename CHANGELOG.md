@@ -4,6 +4,17 @@ Notable changes per release. This project follows [semantic versioning](https://
 while it is on `1.x`, the HTTP API, the configuration variables and the on-disk layout
 will not change incompatibly without a major bump.
 
+## Unreleased
+
+- **`.ambarignore`**: a per-folder hide list with the everyday `.gitignore` syntax
+  (names, `dir/`, anchored paths, `**`). Hidden files leave the index on the next scan
+  instead of being marked missing; nothing on disk is touched, and removing the rule
+  brings them back. Bad lines are reported in the scan summary.
+- **`.unitypackage` files are no longer indexed**, like the archives before them. Rows an
+  earlier scan created are dropped on the next one.
+- A scan never drops the row of an asset a Godot project has used, whatever rule excludes
+  it — that would have cascaded the project's record and its `CREDITS.md` entry away.
+
 ## v1.0.0
 
 First tagged release. Everything below already existed and had been running against a

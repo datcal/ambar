@@ -173,6 +173,28 @@ every one with its default. The ones you will actually set:
 | `AMBAR_IGNORE_GLOBS` | junk to skip |
 | `AMBAR_LOCAL_LIBRARY_PATH` | the library as *your desktop* sees it, for "open in…" |
 
+### Hiding things: `.ambarignore`
+
+A `.ambarignore` in any folder of the library hides files and folders beneath it from
+the index — the grid, search and the Godot plugin. Nothing on disk is touched; delete the
+rule and the next scan brings them back.
+
+```
+# a name, at any depth below this folder
+*.psd
+# a trailing slash: folders only
+Unreal/
+# a slash elsewhere: a path relative to this folder; ** is any number of folders
+Source/FBX/Chr/Unreal_Characters
+**/Demo_Models
+```
+
+Matching is case-insensitive. `!` negation is not supported, and a line that cannot be
+used is reported in the scan summary rather than ignored silently. One file at the library
+root applies everywhere. Archives and `.unitypackage` files are never indexed, with or
+without one. An asset a Godot project has used stays indexed even when hidden, so its
+credits survive.
+
 ## Command line
 
 ```

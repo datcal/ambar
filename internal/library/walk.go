@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -70,6 +71,10 @@ type WalkResult struct {
 	// the scan summary because a surprisingly large number usually means a
 	// `__MACOSX` tree, which is worth telling the human about.
 	IgnoredCount int
+	// Hidden is how many entries a .ambarignore excluded — a folder counts once, not
+	// once per file inside it. Kept apart from IgnoredCount because one is the
+	// application's idea of junk and the other is the human's own choice.
+	Hidden int
 	// SkippedNonAssets is how many files were present but are not artwork —
 	// readmes, licences, archives, dotfiles. Counted separately from junk because
 	// these are legitimate files that simply do not belong in a grid of assets.
@@ -79,6 +84,28 @@ type WalkResult struct {
 	// Errors are per-file problems. §16 wants deliberately broken files handled,
 	// and one unreadable file must never abandon a 20,000-file walk.
 	Errors []error
+
+	// The rules this walk applied, kept so Excluded can answer for paths the walk
+	// never reached.
+	ignore *Matcher
+	hidden *IgnoreFiles
+}
+
+// Excluded reports whether a library-relative file path is one this walk would never
+// index: junk, hidden by a .ambarignore, or not an asset at all (an archive, a readme,
+// a .unitypackage).
+//
+// The scan asks this about a row that has stopped appearing in the walk, because "the
+// file is gone" and "the file is still there but no longer indexed" need different
+// answers — see index.Scan.
+func (r *WalkResult) Excluded(relPath string) bool {
+	if r.ignore != nil && r.ignore.IgnoredPath(relPath) {
+		return true
+	}
+	if r.hidden.HiddenPath(relPath) {
+		return true
+	}
+	return !IsAssetFile(path.Base(filepath.ToSlash(relPath)))
 }
 
 // WalkOptions configures a walk.
@@ -136,7 +163,11 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 		return false
 	}
 
-	result := &WalkResult{}
+	// The .ambarignore files are read as each directory is entered, and shared by
+	// the pre-pass and the main walk so each one is read once.
+	hidden := newIgnoreFiles(opts.Root)
+	hidden.load(".")
+	result := &WalkResult{ignore: ignore, hidden: hidden}
 
 	// §5.1 lists the `.ambar.json` marker first because it must beat every
 	// heuristic. Finding it needs a look-ahead: a sidecar can sit deeper than the
@@ -144,7 +175,7 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 	// someone copies a pack folder somewhere new — §3's "a copied folder carries
 	// its own metadata with it". This pre-pass reads no file contents, only
 	// directory entries.
-	sidecarBelow, err := findSidecarAncestors(opts.Root, ignore)
+	sidecarBelow, err := findSidecarAncestors(opts.Root, ignore, hidden)
 	if err != nil {
 		return nil, err
 	}
@@ -211,11 +242,19 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 				result.ReservedSkipped = append(result.ReservedSkipped, relPath)
 				return fs.SkipDir
 			}
+			// The human's own .ambarignore, after the junk rules so a `__MACOSX`
+			// still counts as junk whatever the file says.
+			if hidden.hidden(relPath, true) {
+				result.Hidden++
+				return fs.SkipDir
+			}
 			// WalkDir does not follow symlinks; this stops a symlinked directory
 			// being reported as content in its own right.
 			if d.Type()&os.ModeSymlink != 0 {
 				return nil
 			}
+			// Before isPack below, which must not count what this folder hides.
+			hidden.load(relPath)
 
 			parent := parentDir(relPath)
 
@@ -244,7 +283,7 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 			case hasSidecar(absPath):
 			case sidecarBelow[relPath]:
 				return nil
-			case isPack(absPath, ignore) || atPackLevel:
+			case isPack(absPath, relPath, ignore, hidden) || atPackLevel:
 			default:
 				return nil
 			}
@@ -260,6 +299,10 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 		name := d.Name()
 		if ignore.Ignored(name) {
 			result.IgnoredCount++
+			return nil
+		}
+		if hidden.hidden(relPath, false) {
+			result.Hidden++
 			return nil
 		}
 		// Not artwork, so not indexed: readmes, licences, PDFs, downloaded archives,
@@ -322,6 +365,9 @@ func Walk(opts WalkOptions) (*WalkResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk %s: %w", opts.Root, err)
 	}
+	// A line that could not be used is reported, never fatal: one typo in one
+	// folder's .ambarignore must not stop the library being indexed.
+	result.Errors = append(result.Errors, hidden.errs...)
 
 	// Only packs holding at least one asset are real. A directory of nothing but
 	// junk or documentation is not a pack, and its files are dropped with it —
@@ -369,7 +415,7 @@ func hasSidecar(absDir string) bool {
 //
 // A directory in this set is never a pack: something deeper is, and §5.1 makes the
 // marker authoritative over every heuristic.
-func findSidecarAncestors(root string, ignore *Matcher) (map[string]bool, error) {
+func findSidecarAncestors(root string, ignore *Matcher, hidden *IgnoreFiles) (map[string]bool, error) {
 	below := map[string]bool{}
 
 	err := filepath.WalkDir(root, func(absPath string, d fs.DirEntry, err error) error {
@@ -396,6 +442,12 @@ func findSidecarAncestors(root string, ignore *Matcher) (map[string]bool, error)
 			if !strings.Contains(filepath.ToSlash(rel), "/") && IsReserved(name) {
 				return fs.SkipDir
 			}
+			// A sidecar inside a hidden folder must not decide where a pack is.
+			rel = filepath.ToSlash(rel)
+			if hidden.hidden(rel, true) {
+				return fs.SkipDir
+			}
+			hidden.load(rel)
 			return nil
 		}
 		if name != SidecarName {
@@ -423,7 +475,11 @@ func findSidecarAncestors(root string, ignore *Matcher) (map[string]bool, error)
 
 // isPack applies §5.1's first three tests to one directory. Rule 4 is positional
 // and lives in Walk, which is the only place that knows about buckets.
-func isPack(absDir string, ignore *Matcher) bool {
+//
+// What a .ambarignore hides is not counted: a folder holding nothing but a hidden
+// .unitypackage and some subfolders is not a pack on the strength of that file, and
+// treating it as one would swallow the subfolders that are.
+func isPack(absDir, relDir string, ignore *Matcher, hidden *IgnoreFiles) bool {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return false
@@ -436,7 +492,7 @@ func isPack(absDir string, ignore *Matcher) bool {
 	)
 	for _, e := range entries {
 		name := e.Name()
-		if ignore.Ignored(name) {
+		if ignore.Ignored(name) || hidden.hidden(relDir+"/"+name, e.IsDir()) {
 			continue
 		}
 		// Test 1: an explicit sidecar is the strongest signal and needs no

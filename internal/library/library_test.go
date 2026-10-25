@@ -309,6 +309,10 @@ func TestIsAssetFile(t *testing.T) {
 	for _, name := range []string{
 		"README", "readme.txt", "README.md", "LICENSE", "license.txt",
 		".ambar.json", "notes.md", "source.url", "info.nfo",
+		// Archives, including an engine's own package format.
+		"pack.zip", "POLYGON_BossZombies_Unity_2022_3_v1_4_1.unitypackage", "Pack.UnityPackage",
+		// The hide list itself, like every dotfile.
+		".ambarignore",
 	} {
 		if IsAssetFile(name) {
 			t.Errorf("IsAssetFile(%q) = true, want false", name)

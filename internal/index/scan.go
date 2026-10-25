@@ -126,7 +126,14 @@ type ScanReport struct {
 	// invariant 2 already says the index is rebuildable from the filesystem. The
 	// alternative is worse — the row would sit in "missing" forever, counted in the
 	// banner, indistinguishable from a real file lost to an unmounted share.
+	//
+	// The same goes for a path a .ambarignore now hides, and for a file that is no
+	// longer counted as an asset at all (a .unitypackage indexed before the rule).
 	PurgedIgnored int
+	// KeptInUse counts rows that would have been purged but are referenced by a Godot
+	// project. Dropping one would cascade its project_uses away, and with them the
+	// project's CREDITS.md entry and its history — so the row stays, visible.
+	KeptInUse int
 
 	// Asset groups (§5.1). MultiVariantGroups is the interesting number: each one
 	// would otherwise be several grid rows for the same artwork.
@@ -134,6 +141,8 @@ type ScanReport struct {
 	MultiVariantGroups int
 
 	IgnoredJunk int
+	// Hidden counts entries a .ambarignore excluded; a hidden folder counts once.
+	Hidden int
 	// SkippedNonAssets counts files that exist but are not artwork — readmes,
 	// licences, archives, dotfiles. Reported so "why is my file not in the grid" has
 	// an answer in the scan summary rather than in the source.
@@ -179,6 +188,7 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 	report.PacksFound = len(walked.Packs)
 	report.FilesSeen = len(walked.Files)
 	report.IgnoredJunk = walked.IgnoredCount
+	report.Hidden = walked.Hidden
 	report.SkippedNonAssets = walked.SkippedNonAssets
 	report.Buckets = walked.Buckets
 	report.ReservedSkipped = walked.ReservedSkipped
@@ -330,18 +340,41 @@ func (ix *Indexer) Scan(ctx context.Context, opts ScanOptions) (*ScanReport, err
 
 	// A row can vanish from the walk for two different reasons, and they deserve
 	// different answers: the file is gone (mark it missing, keep it forever, §12), or
-	// the path is one the ignore list now covers (drop the row — it should never have
-	// been indexed, and it is not coming back).
-	var purge []int64
+	// the walk now excludes the path — junk, hidden by a .ambarignore, or no longer an
+	// asset (drop the row — it is not coming back while the rule stands).
+	var excluded []int64
 	kept := stillMissing[:0]
 	for _, prior := range stillMissing {
-		if ix.ignore.IgnoredPath(libraryPath(prior.packRelPath, prior.relPath)) {
-			purge = append(purge, prior.id)
+		if walked.Excluded(libraryPath(prior.packRelPath, prior.relPath)) {
+			excluded = append(excluded, prior.id)
 			continue
 		}
 		kept = append(kept, prior)
 	}
 	stillMissing = kept
+
+	// Except what a Godot project uses. A .ambarignore is a view preference, and it
+	// must not be able to erase a project's record of an asset as a side effect.
+	var purge []int64
+	if len(excluded) > 0 {
+		inUse, err := ix.assetsInProjects(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range excluded {
+			if inUse[id] {
+				report.KeptInUse++
+				continue
+			}
+			purge = append(purge, id)
+		}
+	}
+	if report.KeptInUse > 0 {
+		ix.log.WarnContext(ctx,
+			"some excluded files are used by a Godot project; their rows were kept so the "+
+				"project's credits survive",
+			"rows", report.KeptInUse)
+	}
 
 	report.PurgedIgnored = len(purge)
 	if len(purge) > 0 {
@@ -662,6 +695,27 @@ func purgeAsset(ctx context.Context, tx *sql.Tx, id int64) error {
 		return fmt.Errorf("purge ignored asset %d: %w", id, err)
 	}
 	return nil
+}
+
+// assetsInProjects returns every asset id a Godot project has recorded a use of —
+// soft-removed uses included, because project_uses keeps those for credits and history
+// and a purge would cascade them away.
+func (ix *Indexer) assetsInProjects(ctx context.Context) (map[int64]bool, error) {
+	rows, err := ix.db.Reader.QueryContext(ctx, `SELECT DISTINCT asset_id FROM project_uses`)
+	if err != nil {
+		return nil, fmt.Errorf("load project uses: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan project use: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // markMissing records that a file is gone. It never deletes (§12).

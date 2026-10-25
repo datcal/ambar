@@ -79,6 +79,7 @@ UI polls for status. That is why a scan of 20,000 files can be started from a bu
       …/sprite.png             an asset
       …/sprite.psd             a *variant* of the same asset, not a second one
   …/.ambar.json                optional sidecar: metadata that travels with the folder
+  …/.ambarignore               optional: what in this folder not to index
 
 /data                          everything Ambar generates
   ambar.db                     the index (+ -wal, -shm)

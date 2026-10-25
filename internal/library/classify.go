@@ -216,6 +216,12 @@ func IsAssetFile(filename string) bool {
 	// a tile you can neither preview nor use.
 	case "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz":
 		return false
+	// An engine's own package, which is an archive by another name: a .unitypackage is
+	// a gzipped tar of a Unity project's Assets folder, and nothing outside Unity can
+	// open or preview it. Synty ships one in every pack, beside the source FBX and
+	// textures it is built from, so it is never the only copy of the artwork.
+	case "unitypackage":
+		return false
 	// Companion files of a model, meaningless on their own: an .obj's material
 	// library, a glTF's binary buffer. They are *served* — the 3D viewer fetches them
 	// beside the model through /assets/{id}/file/, which resolves against the

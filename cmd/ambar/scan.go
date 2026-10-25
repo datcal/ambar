@@ -160,6 +160,12 @@ func printScanReport(r *index.ScanReport, verbose bool) {
 		line("ignored as junk", r.IgnoredJunk)
 		line("skipped, not assets", r.SkippedNonAssets)
 	}
+	if r.Hidden > 0 {
+		line("hidden by .ambarignore", r.Hidden)
+	}
+	if r.PurgedIgnored > 0 {
+		line("dropped from the index", r.PurgedIgnored)
+	}
 	w.Flush()
 
 	if len(r.Buckets) > 0 {
@@ -179,6 +185,10 @@ func printScanReport(r *index.ScanReport, verbose bool) {
 	if r.MarkedMissing > 0 {
 		fmt.Printf("\n%d file(s) are no longer present. Their index rows were MARKED, not deleted, "+
 			"so restoring the files restores everything.\n", r.MarkedMissing)
+	}
+	if r.KeptInUse > 0 {
+		fmt.Printf("\n%d excluded file(s) have been used by a Godot project, so they stay in the "+
+			"index and in the grid rather than lose that record.\n", r.KeptInUse)
 	}
 
 	if len(r.Errors) > 0 {

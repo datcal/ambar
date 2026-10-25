@@ -57,6 +57,8 @@ func (ix *Indexer) RegisterScanJob(q *jobs.Queue, onComplete func(context.Contex
 			"moved", report.Moved,
 			"content_changed", report.ContentChanged,
 			"marked_missing", report.MarkedMissing,
+			"hidden", report.Hidden,
+			"purged", report.PurgedIgnored,
 			"groups", report.Groups,
 			"duration_ms", report.Duration.Milliseconds(),
 		)
