@@ -53,6 +53,28 @@ services:
     #     max-size: "10m"
     #     max-file: "3"
 
+  # Optional remote access through a Cloudflare Tunnel: no port opened on the router,
+  # TLS ends at Cloudflare. Off unless .env sets COMPOSE_PROFILES=tunnel together with
+  # TUNNEL_TOKEN, the token the Zero Trust dashboard gives for the tunnel.
+  #
+  # It joins this project's network, so the tunnel's public hostname in the dashboard
+  # points at http://ambar:8080 — the container port, not AMBAR_HOST_PORT. Set
+  # AMBAR_TRUSTED_PROXIES to that network's subnet too, or every visitor reaches the
+  # app as this container's address and they share one login rate-limit bucket.
+  #
+  # Downloads are fine through it. Uploads are not: Cloudflare rejects request bodies
+  # over 100 MB on its free plan, so large packs go in over the LAN or through _inbox.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-ambar
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - ambar
+
 # First run, once the container is up:
 #
 #   docker exec -it ambar /ambar user add <username>
