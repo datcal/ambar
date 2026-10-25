@@ -70,8 +70,8 @@ func (s *UserStore) Create(ctx context.Context, username, password, role string)
 	if err := ValidateUsername(username); err != nil {
 		return User{}, err
 	}
-	if len([]rune(password)) < MinPasswordLength {
-		return User{}, fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+	if err := ValidatePassword(password); err != nil {
+		return User{}, err
 	}
 	if role == "" {
 		role = RoleUser
@@ -110,6 +110,36 @@ func (s *UserStore) Create(ctx context.Context, username, password, role string)
 		CreatedAt:    time.Unix(now, 0),
 		UpdatedAt:    time.Unix(now, 0),
 	}, nil
+}
+
+// SetPassword replaces a user's password. Sessions are left alone: which of them
+// should survive is the caller's decision (the web form keeps the one making the
+// change, `ambar user passwd` ends them all).
+func (s *UserStore) SetPassword(ctx context.Context, id int64, password string) error {
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	res, err := s.db.Writer.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// ValidatePassword is the one rule a password has to meet, for new and changed ones alike.
+func ValidatePassword(password string) error {
+	if len([]rune(password)) < MinPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+	}
+	return nil
 }
 
 const userColumns = `id, username, password_hash, role, created_at, updated_at, last_login_at`

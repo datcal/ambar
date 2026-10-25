@@ -131,6 +131,11 @@ will not change incompatibly without a major bump.
   row: invisible at a few hundred jobs, most of the NAS's CPU at 170,000. Migration 0021
   adds a partial index in claim order, both claim queries name their index, and a test pins
   the plans.
+- **Change your password on the settings page.** It asks for the current one, and wrong
+  guesses count against the login limits. Every other browser signed in as you is signed
+  out, this one carries on under a new session, and the change is audited. API tokens
+  keep working. A forgotten password is reset on the server with `ambar user passwd
+  <username>`, which also ends that user's sessions.
 
 ## v1.0.0
 

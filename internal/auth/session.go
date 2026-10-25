@@ -220,6 +220,32 @@ func (s *SessionStore) Rotate(ctx context.Context, oldToken string, userID int64
 	return token, sess, nil
 }
 
+// RotateAll revokes every session the user has — the caller's own included — and
+// issues one new session in their place, atomically.
+//
+// This is what a password change needs: a browser the old password was typed into
+// is signed out, and the one making the change carries on under a token nobody else
+// can have seen.
+func (s *SessionStore) RotateAll(ctx context.Context, userID int64, userAgent, ip string) (string, Session, error) {
+	tx, err := s.db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		return "", Session{}, fmt.Errorf("begin session rotation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
+		return "", Session{}, fmt.Errorf("delete sessions for user %d: %w", userID, err)
+	}
+	token, sess, err := s.create(ctx, tx, userID, userAgent, ip)
+	if err != nil {
+		return "", Session{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", Session{}, fmt.Errorf("commit session rotation: %w", err)
+	}
+	return token, sess, nil
+}
+
 // Destroy revokes one session. Unknown tokens are not an error, so a double
 // logout is harmless.
 func (s *SessionStore) Destroy(ctx context.Context, token string) error {

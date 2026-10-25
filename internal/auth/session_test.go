@@ -412,3 +412,49 @@ func TestLongUserAgentIsTruncated(t *testing.T) {
 		t.Errorf("stored user_agent is %d bytes, want at most 512", len(stored))
 	}
 }
+
+// TestRotateAll: a password change signs out every session the user has, including
+// the one making the change, and hands back a single new one. Nobody else's sessions
+// are touched.
+func TestRotateAll(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+	alice := insertTestUser(t, d, "alice")
+	bob := insertTestUser(t, d, "bob")
+
+	store := NewSessionStore(d)
+	var aliceTokens []string
+	for i := 0; i < 2; i++ {
+		token, _, err := store.Create(ctx, alice, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliceTokens = append(aliceTokens, token)
+	}
+	bobToken, _, err := store.Create(ctx, bob, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, sess, err := store.RotateAll(ctx, alice, "test-agent", "192.0.2.1")
+	if err != nil {
+		t.Fatalf("rotate all: %v", err)
+	}
+	if sess.UserID != alice {
+		t.Errorf("the new session belongs to user %d, want %d", sess.UserID, alice)
+	}
+	for i, token := range aliceTokens {
+		if token == fresh {
+			t.Fatalf("rotation reissued old token %d", i)
+		}
+		if _, _, err := store.Lookup(ctx, token); !errors.Is(err, ErrNoSession) {
+			t.Errorf("alice's old session %d survived: %v", i, err)
+		}
+	}
+	if _, user, err := store.Lookup(ctx, fresh); err != nil || user.ID != alice {
+		t.Errorf("the new session does not authenticate alice (user %d, err %v)", user.ID, err)
+	}
+	if _, _, err := store.Lookup(ctx, bobToken); err != nil {
+		t.Errorf("bob's session was destroyed along with alice's: %v", err)
+	}
+}

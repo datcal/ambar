@@ -250,7 +250,7 @@ ambar rebuild-index             drop the database and rebuild it from the filesy
 ambar backup                    VACUUM INTO a timestamped copy
 ambar dupes / junk              report duplicates and clutter (reporting only)
 ambar trash list|restore|purge  inspect the trash, put files back
-ambar user add|list             accounts; there is no self-registration
+ambar user add|passwd|list      accounts; there is no self-registration
 ambar token add <user>          an API token, for a worker or a script
 ambar worker                    do derive work for a server on another machine
 ```

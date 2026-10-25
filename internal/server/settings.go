@@ -18,20 +18,28 @@ import (
 // partner needs an account" — so any signed-in user can create another here, and
 // every creation lands in the audit log with who did it.
 //
-// Deliberately not offered: deleting a user or changing someone else's password.
-// A deleted user's sessions, audit entries and manual tags all reference them, and
-// §11's "two equal users" gives nobody the authority to lock the other out. Removing
-// an account stays a CLI decision made on purpose.
+// Everyone can change their own password here. Deliberately not offered: deleting a
+// user or changing someone else's password. A deleted user's sessions, audit entries
+// and manual tags all reference them, and §11's "two equal users" gives nobody the
+// authority to lock the other out. Removing an account, and resetting a forgotten
+// password, stay CLI decisions made on purpose (`ambar user passwd`).
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	s.renderSettings(w, r, http.StatusOK, "", r.URL.Query().Get("msg"))
+	s.renderSettings(w, r, http.StatusOK, settingsErrors{}, r.URL.Query().Get("msg"))
 }
 
-// renderSettings draws the page with an optional error and flash.
-func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status int, formError, flash string) {
+// settingsErrors holds a refusal for whichever of the page's forms was submitted.
+type settingsErrors struct {
+	user     string // the "Add a user" form
+	password string // the "Your password" form
+}
+
+// renderSettings draws the page with an optional form error and flash.
+func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status int, errs settingsErrors, flash string) {
 	data := s.newPageData(r)
 	data.Nav = "settings"
-	data.UserError = formError
+	data.UserError = errs.user
+	data.PasswordError = errs.password
 	data.Flash = flash
 
 	users, err := s.users.List(r.Context())
@@ -49,7 +57,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status i
 // handleUserCreate adds a user (§11: no self-registration, so this is behind auth).
 func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderSettings(w, r, http.StatusBadRequest, "Could not read the form.", "")
+		s.renderSettings(w, r, http.StatusBadRequest, settingsErrors{user: "Could not read the form."}, "")
 		return
 	}
 	username := strings.TrimSpace(r.PostFormValue("username"))
@@ -58,11 +66,11 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case username == "":
-		s.renderSettings(w, r, http.StatusBadRequest, "A username is required.", "")
+		s.renderSettings(w, r, http.StatusBadRequest, settingsErrors{user: "A username is required."}, "")
 		return
 	case password != confirm:
 		// Checked before the store so the message is about the mistake actually made.
-		s.renderSettings(w, r, http.StatusBadRequest, "The two passwords do not match.", "")
+		s.renderSettings(w, r, http.StatusBadRequest, settingsErrors{user: "The two passwords do not match."}, "")
 		return
 	}
 
@@ -71,7 +79,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		// The store's errors are already written for a human ("username is taken",
 		// "password must be at least N characters"), so they are shown as they are.
 		s.log.InfoContext(r.Context(), "user creation refused", "username", username, "error", err)
-		s.renderSettings(w, r, http.StatusBadRequest, capitalise(err.Error())+".", "")
+		s.renderSettings(w, r, http.StatusBadRequest, settingsErrors{user: capitalise(err.Error()) + "."}, "")
 		return
 	}
 
@@ -88,6 +96,110 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/settings?msg="+url.QueryEscape(
 		"Created "+user.Username+". They can sign in now."), http.StatusSeeOther)
+}
+
+// handlePasswordChange changes the signed-in user's own password.
+//
+// The current password is asked for although the session already says who this is:
+// a session can be borrowed — an unlocked laptop, a copied cookie — and turning that
+// into the account itself should take the password. Wrong guesses count against the
+// login limits (§11), so the form cannot be used to brute-force it instead of /login.
+func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	u, ok := auth.UserFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	refuse := func(status int, message string) {
+		s.renderSettings(w, r, status, settingsErrors{password: message}, "")
+	}
+	if err := r.ParseForm(); err != nil {
+		refuse(http.StatusBadRequest, "Could not read the form.")
+		return
+	}
+
+	var (
+		current  = r.PostFormValue("current_password")
+		password = r.PostFormValue("password")
+		confirm  = r.PostFormValue("password_confirm")
+		ip       = httpx.ClientIPString(ctx)
+		ipKey    = ip
+	)
+	if ipKey == "" {
+		ipKey = "unknown"
+	}
+
+	// The same buckets as /login, consulted before the argon2id work.
+	if ok, _ := s.loginByIP.Allowed(ipKey); !ok {
+		refuse(http.StatusTooManyRequests, rateLimitedMessage)
+		return
+	}
+	if ok, _ := s.loginByUser.Allowed(u.Username); !ok {
+		refuse(http.StatusTooManyRequests, rateLimitedMessage)
+		return
+	}
+
+	// Mistakes in the new password are reported before the current one is checked, so
+	// fixing a typo does not cost an attempt.
+	if password != confirm {
+		refuse(http.StatusBadRequest, "The two new passwords do not match.")
+		return
+	}
+	if err := auth.ValidatePassword(password); err != nil {
+		refuse(http.StatusBadRequest, capitalise(err.Error())+".")
+		return
+	}
+
+	ok, err := auth.VerifyPassword(u.PasswordHash, current)
+	if err != nil {
+		s.log.ErrorContext(ctx, "stored password hash is unreadable", "user_id", u.ID, "error", err)
+		refuse(http.StatusInternalServerError, "Something went wrong. Try again.")
+		return
+	}
+	if !ok {
+		s.loginByIP.RecordFailure(ipKey)
+		s.loginByUser.RecordFailure(u.Username)
+		s.audit.Record(ctx, audit.Entry{
+			UserID: &u.ID, Action: audit.ActionPasswordChangeFailed,
+			Entity: "user", EntityID: u.Username, IP: ip,
+			Detail: map[string]any{"reason": "wrong_password"},
+		})
+		s.log.WarnContext(ctx, "password change refused", "user", u.Username,
+			"reason", "wrong_password", "ip", ip)
+		refuse(http.StatusBadRequest, "The current password is not correct.")
+		return
+	}
+
+	if err := s.users.SetPassword(ctx, u.ID, password); err != nil {
+		s.log.ErrorContext(ctx, "could not change password", "user_id", u.ID, "error", err)
+		refuse(http.StatusInternalServerError, "Something went wrong. Try again.")
+		return
+	}
+	s.loginByIP.Reset(ipKey)
+	s.loginByUser.Reset(u.Username)
+
+	// Every other browser signed in as this user is signed out, and this one carries on
+	// under a fresh token.
+	token, _, err := s.sessions.RotateAll(ctx, u.ID, r.UserAgent(), ip)
+	if err != nil {
+		s.log.ErrorContext(ctx, "could not rotate sessions after a password change",
+			"user_id", u.ID, "error", err)
+		refuse(http.StatusInternalServerError, "Your password was changed, but other browsers "+
+			"could not be signed out. Sign out and back in to make sure.")
+		return
+	}
+	auth.SetSessionCookie(w, token, s.cfg.CookieSecure, s.sessions.AbsoluteTTL())
+
+	s.audit.Record(ctx, audit.Entry{
+		UserID: &u.ID, Action: audit.ActionPasswordChanged,
+		Entity: "user", EntityID: u.Username, IP: ip,
+		Detail: map[string]any{"via": "web"},
+	})
+	s.log.InfoContext(ctx, "password changed", "user", u.Username, "ip", ip)
+
+	http.Redirect(w, r, "/settings?msg="+url.QueryEscape(
+		"Password changed. Every other browser and device has been signed out."), http.StatusSeeOther)
 }
 
 // capitalise upper-cases the first letter of a sentence, so a store error reads as

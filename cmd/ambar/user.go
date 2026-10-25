@@ -22,6 +22,7 @@ import (
 
 const userUsage = `Usage:
   ambar user add <username> [--role user] [--password-stdin]
+  ambar user passwd <username> [--password-stdin]
   ambar user list
 `
 
@@ -33,6 +34,8 @@ func runUser(args []string) error {
 	switch args[0] {
 	case "add":
 		return runUserAdd(args[1:])
+	case "passwd":
+		return runUserPasswd(args[1:])
 	case "list":
 		return runUserList(args[1:])
 	default:
@@ -140,6 +143,67 @@ func runUserAdd(args []string) error {
 	})
 
 	fmt.Printf("created user %q (id %d, role %s)\n", user.Username, user.ID, user.Role)
+	return nil
+}
+
+// runUserPasswd sets a new password for any user. It is the way back in for someone
+// who has forgotten theirs: the settings page changes only your own and asks for the
+// current one, and whoever has a shell on the server has the database anyway.
+//
+// Every session of that user ends, because a reset usually means the old password is
+// lost or known to someone it should not be. API tokens are left alone; they are
+// revoked on the tokens page.
+func runUserPasswd(args []string) error {
+	fs := flag.NewFlagSet("ambar user passwd", flag.ContinueOnError)
+	passwordStdin := fs.Bool("password-stdin", false,
+		"read the password from the first line of stdin instead of prompting")
+
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		fmt.Fprint(os.Stderr, userUsage)
+		return errors.New("`ambar user passwd` takes exactly one username")
+	}
+	username := auth.NormalizeUsername(positional[0])
+
+	ctx := context.Background()
+	_, database, err := openDatabase(ctx)
+	if err != nil {
+		return err
+	}
+	defer database.Close() //nolint:errcheck // nothing useful to do on close failure here
+
+	users := auth.NewUserStore(database)
+	// Looked up before the prompt, so a misspelt name is not discovered after typing a
+	// password twice.
+	user, err := users.ByUsername(ctx, username)
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return fmt.Errorf("there is no user %q; `ambar user list` shows who exists", username)
+	} else if err != nil {
+		return err
+	}
+
+	password, err := readNewPassword(*passwordStdin)
+	if err != nil {
+		return err
+	}
+	if err := users.SetPassword(ctx, user.ID, password); err != nil {
+		return err
+	}
+	if err := auth.NewSessionStore(database).DestroyAllForUser(ctx, user.ID); err != nil {
+		return fmt.Errorf("the password of %q is changed, but signing them out failed: %w",
+			user.Username, err)
+	}
+
+	audit.New(database, newLogger()).Record(ctx, audit.Entry{
+		UserID: &user.ID, Action: audit.ActionPasswordChanged,
+		Entity: "user", EntityID: user.Username,
+		Detail: map[string]any{"via": "cli"},
+	})
+
+	fmt.Printf("changed the password of %q and signed them out everywhere\n", user.Username)
 	return nil
 }
 

@@ -27,6 +27,14 @@ const (
 	ActionUserCreated    = "user.created"
 )
 
+// Password changes: by the user on the settings page, or by whoever holds a shell on
+// the server with `ambar user passwd`. A wrong current password is recorded too: the
+// session is already signed in, so it may be someone else at the keyboard.
+const (
+	ActionPasswordChanged      = "password.changed"
+	ActionPasswordChangeFailed = "password.change_failed"
+)
+
 // Actions recorded in M13, the destructive ones (§9.1: "every removal goes in the
 // audit log with the reason and the finding that motivated it"). One entry per
 // path, not per batch: a batch of two hundred junk files should be searchable by

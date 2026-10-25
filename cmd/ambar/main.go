@@ -37,6 +37,7 @@ Usage:
   ambar dupes [-v]                  report duplicate content, reporting only (§9.1)
   ambar trash list|restore|purge    inspect the trash, put files back, purge old batches
   ambar user add <username>         create a user (there is no self-registration)
+  ambar user passwd <username>      set a forgotten password and sign that user out
   ambar user list                   list users
   ambar token add <username>        create an API token (--name, --scope)
   ambar worker                      do derive work for a server on another machine

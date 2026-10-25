@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/datcal/ambar/internal/auth"
 )
 
 // TestParseFlagsAcceptsFlagsAfterPositionals is a regression test.
@@ -159,4 +165,91 @@ func TestRunRejectsUnknownCommands(t *testing.T) {
 	if err := run([]string{"help"}); err != nil {
 		t.Errorf("help failed: %v", err)
 	}
+}
+
+// TestUserPasswdNeedsOneUsername: argument mistakes are caught before the database
+// is opened, so they do not depend on a configuration.
+func TestUserPasswdNeedsOneUsername(t *testing.T) {
+	for _, args := range [][]string{{"passwd"}, {"passwd", "alice", "bob"}} {
+		err := runUser(args)
+		if err == nil || !strings.Contains(err.Error(), "exactly one username") {
+			t.Errorf("runUser(%q) = %v, want an \"exactly one username\" error", args, err)
+		}
+	}
+}
+
+// TestUserPasswdResetsAndSignsOut runs the command against a real database: the
+// password is replaced and every session of that user ends, since a reset usually
+// means the old password is lost or known to someone else.
+func TestUserPasswdResetsAndSignsOut(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"library", "data"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AMBAR_LIBRARY_ROOT", filepath.Join(root, "library"))
+	t.Setenv("AMBAR_DATA_ROOT", filepath.Join(root, "data"))
+
+	ctx := context.Background()
+	_, database, err := openDatabase(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := auth.NewUserStore(database).Create(ctx, "alice", "the-forgotten-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := auth.NewSessionStore(database).Create(ctx, alice.ID, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+
+	// A name that does not exist is refused before any password is read.
+	if err := runUser([]string{"passwd", "nobody"}); err == nil || !strings.Contains(err.Error(), "no user") {
+		t.Errorf("passwd for a missing user = %v, want a \"no user\" error", err)
+	}
+
+	withStdin(t, "a-freshly-reset-password\n")
+	if err := runUser([]string{"passwd", "Alice", "--password-stdin"}); err != nil {
+		t.Fatalf("passwd: %v", err)
+	}
+
+	_, database, err = openDatabase(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	u, err := auth.NewUserStore(database).ByID(ctx, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := auth.VerifyPassword(u.PasswordHash, "a-freshly-reset-password"); err != nil || !ok {
+		t.Errorf("the reset password does not verify (ok=%v, err=%v)", ok, err)
+	}
+	if _, _, err := auth.NewSessionStore(database).Lookup(ctx, token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("alice's session survived the reset: %v", err)
+	}
+}
+
+// withStdin makes os.Stdin read input for the rest of the test.
+func withStdin(t *testing.T, input string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() {
+		os.Stdin = old
+		f.Close()
+	})
 }

@@ -350,6 +350,7 @@ func (s *Server) routes() http.Handler {
 	// download of a script the operator is expected to read before running.
 	mux.Handle("GET /settings/open-helper", auth.RequireUser(http.HandlerFunc(s.handleOpenHelper)))
 	mux.Handle("POST /settings/users", auth.RequireUser(http.HandlerFunc(s.handleUserCreate)))
+	mux.Handle("POST /settings/password", auth.RequireUser(http.HandlerFunc(s.handlePasswordChange)))
 	mux.Handle("GET /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokenCreate)))
 	mux.Handle("POST /settings/tokens/{id}/revoke", auth.RequireUser(http.HandlerFunc(s.handleTokenRevoke)))
@@ -543,9 +544,10 @@ type pageData struct {
 	// page loads three.js and asks the browser to render one (M15).
 	NeedsModelThumbs bool
 
-	// Settings (M15): the user list, the form's error, and the password rule to show.
+	// Settings (M15): the user list, each form's error, and the password rule to show.
 	Users             []auth.User
 	UserError         string
+	PasswordError     string
 	MinPasswordLength int
 
 	// Colours is the library's own dominant palette, as a clickable filter (M15).

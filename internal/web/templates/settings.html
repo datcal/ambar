@@ -61,6 +61,36 @@
   </div>
 
   <div class="card">
+    <h2>Your password</h2>
+    {{/* Your own only: §11's equal users give nobody the authority over someone
+         else's. A forgotten one is reset on the server with `ambar user passwd`. */}}
+    {{if .PasswordError}}<p class="error" role="alert">{{.PasswordError}}</p>{{end}}
+    <form method="post" action="/settings/password" class="stack userform">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{/* Not submitted for anything: it tells a password manager which account the
+           new password belongs to. */}}
+      {{if .User}}<input type="text" name="username" value="{{.User.Username}}"
+             autocomplete="username" hidden>{{end}}
+      <label>Current password
+        <input type="password" name="current_password" required autocomplete="current-password">
+      </label>
+      <label>New password
+        <input type="password" name="password" required autocomplete="new-password"
+               minlength="{{.MinPasswordLength}}">
+      </label>
+      <label>Repeat the new password
+        <input type="password" name="password_confirm" required autocomplete="new-password">
+      </label>
+      <p class="hint">At least {{.MinPasswordLength}} characters. Every other browser and
+        device signed in as you is signed out; this one stays. API tokens keep working —
+        revoke one under <a href="/settings/tokens">API tokens</a> if it may have leaked.
+        A forgotten password is reset on the server with
+        <code>ambar user passwd &lt;username&gt;</code>.</p>
+      <p><button type="submit" class="primary">Change password</button></p>
+    </form>
+  </div>
+
+  <div class="card">
     <h2>Opening files in your own applications</h2>
     {{/* M15: a browser cannot launch Aseprite, and this server runs on the NAS — so
          "Open in…" is a URL scheme, the same mechanism as tel: or vscode://, handled by

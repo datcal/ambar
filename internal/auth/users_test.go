@@ -239,3 +239,46 @@ func TestTouchLogin(t *testing.T) {
 		t.Error("last_login_at is the zero time")
 	}
 }
+
+func TestSetPassword(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+	store := NewUserStore(d)
+
+	created, err := store.Create(ctx, "burak", "the-original-password", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPassword(ctx, created.ID, "a-completely-new-password"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	found, err := store.ByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := VerifyPassword(found.PasswordHash, "a-completely-new-password"); err != nil || !ok {
+		t.Errorf("the new password does not verify (ok=%v, err=%v)", ok, err)
+	}
+	if ok, _ := VerifyPassword(found.PasswordHash, "the-original-password"); ok {
+		t.Error("the old password still verifies")
+	}
+
+	// The rule for a new account applies to a changed password too, and a refusal
+	// leaves the stored one alone.
+	if err := store.SetPassword(ctx, created.ID, "short"); err == nil ||
+		!strings.Contains(err.Error(), "at least") {
+		t.Errorf("a short password was not refused: %v", err)
+	}
+	again, err := store.ByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.PasswordHash != found.PasswordHash {
+		t.Error("a refused password still replaced the stored hash")
+	}
+
+	if err := store.SetPassword(ctx, created.ID+100, "a-long-enough-password"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("setting the password of a missing user = %v, want ErrUserNotFound", err)
+	}
+}
