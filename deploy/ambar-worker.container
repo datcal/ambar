@@ -35,6 +35,11 @@ Exec=--server http://nas.local:8973 --token-file /run/ambar/worker.token --libra
 [Service]
 Restart=on-failure
 RestartSec=30
+# A backlog keeps eight Blenders busy for hours. On a desktop that is also an editor's
+# machine, they get only the CPU nothing else wants: a game engine compiling shaders
+# takes the cores back the moment it asks. Remove both to give the worker an equal share.
+CPUWeight=idle
+IOWeight=10
 
 [Install]
 WantedBy=default.target

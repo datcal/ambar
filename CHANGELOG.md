@@ -67,6 +67,8 @@ will not change incompatibly without a major bump.
   open with the attempt refunded, and logs once until the library is back. The Quadlet in
   `deploy/` mounts the library `rslave`, so a share mounted again on the host is seen in the
   container. Recover such a run with **Retry failed** on the jobs page.
+- The worker's Quadlet runs it at idle CPU priority (`CPUWeight=idle`, `IOWeight=10`): eight
+  Blenders working through a backlog made the Unreal editor on the same desktop crawl.
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,
   multi-select, an inspector (large preview, licence, tags, other formats), import through the
