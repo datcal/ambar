@@ -547,7 +547,9 @@ func TestRootIsTheLibrary(t *testing.T) {
 	}
 	// The three-pane shell, with the folders permanently on the left and the kind switch
 	// over the grid.
-	for _, want := range []string{`class="app"`, "panel-left", "Folders", `aria-label="Kind"`, "tilesize"} {
+	// The folder panel can be resized from the line beside it.
+	for _, want := range []string{`class="app"`, "panel-left", "Folders", `aria-label="Kind"`, "tilesize",
+		`role="separator"`, `aria-controls="panel-left"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/ should render the workspace shell; %q is missing", want)
 		}

@@ -39,6 +39,9 @@ will not change incompatibly without a major bump.
   browser-rendered thumbnail, a remote worker's result — mark the sidebar stale instead of
   throwing it away, so a page view no longer waits for it to be rebuilt. A folder with more
   than twelve subfolders folds them behind one line.
+- **The folder panel can be resized**: drag the line beside it, or focus it and use the arrow
+  keys (Shift for bigger steps); double-click resets it. The width is remembered per browser.
+  It starts a little wider (18rem), and deep folders indent less.
 
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,

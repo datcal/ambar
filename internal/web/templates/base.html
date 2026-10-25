@@ -127,9 +127,17 @@
 
   {{if .Workspace}}
     <div class="workspace">
-      <aside class="panel panel-left" aria-label="Library navigation">
+      <aside class="panel panel-left" id="panel-left" aria-label="Library navigation">
         {{block "sidebar" .}}{{end}}
       </aside>
+      {{/* The folder panel's width, by hand (workspace.js): a pack named "POLYGON - Modular
+           Fantasy Hero Characters" four folders deep does not fit any fixed width. Drag it,
+           or focus it and use the arrow keys; double-click puts it back. A separator with a
+           value is the ARIA window-splitter pattern, so a screen reader announces it as one. */}}
+      <div class="panel-resize" data-role="panel-resize" role="separator" tabindex="0"
+           aria-orientation="vertical" aria-controls="panel-left" aria-label="Folder panel width"
+           aria-valuemin="12" aria-valuemax="40" aria-valuenow="18"
+           title="Drag to resize · double-click to reset"></div>
       <main class="workmain">{{block "content" .}}{{end}}</main>
       {{/* The rail renders its own <aside>, so a page without one leaves no gap. */}}
       {{block "rail" .}}{{end}}

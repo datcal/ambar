@@ -84,7 +84,7 @@
   /* The workspace shell (M14). Panel widths and the grid tile size are set here so
      workspace.js can change them at runtime through the CSSOM — never through an
      inline style attribute, which the CSP forbids. */
-  --panel-left: 15rem;
+  --panel-left: 18rem;
   --panel-right: 21rem;
   --tile: 11rem;
 }
@@ -1042,7 +1042,7 @@ body.app {
   display: grid;
   /* The rail is `auto`, so a page that renders no <aside> loses the column
      entirely instead of leaving a gap. */
-  grid-template-columns: var(--panel-left) minmax(0, 1fr) auto;
+  grid-template-columns: var(--panel-left) 0.45rem minmax(0, 1fr) auto;
 }
 
 .panel {
@@ -1053,7 +1053,24 @@ body.app {
   background: var(--surface);
   font-size: var(--fs-md);
 }
-.panel-left { border-right: 1px solid var(--border); }
+/* The left edge is drawn by the resize handle beside it rather than a border, so the line
+   you see is the thing you can drag. */
+.panel-left { border-right: 0; }
+.panel-resize {
+  cursor: col-resize;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  touch-action: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+.panel-resize:hover,
+.panel-resize:focus-visible,
+body.resizing .panel-resize {
+  outline: none;
+  background: var(--active-bg);
+  border-left-color: var(--active);
+}
+body.resizing { cursor: col-resize; user-select: none; }
 .panel-right {
   width: var(--panel-right);
   border-left: 1px solid var(--border);
@@ -1143,6 +1160,7 @@ body.app .thumbgrid {
   body.app { height: auto; overflow: visible; }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .panel-left, .panel-right { width: auto; border: 0; border-bottom: 1px solid var(--border); }
+  .panel-resize { display: none; }
   .topsearch { order: 3; flex-basis: 100%; }
 }
 
@@ -1983,14 +2001,14 @@ body.app .bulkbar input[type="text"] { flex: 0 1 18rem; }
 .tree-row.zero .tree-name, .tree-row.zero .n { color: var(--muted); opacity: 0.75; }
 .tree-row.d0 { padding-left: 0.3rem; }
 .tree-row.d1 { padding-left: 0.3rem; }
-.tree-row.d2 { padding-left: 1.05rem; }
-.tree-row.d3 { padding-left: 1.8rem; }
-.tree-row.d4 { padding-left: 2.55rem; }
-.tree-row.d5 { padding-left: 3.3rem; }
-.tree-row.d6 { padding-left: 4.05rem; }
-.tree-row.d7 { padding-left: 4.8rem; }
-.tree-row.d8 { padding-left: 5.55rem; }
-.tree-row.d9, .tree-row.d10, .tree-row.d11, .tree-row.d12 { padding-left: 6.3rem; }
+.tree-row.d2 { padding-left: 0.95rem; }
+.tree-row.d3 { padding-left: 1.6rem; }
+.tree-row.d4 { padding-left: 2.25rem; }
+.tree-row.d5 { padding-left: 2.9rem; }
+.tree-row.d6 { padding-left: 3.55rem; }
+.tree-row.d7 { padding-left: 4.2rem; }
+.tree-row.d8 { padding-left: 4.85rem; }
+.tree-row.d9, .tree-row.d10, .tree-row.d11, .tree-row.d12 { padding-left: 5.5rem; }
 
 /* Folded sections: the heading is the toggle. */
 .fold > summary {
