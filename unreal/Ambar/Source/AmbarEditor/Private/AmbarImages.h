@@ -16,7 +16,7 @@ class FAmbarImages : public TSharedFromThis<FAmbarImages>
 {
 public:
 	/** The decoded picture, or null while it is still on its way. */
-	const FSlateBrush* Find(const FString& Key) const;
+	const FSlateBrush* Find(const FString& Key);
 
 	/**
 	 * Starts loading `Url` as `Key` unless it is loaded, loading or failed recently.

@@ -80,7 +80,7 @@ void SAmbarInspector::LoadDetail(int64 AssetId)
 	});
 }
 
-const FSlateBrush* SAmbarInspector::GetPreview() const
+const FSlateBrush* SAmbarInspector::GetPreview()
 {
 	if (Images.IsValid() && !PreviewKey.IsEmpty())
 	{

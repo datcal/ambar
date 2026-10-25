@@ -76,7 +76,7 @@ private:
 				FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Package"), Open);
 		}
 
-		if (UToolMenu* Toolbar = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.PlayToolBar"))
+		if (UToolMenu* Toolbar = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.User"))
 		{
 			FToolMenuSection& Section = Toolbar->FindOrAddSection("Ambar");
 			Section.AddEntry(FToolMenuEntry::InitToolBarButton(

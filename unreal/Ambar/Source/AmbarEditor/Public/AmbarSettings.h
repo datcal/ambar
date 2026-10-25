@@ -16,6 +16,7 @@ class AMBAREDITOR_API UAmbarSettings : public UDeveloperSettings
 public:
 	UAmbarSettings();
 
+	virtual FName GetContainerName() const override { return TEXT("Editor"); }
 	virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 
 	static UAmbarSettings* Get() { return GetMutableDefault<UAmbarSettings>(); }

@@ -97,7 +97,6 @@ private:
 
 	TArray<FAmbarAsset> ImportQueue;
 	bool bImporting = false;
-	float ImportProgress = 0.f;
 	FString LastImportFolder;
 	int32 ImportedThisRun = 0;
 

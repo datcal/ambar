@@ -24,7 +24,7 @@ namespace
 	void WriteJson(const FString& Path, const TSharedRef<FJsonObject>& Json)
 	{
 		IFileManager::Get().MakeDirectory(*FAmbarProject::Dir(), /*Tree*/ true);
-		FFileHelper::SaveStringToFile(AmbarJson::Write(Json), *Path);
+		FFileHelper::SaveStringToFile(AmbarJson::Write(Json), *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
 
 	TSharedRef<FJsonObject> Manifest()
@@ -65,7 +65,8 @@ FString FAmbarProject::Uuid()
 TArray<FAmbarProject::FEntry> FAmbarProject::Entries()
 {
 	TArray<FEntry> Out;
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Manifest()->Values)
+	const TSharedRef<FJsonObject> Root = Manifest();
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
 	{
 		const TSharedPtr<FJsonObject>* Obj = nullptr;
 		if (!Pair.Value.IsValid() || !Pair.Value->TryGetObject(Obj) || !Obj)
@@ -86,7 +87,8 @@ TArray<FAmbarProject::FEntry> FAmbarProject::Entries()
 TSet<int64> FAmbarProject::ImportedIds()
 {
 	TSet<int64> Ids;
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Manifest()->Values)
+	const TSharedRef<FJsonObject> Root = Manifest();
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
 	{
 		Ids.Add(FCString::Atoi64(*Pair.Key));
 	}

@@ -9,7 +9,9 @@
 #include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "IAssetTools.h"
+#include "FileHelpers.h"
 #include "Misc/FileHelper.h"
+#include "Modules/ModuleManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "UObject/UObjectGlobals.h"
@@ -134,12 +136,19 @@ void FAmbarImporter::Import(const FAmbarAsset& Asset, TFunction<void(const FAmba
 
 			if (UAmbarSettings::Get()->bPixelArtDefaults && Asset.bPixelArt)
 			{
+				TArray<UPackage*> Changed;
 				for (const FString& ObjectPath : Imported)
 				{
 					if (UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *ObjectPath))
 					{
 						ApplyPixelArtDefaults(Texture);
+						Changed.AddUnique(Texture->GetOutermost());
 					}
+				}
+				// The import saved before these settings changed; save again so they reach the disk.
+				if (Changed.Num() > 0)
+				{
+					UEditorLoadingAndSavingUtils::SavePackages(Changed, /*bOnlyDirty*/ true);
 				}
 			}
 

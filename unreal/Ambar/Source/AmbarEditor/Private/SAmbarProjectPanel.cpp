@@ -339,8 +339,9 @@ FReply SAmbarProjectPanel::UpdateAllOutdated()
 	const TWeakPtr<SAmbarProjectPanel> Weak = StaticCastSharedRef<SAmbarProjectPanel>(AsShared());
 	const TSharedRef<TArray<TSharedPtr<FAmbarProjectRow>>> Queue = MakeShared<TArray<TSharedPtr<FAmbarProjectRow>>>(Todo);
 	const TSharedRef<TFunction<void()>> Next = MakeShared<TFunction<void()>>();
+	const TWeakPtr<TFunction<void()>> NextWeak = Next;
 	bBusy = true;
-	*Next = [Weak, Queue, Next]()
+	*Next = [Weak, Queue, NextWeak]()
 	{
 		const TSharedPtr<SAmbarProjectPanel> Self = Weak.Pin();
 		if (!Self.IsValid())
@@ -358,20 +359,27 @@ FReply SAmbarProjectPanel::UpdateAllOutdated()
 		Queue->RemoveAt(0);
 		Self->SetStatus(FString::Printf(TEXT("Updating %s (%d left)..."), *Row->Use.Filename, Queue->Num()), false);
 		FAmbarClient::GetAsset(Row->Use.AssetId,
-			[Weak, Next](bool bOk, const FString&, const TSharedPtr<FJsonObject>& Json)
+			[NextWeak](bool bOk, const FString&, const TSharedPtr<FJsonObject>& Json)
 			{
+				auto Continue = [NextWeak]()
+				{
+					if (const TSharedPtr<TFunction<void()>> N = NextWeak.Pin())
+					{
+						(*N)();
+					}
+				};
 				if (!bOk)
 				{
-					(*Next)();
+					Continue();
 					return;
 				}
-				FAmbarImporter::Import(FAmbarDetail::FromJson(Json).Asset, [Next](const FAmbarImportResult& R)
+				FAmbarImporter::Import(FAmbarDetail::FromJson(Json).Asset, [Continue](const FAmbarImportResult& R)
 				{
 					if (!R.bOk)
 					{
 						AmbarUI::Notify(R.Message, false);
 					}
-					(*Next)();
+					Continue();
 				});
 			});
 	};

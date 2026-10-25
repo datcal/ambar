@@ -6,10 +6,15 @@
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
 
-const FSlateBrush* FAmbarImages::Find(const FString& Key) const
+const FSlateBrush* FAmbarImages::Find(const FString& Key)
 {
-	const FEntry* Entry = Entries.Find(Key);
-	return Entry ? Entry->Brush.Get() : nullptr;
+	FEntry* Entry = Entries.Find(Key);
+	if (!Entry)
+	{
+		return nullptr;
+	}
+	Entry->LastUsed = ++Tick;
+	return Entry->Brush.Get();
 }
 
 void FAmbarImages::Request(const FString& Key, const FString& Url, const FString& DiskCategory, const FString& DiskKey, bool bNearest)

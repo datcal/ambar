@@ -21,7 +21,7 @@
 			"Name": "AmbarEditor",
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit",
-			"PlatformAllowList": [ "Win64", "Linux", "Mac" ]
+			"PlatformAllowList": [ "Win64", "Linux" ]
 		}
 	]
 }

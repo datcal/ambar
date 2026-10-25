@@ -15,16 +15,18 @@ public:
 		/** Edge length of the picture area, read live so the slider resizes tiles without rebuilding them. */
 		SLATE_ATTRIBUTE(float, Edge)
 		SLATE_ATTRIBUTE(bool, InProject)
+		SLATE_ATTRIBUTE(bool, Selected)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& OwnerTable);
 
 private:
-	const FSlateBrush* GetPicture() const;
+	const FSlateBrush* GetPicture();
 	FText GetBadge() const;
 
 	TSharedPtr<FAmbarAsset> Asset;
 	TSharedPtr<FAmbarImages> Images;
 	TAttribute<float> Edge;
+	TAttribute<bool> Selected;
 	FString ImageKey;
 };

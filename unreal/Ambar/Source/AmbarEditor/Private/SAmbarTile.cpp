@@ -7,6 +7,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -15,6 +16,7 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 	Asset = InArgs._Asset;
 	Images = InArgs._Images;
 	Edge = InArgs._Edge;
+	Selected = InArgs._Selected;
 	// The hash is in the key: a replaced file gets a new picture instead of a stale cached one.
 	ImageKey = FString::Printf(TEXT("t%lld-%s"), Asset->Id, *Asset->Sha256.Left(8));
 
@@ -34,7 +36,7 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 				.Padding(FMargin(8.f))
 				.BorderImage_Lambda([this]() -> const FSlateBrush*
 				{
-					if (IsSelected())
+					if (Selected.Get(false))
 					{
 						return AmbarUI::CardSelectedBrush();
 					}
@@ -115,7 +117,7 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 		OwnerTable);
 }
 
-const FSlateBrush* SAmbarTile::GetPicture() const
+const FSlateBrush* SAmbarTile::GetPicture()
 {
 	if (Images.IsValid())
 	{
@@ -123,6 +125,8 @@ const FSlateBrush* SAmbarTile::GetPicture() const
 		{
 			return Brush;
 		}
+		// Not there (failed, evicted, or still queued): ask again. Request is throttled and cheap.
+		Images->Request(ImageKey, FAmbarClient::ThumbUrl(Asset->Id), TEXT("thumbs"), ImageKey, Asset->bPixelArt);
 	}
 	return FAppStyle::GetBrush("Checkerboard");
 }

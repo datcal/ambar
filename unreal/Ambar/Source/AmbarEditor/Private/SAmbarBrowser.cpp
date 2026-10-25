@@ -32,6 +32,7 @@
 #include "Widgets/Input/STextComboBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
@@ -124,6 +125,8 @@ void SAmbarBrowser::Construct(const FArguments& InArgs)
 		]
 	];
 
+	Inspector->SetImportedIds(&Imported);
+
 	if (Settings->IsConfigured())
 	{
 		Switcher->SetActiveWidgetIndex(ViewLibrary);
@@ -199,10 +202,6 @@ TSharedRef<SWidget> SAmbarBrowser::BuildHeader()
 					.OnValueChanged_Lambda([this](float V)
 					{
 						UAmbarSettings::Get()->TileSize = 64 + FMath::RoundToInt(V * 256.f);
-						if (TileView.IsValid())
-						{
-							TileView->RebuildList();
-						}
 					})
 					.OnMouseCaptureEnd_Lambda([]() { UAmbarSettings::Get()->SaveConfig(); })
 				]
@@ -330,7 +329,8 @@ TSharedRef<SWidget> SAmbarBrowser::BuildGridPane()
 							.Asset(Item)
 							.Images(Images)
 							.Edge_Lambda([this]() { return TileEdge(); })
-							.InProject_Lambda([this, Id]() { return Imported.Contains(Id); });
+							.InProject_Lambda([this, Id]() { return Imported.Contains(Id); })
+							.Selected_Lambda([this, Item]() { return TileView.IsValid() && TileView->IsItemSelected(Item); });
 					})
 					.OnSelectionChanged(this, &SAmbarBrowser::OnSelectionChanged)
 					.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FAmbarAsset> Item) { QueueImport(*Item); })
@@ -1014,8 +1014,11 @@ TSharedRef<SWidget> SAmbarBrowser::BuildSetup()
 			];
 	};
 
-	return SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Top).WidthOverride(560.f)
+	return SNew(SScrollBox)
+		+ SScrollBox::Slot().HAlign(HAlign_Center)
 		[
+			SNew(SBox).WidthOverride(560.f)
+			[
 			SNew(SBorder).BorderImage(AmbarUI::PanelBrush()).Padding(FMargin(24.f))
 			[
 				SNew(SVerticalBox)
@@ -1085,6 +1088,7 @@ TSharedRef<SWidget> SAmbarBrowser::BuildSetup()
 					.ColorAndOpacity_Lambda([this]() { return bSetupError ? AmbarUI::Bad() : AmbarUI::Good(); })
 					.Font(AmbarUI::Font(9)).AutoWrapText(true)
 				]
+			]
 			]
 		];
 }
