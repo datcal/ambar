@@ -140,6 +140,63 @@ func TestRemoteWorkerDerivesForTheServer(t *testing.T) {
 	}
 }
 
+// TestWorkerWithoutItsLibraryFailsNothing: a worker whose mount of the library has gone —
+// a network share that reconnected on the host but not inside the worker's container —
+// sees an empty directory. It used to fail every file it was handed (47,000 assets in a
+// quarter of an hour); it must take no work until the library is back, then do it.
+func TestWorkerWithoutItsLibraryFailsNothing(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	token := ts.apiToken(t)
+	ts.attachCoordinator(remote.ModeOnly)
+	ts.seedImages(t, map[string][]byte{"pack/hero.png": spritePNG(t, 32, 32)})
+
+	mount := t.TempDir() // the worker's view of the library: empty until the share is back
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	go func() {
+		stopped <- remote.RunWorker(ctx, remote.WorkerOptions{
+			Server: ts.URL, Token: token,
+			LibraryRoot: mount, WorkDir: t.TempDir(),
+			Concurrency: 2, IdleWait: 20 * time.Millisecond, LibraryWait: 20 * time.Millisecond,
+			Log: discardLogger(),
+		})
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	var state string
+	var attempts int
+	if err := ts.db.Reader.QueryRow(`SELECT state, attempts FROM jobs WHERE type = ?`, derive.JobType).
+		Scan(&state, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" || attempts != 0 {
+		t.Errorf("with the library gone the job is %s after %d attempts, want queued after 0", state, attempts)
+	}
+
+	if err := os.CopyFS(mount, os.DirFS(ts.cfg.LibraryRoot)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var derived string
+		if err := ts.db.Reader.QueryRow(`SELECT derive_state FROM assets`).Scan(&derived); err != nil {
+			t.Fatal(err)
+		}
+		if derived == "ok" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the asset is %s after the library came back, want ok", derived)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-stopped; err != nil {
+		t.Errorf("worker stopped with %v", err)
+	}
+}
+
 // TestWorkerAPIRefusals: the three answers that stop a worker doing harm — the feature
 // is off, the worker's derive code differs from the server's, or it submits a result
 // for a job it does not hold.

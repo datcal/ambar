@@ -56,6 +56,8 @@ type WorkerOptions struct {
 	Client *http.Client
 	// IdleWait is how long to wait before asking again when there was no work.
 	IdleWait time.Duration
+	// LibraryWait is how long to wait before looking again at a library that is not there.
+	LibraryWait time.Duration
 }
 
 // errFatal marks an error no retry will fix: a version mismatch or a rejected token.
@@ -89,6 +91,8 @@ type worker struct {
 	// waiting is whether "the server is not taking workers" has been logged, so eight
 	// slots polling a switched-off server say so once rather than every half minute.
 	waiting bool
+	// libraryGone is the same for a library that has dropped out from under the worker.
+	libraryGone bool
 }
 
 func newWorker(opts WorkerOptions) (*worker, error) {
@@ -116,6 +120,9 @@ func newWorker(opts WorkerOptions) (*worker, error) {
 	}
 	if opts.IdleWait <= 0 {
 		opts.IdleWait = 5 * time.Second
+	}
+	if opts.LibraryWait <= 0 {
+		opts.LibraryWait = 30 * time.Second
 	}
 	if opts.Name == "" {
 		opts.Name, _ = os.Hostname()
@@ -190,6 +197,13 @@ func (w *worker) run(ctx context.Context) error {
 // loop is one slot: claim, derive, submit, until ctx ends.
 func (w *worker) loop(ctx context.Context) error {
 	for ctx.Err() == nil {
+		if !w.libraryPresent() {
+			w.setLibraryGone(true)
+			sleep(ctx, w.opts.LibraryWait)
+			continue
+		}
+		w.setLibraryGone(false)
+
 		claim, err := w.claim(ctx)
 		var fe errFatal
 		switch {
@@ -231,6 +245,13 @@ func (w *worker) process(ctx context.Context, claim *ClaimResponse) {
 	outcome := derive.RunTask(claim.Task, w.opts.LibraryRoot, scratch, w.opts.BlenderBin)
 	if ctx.Err() != nil {
 		return // released by run
+	}
+	// A file this worker cannot open is the file's failure only while the library is
+	// there to open it from. When the mount itself has gone, the job goes back whole
+	// and loop waits for the library, rather than failing every file it is handed.
+	if outcome.State == derive.StateFailed && !w.libraryPresent() {
+		w.handBack([]int64{claim.JobID})
+		return
 	}
 
 	for attempt := 1; ; attempt++ {
@@ -367,7 +388,12 @@ func (w *worker) release() {
 	if len(ids) == 0 {
 		return
 	}
+	w.handBack(ids)
+	w.log.Info("handed unfinished jobs back to the server", "jobs", len(ids))
+}
 
+// handBack returns jobs to the queue with their attempt refunded.
+func (w *worker) handBack(ids []int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	body, _ := json.Marshal(ReleaseRequest{Session: w.session, JobIDs: ids})
@@ -378,7 +404,37 @@ func (w *worker) release() {
 		return
 	}
 	resp.Body.Close() //nolint:errcheck
-	w.log.Info("handed unfinished jobs back to the server", "jobs", len(ids))
+}
+
+// libraryPresent reports whether the library has anything in it. A real library is never
+// empty, while one that has dropped out from under the worker reads as an empty directory
+// or an error, and every file in it as missing: an automounted share that reconnects is
+// mounted afresh on the host but not inside a container holding the old mount.
+func (w *worker) libraryPresent() bool {
+	dir, err := os.Open(w.opts.LibraryRoot)
+	if err != nil {
+		return false
+	}
+	defer dir.Close() //nolint:errcheck
+	names, _ := dir.Readdirnames(1)
+	return len(names) > 0
+}
+
+// setLibraryGone logs the moment the library goes and comes back.
+func (w *worker) setLibraryGone(gone bool) {
+	w.mu.Lock()
+	changed := w.libraryGone != gone
+	w.libraryGone = gone
+	w.mu.Unlock()
+	if !changed {
+		return
+	}
+	if gone {
+		w.log.Warn("the library is empty or unreadable on this machine; taking no work until it is back. Is the share mounted?",
+			"library", w.opts.LibraryRoot)
+	} else {
+		w.log.Info("the library is back; taking work again", "library", w.opts.LibraryRoot)
+	}
 }
 
 func (w *worker) do(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {

@@ -60,6 +60,13 @@ will not change incompatibly without a major bump.
   rebuilding from source manually"). 5.8 keys `FJsonObject::Values` by `FSharedString`, and
   `SImage::Image` binds only const getters. Verified by building a project's
   `<Project>Editor` target with the plugin in `Plugins/`.
+- Fixed: **a remote worker that lost its library failed everything it was given.** When the
+  desktop's automounted share reconnected, the worker's container kept the old, empty mount,
+  and in a quarter of an hour 47,000 assets were marked failed three attempts at a time. A
+  worker whose library is empty or unreadable now takes no work, hands back a job it could not
+  open with the attempt refunded, and logs once until the library is back. The Quadlet in
+  `deploy/` mounts the library `rslave`, so a share mounted again on the host is seen in the
+  container. Recover such a run with **Retry failed** on the jobs page.
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,
   multi-select, an inspector (large preview, licence, tags, other formats), import through the

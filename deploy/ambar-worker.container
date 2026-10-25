@@ -19,8 +19,10 @@ After=network-online.target
 [Container]
 Image=localhost/ambar-worker:latest
 ContainerName=ambar-worker
-# The library, as this machine mounts it; read-only, the worker never writes to it.
-Volume=/mnt/assets:/library:ro
+# The library, as this machine mounts it; read-only, the worker never writes to it. rslave
+# passes a remount on the host through: without it, an automounted share that reconnects
+# leaves the container holding an empty directory.
+Volume=/mnt/assets:/library:ro,rslave
 # An API token with the write scope: ambar token add <user> --name worker --scope write
 Volume=%h/.config/ambar/worker.token:/run/ambar/worker.token:ro
 # This machine's own Blender, for FBX and .blend — any official Linux build directory.
