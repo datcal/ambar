@@ -545,8 +545,9 @@ func TestRootIsTheLibrary(t *testing.T) {
 			t.Errorf("/ should render the grid; %q is missing", want)
 		}
 	}
-	// The three-pane shell, with navigation permanently on the left.
-	for _, want := range []string{`class="app"`, "panel-left", "Kinds", "tilesize"} {
+	// The three-pane shell, with the folders permanently on the left and the kind switch
+	// over the grid.
+	for _, want := range []string{`class="app"`, "panel-left", "Folders", `aria-label="Kind"`, "tilesize"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/ should render the workspace shell; %q is missing", want)
 		}
@@ -645,7 +646,7 @@ func TestFolderTreeNavigation(t *testing.T) {
 	}
 	// The href percent-encodes the separator (html/template does this in a query
 	// context), so the readable assertion is on the title attribute.
-	for _, want := range []string{`title="2d"`, `title="audio"`, "whole library"} {
+	for _, want := range []string{`title="2d"`, `title="audio"`, "Whole library"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the tree is missing %q", want)
 		}
@@ -666,7 +667,7 @@ func TestFolderTreeNavigation(t *testing.T) {
 	if !strings.Contains(body, `title="2d/pack-a/PNG"`) {
 		t.Error("the browsed branch should be expanded")
 	}
-	if !strings.Contains(body, `class="on"`) {
+	if !strings.Contains(body, `aria-current="location"`) {
 		t.Error("the browsed node should be marked as current")
 	}
 

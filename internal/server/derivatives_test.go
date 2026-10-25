@@ -129,17 +129,20 @@ func TestGridShowsOneTilePerArtwork(t *testing.T) {
 	if got := strings.Count(body, `<li class="tile`); got != 1 {
 		t.Errorf("the grid shows %d tiles, want 1 (§5.1 collapses format variants)", got)
 	}
-	// Labelled with the variant count, so the sources are discoverable.
-	if !strings.Contains(body, "3 variants") {
-		t.Error("the tile does not show a variant count")
+	// Labelled with its formats, so the sources are discoverable — and so is which file
+	// an engine will take.
+	for _, want := range []string{`<span class="fmt">PNG</span>`, `<span class="fmt">PSD</span>`, `<span class="fmt">ASEPRITE</span>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the tile does not name its formats; %s is missing", want)
+		}
 	}
 	// The primary is the PNG, so the tile is named after it.
 	if !strings.Contains(body, "idle.png") {
 		t.Error("the tile is not named after the PNG primary")
 	}
 	// And it tells the user the file count differs from the tile count.
-	if !strings.Contains(body, "collapsed by format variant") {
-		t.Error("the grid does not explain that files were collapsed")
+	if !strings.Contains(body, "1 asset · 3 files") {
+		t.Error("the grid does not say that three files are one asset")
 	}
 }
 

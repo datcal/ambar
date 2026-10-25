@@ -29,6 +29,8 @@
   <script src="/static/search.js?v={{.Version}}" defer></script>
   {{/* M16 grid island: hover animation, keyboard navigation, selection across pages. */}}
   <script src="/static/grid.js?v={{.Version}}" defer></script>
+  {{/* The folder view: jump-to-folder, the asset panel, copying a path. Dormant elsewhere. */}}
+  <script src="/static/folderview.js?v={{.Version}}" defer></script>
   {{/* M16 keyboard browsing: j/k between assets. Dormant without the rail's links. */}}
   <script src="/static/assetnav.js?v={{.Version}}" defer></script>
   {{/* §14 "open in…" path copying; dormant without the panel. */}}
@@ -61,15 +63,44 @@
       {{/* M16: the placeholder was a five-example syntax lesson in a box too narrow to read
            it in. The completion list teaches the syntax now — type "t" and see what type:
            does — so this says what the box is for and gets out of the way. */}}
+      {{/* The folder view: the box has a scope as well as text. The folder and the kind
+           you are browsing sit in it as chips, so a search runs inside them — and says so
+           — instead of silently searching sixty thousand models. × on a chip widens the
+           search; Backspace in an empty box does the same, last chip first (search.js).
+           Typing a folder's name and pressing Enter makes *it* the scope. */}}
       <form method="get" action="/" class="topsearch" role="search" id="search-form"
             autocomplete="off">
-        <input type="search" name="q" value="{{.Search}}"
-               placeholder="Search the library — press /"
-               autocomplete="off" autocapitalize="none" spellcheck="false"
-               aria-label="Search the library"
-               role="combobox" aria-expanded="false" aria-controls="search-suggest"
-               data-role="search-input">
+        <div class="searchfield">
+          <span class="searchicon" aria-hidden="true">⌕</span>
+          {{with .Folder}}
+            {{if .Dir}}
+              <span class="scopechip" title="Searching inside {{.Dir}}">
+                <span class="scopekey">in</span> <span class="scopeval">{{.Title}}</span>
+                <a class="scopex" href="{{.ClearDirURL}}" data-role="chip-x"
+                   aria-label="Search the whole library instead of {{.Title}}">×</a>
+              </span>
+            {{end}}
+            {{if $.Kind}}
+              <span class="scopechip">
+                <span class="scopekey">kind</span> <span class="scopeval">{{$.Kind}}</span>
+                <a class="scopex" href="{{.ClearKindURL}}" data-role="chip-x"
+                   aria-label="Show every kind, not only {{$.Kind}}">×</a>
+              </span>
+            {{end}}
+          {{end}}
+          <input type="search" name="q" value="{{.Search}}"
+                 placeholder="{{if and .Folder .Dir}}Search in {{.Folder.Title}}…{{else}}Search, or type a folder’s name — press /{{end}}"
+                 autocomplete="off" autocapitalize="none" spellcheck="false"
+                 aria-label="Search the library"
+                 role="combobox" aria-expanded="false" aria-controls="search-suggest"
+                 data-role="search-input">
+        </div>
+        {{if .Dir}}<input type="hidden" name="dir" value="{{.Dir}}">{{end}}
         {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+        {{with .Folder}}
+          {{if .DirOnly}}<input type="hidden" name="sub" value="0">{{end}}
+          {{if .List}}<input type="hidden" name="view" value="list">{{end}}
+        {{end}}
         {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
         <div class="suggest" id="search-suggest" data-role="suggest" hidden></div>
       </form>

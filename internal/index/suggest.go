@@ -27,6 +27,8 @@ const (
 	SuggestPack     SuggestKind = "pack"
 	SuggestFolder   SuggestKind = "folder"
 	SuggestFilename SuggestKind = "file"
+	// SuggestNarrow rows set the kind filter rather than typing anything.
+	SuggestNarrow SuggestKind = "narrow"
 )
 
 // Label is the group heading the UI shows.
@@ -40,6 +42,8 @@ func (k SuggestKind) Label() string {
 		return "Packs"
 	case SuggestFolder:
 		return "Folders"
+	case SuggestNarrow:
+		return "Show only"
 	default:
 		return "Files"
 	}
@@ -54,6 +58,9 @@ type Suggestion struct {
 	Display string
 	// Detail is the muted right-hand side: a count, or an explanation of a keyword.
 	Detail string
+	// Href, when set, makes the row a destination rather than text: choosing a folder
+	// makes it the search's scope, choosing a kind narrows to it.
+	Href string
 }
 
 // suggestKeywords is the query language, as completions.

@@ -462,11 +462,14 @@
         </p>
       {{end}}
 
+      {{/* Godot and Unreal projects alike: both plugins write the same manifest, and the
+           resource path says which editor it was — res:// or /Game/. */}}
       {{if .ProjectUses}}
-        <h2>In Godot projects</h2>
+        <h2>In projects</h2>
         <ul class="uses">
           {{range .ProjectUses}}
             <li>
+              {{with engineOf .ResPath}}<span class="engine engine-{{.}}">{{.}}</span>{{end}}
               <strong>{{.ProjectName}}</strong>
               {{if .Outdated}}<span class="badge badge-warn">outdated</span>{{end}}
               <br><code>{{.ResPath}}</code>
@@ -476,6 +479,8 @@
         </ul>
       {{end}}
   </section>
+
+  {{template "engine-choices" .}}
 
   {{/* Licence and source, where the question is actually asked (M16).
 

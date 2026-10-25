@@ -6,6 +6,30 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **The library is a folder view now.** The folder tree is the sidebar — always open at the
+  folder you are in, as deep as the library goes, counting what the grid would show for the
+  kind you picked — with a box above it to jump to any folder by name or by a pasted path
+  (`/mnt/…`, a Windows path, a `file://` link; `GET /go?path=`). Above the grid: a breadcrumb,
+  "Go to path…", "Copy path", a kind switch counted *within the current folder*, an "Include
+  subfolders" switch (`sub=0`), shortcuts to the subfolders, and a list view (`view=list`)
+  beside the thumbnails. Clicking a tile opens a panel instead of a tab: the picture, its
+  formats with a download each, its local path, where it is used, and **which file Godot and
+  which Unreal should take** (Godot prefers glTF, Unreal FBX; Unreal has no importer for
+  `.ogg`/`.mp3`, and the panel says so). Double-click or Ctrl+click still opens the full page.
+  Tiles name their formats ("FBX · OBJ") instead of "2 variants". Tags, colours and the fixed
+  filters fold away under the tree; kinds moved onto the toolbar. The accent is amber.
+- **The search box has a scope.** The folder and kind you are browsing sit in it as chips,
+  so a search runs inside them; × or Backspace widens it again. Typing a folder's name
+  offers it first — "spy", Enter, and you are searching inside POLYGON - Spy Kit — and inside
+  a folder, "mod" offers *Models (47 in POLYGON - Spy Kit)*.
+- The asset page's "Use in a game" box gives the same Godot/Unreal answer, and "In Godot
+  projects" is "In projects", marked Godot or Unreal by the project path.
+- Fixed: the tag list beside a folder failed on every folder (`no such column:
+  p.library_rel_path`), and "Tag all N" inside a folder tagged every match in the library.
+  The first page view after a restart no longer caches a sidebar with no folder tree when
+  the browser moves on before it is built.
+- `GET /api/v1/folders` serves the sidebar's cached tree instead of building its own.
+
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,
   multi-select, an inspector (large preview, licence, tags, other formats), import through the

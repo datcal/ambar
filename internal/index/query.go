@@ -391,6 +391,9 @@ type ListOptions struct {
 	// the folder tree's filter (M14). Slash-separated and library-relative; empty
 	// browses the whole library.
 	Dir string
+	// DirOnly narrows Dir to the files directly inside it, leaving out its subfolders. With
+	// an empty Dir it means the files at the library root.
+	DirOnly bool
 	// IncludeMissing shows assets whose file was absent at the last scan. Off by
 	// default: they are not there, so they would be noise in a browse. §12 keeps
 	// the rows forever regardless.
@@ -687,9 +690,9 @@ func listFilters(opts ListOptions) ([]string, []any, error) {
 		where = append(where, "a.pack_id = ?")
 		args = append(args, opts.PackID)
 	}
-	if dir := cleanDir(opts.Dir); dir != "" {
-		where = append(where, dirExpr("a"))
-		args = append(args, dir, dir+"/", dir+"/")
+	if expr, dirArgs := dirFilter("a", opts); expr != "" {
+		where = append(where, expr)
+		args = append(args, dirArgs...)
 	}
 	// The free-text and structured parts of opts.Query are compiled separately by
 	// the caller through the §7 parser; listFilters covers only the sidebar facets.
@@ -966,7 +969,35 @@ func cleanDir(dir string) string {
 // A prefix comparison rather than LIKE: no escaping of % or _ in real filenames, and
 // SQLite can still use the index on the underlying columns for the pack half.
 func dirExpr(alias string) string {
-	libPath := fmt.Sprintf(`(CASE WHEN p.library_rel_path IN ('', '.') THEN %[1]s.rel_path
-	                              ELSE p.library_rel_path || '/' || %[1]s.rel_path END)`, alias)
-	return fmt.Sprintf("(%[1]s = ? OR substr(%[1]s, 1, length(?)) = ?)", libPath)
+	return fmt.Sprintf("(%[1]s = ? OR substr(%[1]s, 1, length(?)) = ?)", libPathExpr(alias))
+}
+
+// libPathExpr is the library-relative path of an asset, assembled from its pack.
+func libPathExpr(alias string) string {
+	return fmt.Sprintf(`(CASE WHEN p.library_rel_path IN ('', '.') THEN %[1]s.rel_path
+	                          ELSE p.library_rel_path || '/' || %[1]s.rel_path END)`, alias)
+}
+
+// dirFilter is the WHERE fragment for ListOptions.Dir and DirOnly, with its arguments, or
+// "" when the options do not narrow by directory at all.
+//
+// DirOnly is the folder view's "include subfolders" switch turned off: the files sitting in
+// the directory itself, which is what a file manager shows. Without it a pack folder with
+// one icon at the top and four thousand models below reads as four thousand models — the
+// right answer for "what is in here", the wrong one for "what is *here*".
+func dirFilter(alias string, opts ListOptions) (string, []any) {
+	dir := cleanDir(opts.Dir)
+	if !opts.DirOnly {
+		if dir == "" {
+			return "", nil
+		}
+		return dirExpr(alias), []any{dir, dir + "/", dir + "/"}
+	}
+	libPath := libPathExpr(alias)
+	if dir == "" {
+		return fmt.Sprintf("instr(%s, '/') = 0", libPath), nil
+	}
+	prefix := dir + "/"
+	return fmt.Sprintf("(substr(%[1]s, 1, length(?)) = ? AND instr(substr(%[1]s, length(?) + 1), '/') = 0)", libPath),
+		[]any{prefix, prefix, prefix}
 }

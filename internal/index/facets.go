@@ -18,7 +18,7 @@ func (ix *Indexer) MatchingAssetIDs(ctx context.Context, opts ListOptions) ([]in
 		return nil, err
 	}
 	rows, err := ix.db.Reader.QueryContext(ctx,
-		`SELECT a.id FROM assets a WHERE `+strings.Join(where, " AND "), args...)
+		`SELECT a.id FROM assets a JOIN packs p ON p.id = a.pack_id WHERE `+strings.Join(where, " AND "), args...)
 	if err != nil {
 		return nil, fmt.Errorf("matching asset ids: %w", err)
 	}
@@ -71,7 +71,9 @@ func (ix *Indexer) Facets(ctx context.Context, opts ListOptions, limit int) ([]F
 
 	query := `
 		WITH matching AS (
-			SELECT a.id AS aid, a.pack_id AS pid FROM assets a WHERE ` + strings.Join(where, " AND ") + `
+			SELECT a.id AS aid, a.pack_id AS pid
+			FROM assets a JOIN packs p ON p.id = a.pack_id
+			WHERE ` + strings.Join(where, " AND ") + `
 		),
 		present AS (
 			SELECT m.aid, t.namespace AS ns, t.namespace || ':' || t.name AS canon

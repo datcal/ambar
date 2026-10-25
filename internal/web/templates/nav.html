@@ -6,148 +6,51 @@
      when you might want to jump sideways — and the navigation moved under you, which
      base.html's own comment said it should not.
 
-     Order follows how the library is actually used: the action you need constantly,
-     then kinds, colours, tags, filters, folders, saved searches, and maintenance last.
-     The folder tree stays closed unless you are browsing inside it, because "whole
-     library" is the normal view. */}}
+     The folder view put the folders first. They were the last real section, collapsed
+     under kinds, colours and tags, four levels deep at most, and counting files — so a
+     pack folder was a number you could not compare with anything on screen. Now the tree
+     is the sidebar: always open at the folder you are in, counting what the grid would
+     show for the kind you picked, with a box above it to jump to any folder by name or
+     by a pasted path. Kinds moved onto the toolbar, where they count the current folder;
+     tags, colours and the fixed filters fold away underneath. */}}
 {{define "library-nav"}}
-  <section class="panel-section">
-    {{/* The scan runs in place (M16): the button used to redirect to /jobs, throwing away the
-         grid, the search and the scroll position to show a table that did not refresh either.
-         jobs.js posts this and then keeps the line below it moving; without JavaScript the
-         form posts normally and lands back on the same page. */}}
-    <form method="post" action="/scan" class="panel-action" data-role="scan-form">
-      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit" class="primary">Re-scan library</button>
+  <section class="panel-section folders" aria-label="Folders">
+    {{/* Without JavaScript this is a plain GET to /go, which accepts a folder's name as
+         well as a path, so Enter still lands somewhere sensible. folderview.js turns it
+         into a live list. */}}
+    <form class="jump" method="get" action="/go" role="search" autocomplete="off"
+          data-role="jump-form">
+      {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+      <label class="sr-only" for="jump">Jump to a folder by name, or paste a path</label>
+      <input type="search" id="jump" name="path" placeholder="Jump to folder — or paste a path"
+             spellcheck="false" autocapitalize="none" data-role="jump-input"
+             role="combobox" aria-expanded="false" aria-controls="jump-hits">
+      <div class="jump-hits" id="jump-hits" data-role="jump-hits" hidden></div>
     </form>
-    <p class="panel-note" data-role="scan-line"
-       {{if .LastScan}}title="{{.LastScan.At.Format "2006-01-02 15:04:05"}}"{{end}}>
-      {{if .LastScan}}Scanned {{.LastScan.Ago}} · {{.LastScan.Assets}} assets{{else}}Not scanned yet{{end}}
-    </p>
-  </section>
 
-  {{if .Stats}}
-    <section class="panel-section">
-      <h2>Kinds</h2>
-      <ul class="panel-list">
+    {{if .Tree}}
+      <h2>Folders{{if .Kind}} <span class="h2-note">· counting {{kindLabel .Kind}}</span>{{end}}</h2>
+      <ul class="tree" data-role="tree">
         <li>
-          <a class="{{if and (not .Kind) (not .Dir)}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
-            <span>whole library</span><span class="n">{{.Stats.Assets}}</span>
+          <a class="tree-row d0{{if not .CurrentDir}} on{{end}}" href="{{call .DirURL ""}}"
+             {{if not .CurrentDir}}aria-current="location"{{end}}>
+            <span class="tree-name">Whole library</span><span class="n">{{.TreeTotal}}</span>
           </a>
         </li>
-        {{range .Stats.ByKind}}
+        {{range .Tree}}
+          {{$n := .Count $.Kind}}
           <li>
-            <a class="{{if eq $.Kind .Kind}}on{{end}}"
-               href="/?kind={{.Kind}}{{if $.Search}}&amp;q={{$.Search}}{{end}}">
-              <span>{{.Kind}}</span><span class="n">{{.Count}}</span>
+            <a class="tree-row d{{.Depth}}{{if .Selected}} on{{end}}{{if eq $n 0}} zero{{end}}"
+               href="{{call $.DirURL .Path}}" title="{{.Path}}"
+               {{if .Selected}}aria-current="location"{{end}}>
+              <span class="caret" aria-hidden="true">{{if .HasChildren}}{{if .Open}}▾{{else}}▸{{end}}{{end}}</span>
+              <span class="tree-name">{{.Name}}</span><span class="n">{{$n}}</span>
             </a>
           </li>
         {{end}}
       </ul>
-    </section>
-  {{end}}
-
-  {{/* §7: "palette mismatch is the main thing that makes such a game look
-       incoherent". The library's own dominant colours, as a filter — this is where
-       colour search stops being a syntax you have to remember. The swatches are their
-       own explanation, so the sentence that used to sit under them is gone. */}}
-  {{if .Colours}}
-    <section class="panel-section">
-      <h2>Colours</h2>
-      {{/* M17: the swatches answer "what is this library made of". This answers the
-           other question — "I have a colour, what matches it" — which had no way in at
-           all, because `color:aabbcc~24` is a syntax nobody is going to type. A plain
-           GET form, so the browser supplies the picker and no script is involved. */}}
-      <form class="colour-pick" method="get" action="/colour">
-        {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
-        <label class="sr-only" for="colour-pick">Pick a colour</label>
-        <input type="color" id="colour-pick" name="hex" value="#4f8ef7">
-        {{/* Typed wins over picked, because a colour is usually a number you already
-             have — from a style guide, from Aseprite, from dev tools — and matching it
-             by eye on a wheel is worse than useless. #aabbcc, #abc and rgb(1,2,3) all
-             parse. */}}
-        <label class="sr-only" for="colour-typed">or type a colour</label>
-        <input type="text" id="colour-typed" name="typed" placeholder="#aabbcc"
-               autocomplete="off" spellcheck="false" inputmode="text">
-        <button type="submit">Find</button>
-        {{/* An eyedropper, where the browser has one. Chromium does; Firefox does not
-             implement EyeDropper, so the button is created by the island only when the
-             API exists rather than sitting here as a promise it cannot keep. */}}
-      </form>
-      <ul class="colour-filter">
-        {{range .Colours}}
-          <li>
-            <a class="colour-chip" data-hex="{{.Hex}}"
-               href="/?q=color%3A{{.HexQuery}}~24{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
-               title="{{.Hex}} — {{.Assets}} asset(s). Click to find assets containing it.">
-              <span class="colour-swatch" aria-hidden="true"></span>
-              <span class="sr-only">{{.Hex}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-    </section>
-  {{end}}
-
-  {{if .Facets}}
-    <section class="panel-section">
-      <h2>Tags</h2>
-      <ul class="panel-list">
-        {{range .Facets}}
-          <li>
-            <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
-              <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-    </section>
-  {{end}}
-
-  <section class="panel-section">
-    <h2>Filters</h2>
-    <ul class="panel-list">
-      <li><a href="/?q=has%3Aalpha{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>has alpha</span></a></li>
-      <li><a href="/?q=style%3Apixel-art{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>pixel art</span></a></li>
-      <li><a href="/?q=has%3Aanimation{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>animated</span></a></li>
-      <li><a href="/?q=has%3Asource-file"><span>has editable source</span></a></li>
-      {{if .Stats}}{{if .Stats.Missing}}
-        <li>
-          <a class="{{if .IncludeMissing}}on{{end}}"
-             href="/?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">
-            <span>missing files</span><span class="n">{{.Stats.Missing}}</span>
-          </a>
-        </li>
-      {{end}}{{end}}
-    </ul>
+    {{end}}
   </section>
-
-  {{/* Closed unless you are browsing inside it. <details> does this natively, so
-       there is no JavaScript and no state to keep on the server. */}}
-  {{if .Tree}}
-    <section class="panel-section">
-      <details class="folders"{{if .Dir}} open{{end}}>
-        <summary><h2>Folders</h2></summary>
-        <ul class="panel-list tree">
-          <li>
-            <a class="{{if not .Dir}}on{{end}}" href="/{{if .Search}}?q={{.Search}}{{end}}">
-              <span>whole library</span><span class="n">{{.TreeTotal}}</span>
-            </a>
-          </li>
-          {{range .Tree}}
-            <li data-depth="{{.Depth}}">
-              <a class="{{if .Selected}}on{{end}}"
-                 href="/?dir={{.Path}}{{if $.Search}}&amp;q={{$.Search}}{{end}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
-                 title="{{.Path}}">
-                <span>{{if .HasChildren}}{{if .Open}}▾{{else}}▸{{end}} {{end}}{{.Name}}</span>
-                <span class="n">{{.Assets}}</span>
-              </a>
-            </li>
-          {{end}}
-        </ul>
-      </details>
-    </section>
-  {{end}}
 
   {{if .SavedSearches}}
     <section class="panel-section">
@@ -166,20 +69,100 @@
     </section>
   {{end}}
 
-  {{/* Maintenance, in one place. These four used to appear in the toolbar, in the
-       library sidebar's "Tools" section *and* in the asset page's own sidebar — three
-       copies of the same four links, and the toolbar was the only one with no counts.
-       The audition widget that used to head this section went with the Tools block:
-       §8's keyboard audition had exactly one entry point and it was here. */}}
-  <section class="panel-section">
+  {{/* Folded, because they are refinements of a folder rather than ways into one. A
+       <details> needs no script and remembers nothing on the server. */}}
+  {{if .Facets}}
+    <details class="panel-section fold">
+      <summary><h2>Tags</h2></summary>
+      <ul class="panel-list">
+        {{range .Facets}}
+          <li>
+            <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.Dir}}&amp;dir={{$.Dir}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
+              <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
+            </a>
+          </li>
+        {{end}}
+      </ul>
+    </details>
+  {{end}}
+
+  {{/* §7: "palette mismatch is the main thing that makes such a game look
+       incoherent". The library's own dominant colours, as a filter — this is where
+       colour search stops being a syntax you have to remember. */}}
+  {{if .Colours}}
+    <details class="panel-section fold">
+      <summary><h2>Colours</h2></summary>
+      {{/* M17: the swatches answer "what is this library made of". This answers the
+           other question — "I have a colour, what matches it" — which had no way in at
+           all, because `color:aabbcc~24` is a syntax nobody is going to type. A plain
+           GET form, so the browser supplies the picker and no script is involved. */}}
+      <form class="colour-pick" method="get" action="/colour">
+        {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
+        <label class="sr-only" for="colour-pick">Pick a colour</label>
+        <input type="color" id="colour-pick" name="hex" value="#4f8ef7">
+        {{/* Typed wins over picked, because a colour is usually a number you already
+             have — from a style guide, from Aseprite, from dev tools — and matching it
+             by eye on a wheel is worse than useless. #aabbcc, #abc and rgb(1,2,3) all
+             parse. */}}
+        <label class="sr-only" for="colour-typed">or type a colour</label>
+        <input type="text" id="colour-typed" name="typed" placeholder="#aabbcc"
+               autocomplete="off" spellcheck="false" inputmode="text">
+        <button type="submit">Find</button>
+      </form>
+      <ul class="colour-filter">
+        {{range .Colours}}
+          <li>
+            <a class="colour-chip" data-hex="{{.Hex}}"
+               href="/?q=color%3A{{.HexQuery}}~24{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}"
+               title="{{.Hex}} — {{.Assets}} asset(s). Click to find assets containing it.">
+              <span class="colour-swatch" aria-hidden="true"></span>
+              <span class="sr-only">{{.Hex}}</span>
+            </a>
+          </li>
+        {{end}}
+      </ul>
+    </details>
+  {{end}}
+
+  <details class="panel-section fold">
+    <summary><h2>Filters</h2></summary>
+    <ul class="panel-list">
+      <li><a href="/?q=has%3Aalpha{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>has alpha</span></a></li>
+      <li><a href="/?q=style%3Apixel-art{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>pixel art</span></a></li>
+      <li><a href="/?q=has%3Aanimation{{if .Kind}}&amp;kind={{.Kind}}{{end}}"><span>animated</span></a></li>
+      <li><a href="/?q=has%3Asource-file"><span>has editable source</span></a></li>
+      {{if .Stats}}{{if .Stats.Missing}}
+        <li>
+          <a class="{{if .IncludeMissing}}on{{end}}"
+             href="/?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">
+            <span>missing files</span><span class="n">{{.Stats.Missing}}</span>
+          </a>
+        </li>
+      {{end}}{{end}}
+    </ul>
+  </details>
+
+  {{/* Maintenance, in one place, at the bottom: these are things you do now and then, not
+       ways into the library. The scan stays one click away and keeps its live line. */}}
+  <section class="panel-section maintenance">
     <h2>Maintenance</h2>
+    {{/* The scan runs in place (M16): jobs.js posts this and then keeps the line below it
+         moving; without JavaScript the form posts normally and lands back on the page. */}}
+    <form method="post" action="/scan" class="panel-action" data-role="scan-form">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit" class="button-quiet">Re-scan library</button>
+    </form>
+    <p class="panel-note" data-role="scan-line"
+       {{if .LastScan}}title="{{.LastScan.At.Format "2006-01-02 15:04:05"}}"{{end}}>
+      {{if .LastScan}}Scanned {{.LastScan.Ago}} · {{.LastScan.Assets}} files{{else}}Not scanned yet{{end}}
+    </p>
     <ul class="panel-list">
       <li><a class="{{if eq .Nav "dupes"}}on{{end}}" href="/dupes"><span>duplicates</span></a></li>
       <li><a class="{{if eq .Nav "junk"}}on{{end}}" href="/junk"><span>junk</span></a></li>
       <li><a class="{{if eq .Nav "trash"}}on{{end}}" href="/trash"><span>trash</span></a></li>
-      {{/* The provenance backlog is a search now (M16), not a page: it lands in the grid where
-           each asset can be fixed on its own page, which is what a library of loose files needs.
-           The count is packs, the grid shows assets — the tooltip says so. */}}
+      {{/* The provenance backlog is a search (M16), not a page: it lands in the grid where
+           each asset can be fixed on its own page. The count is packs, the grid shows
+           assets — the tooltip says so. */}}
       <li>
         <a href="/?q=-has%3Aprovenance"
            title="{{.NeedsProvenance}} pack(s) with no licence or source recorded">
@@ -195,4 +178,35 @@
       </li>
     </ul>
   </section>
+{{end}}
+
+{{/* "Use it in a game", shared by the panel and the asset page: which file Godot should
+     take and which Unreal should, because they disagree — Godot is built around glTF,
+     Unreal around FBX, and Unreal has no importer for .ogg. The plugins are the better
+     route and the note says why: an import through them is recorded, so it ends up in
+     CREDITS.md and can never be a removal candidate; a download is just a file. */}}
+{{define "engine-choices"}}
+  {{if .Engines}}
+    <section class="peek-section engines" aria-label="Use it in a game">
+      <h3>Use in a game</h3>
+      <ul class="engine-list">
+        {{range .Engines}}
+          <li>
+            <span class="engine engine-{{.Engine}}">{{.Engine}}</span>
+            {{with .Asset}}
+              <a href="/assets/{{.ID}}/download" title="Download {{.RelPath}}">{{.Filename}}</a>
+              <span class="hint">{{bytes .Size}}</span>
+            {{else}}
+              <span class="hint">{{.Note}}</span>
+            {{end}}
+          </li>
+        {{end}}
+      </ul>
+      <p class="hint">
+        Or import it from the Ambar plugin — Godot: the Ambar dock;
+        Unreal: Window › Ambar Asset Library. An import through the plugin is recorded, so it
+        lands in CREDITS.md and is never offered for removal; a download is not.
+      </p>
+    </section>
+  {{end}}
 {{end}}

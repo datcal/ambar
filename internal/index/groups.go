@@ -288,6 +288,8 @@ type Group struct {
 	Primary Asset
 	// VariantCount includes the primary, so 1 means "no other formats".
 	VariantCount int
+	// Formats are the extensions the group holds, primary first. Filled by ListGroups.
+	Formats []string
 }
 
 // MultiVariant reports whether this group holds more than one format.
@@ -493,7 +495,137 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 			page.NextCursor = encodeCursor(last.Primary.Filename, last.ID)
 		}
 	}
+	if err := ix.fillFormats(ctx, page.Groups); err != nil {
+		return nil, err
+	}
 	return page, nil
+}
+
+// fillFormats sets Formats on every group of a page: one query for the page, and only
+// for the groups that hold more than one file — the rest are their primary's extension.
+func (ix *Indexer) fillFormats(ctx context.Context, groups []Group) error {
+	var ids []any
+	byID := map[int64]*Group{}
+	for i := range groups {
+		g := &groups[i]
+		g.Formats = []string{g.Primary.Ext}
+		if g.VariantCount > 1 {
+			ids = append(ids, g.ID)
+			byID[g.ID] = g
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := ix.db.Reader.QueryContext(ctx, `
+		SELECT DISTINCT group_id, ext FROM assets
+		WHERE group_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, ids...)
+	if err != nil {
+		return fmt.Errorf("load group formats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var ext string
+		if err := rows.Scan(&id, &ext); err != nil {
+			return err
+		}
+		if g := byID[id]; g != nil && ext != g.Primary.Ext {
+			g.Formats = append(g.Formats, ext)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// The primary stays first; the rest follow the same precedence that chose it.
+	for _, g := range byID {
+		rest := g.Formats[1:]
+		sort.SliceStable(rest, func(i, j int) bool {
+			ri, rj := precedenceRank(rest[i]), precedenceRank(rest[j])
+			if ri != rj {
+				return ri < rj
+			}
+			return rest[i] < rest[j]
+		})
+	}
+	return nil
+}
+
+// KindTally is how many groups a set of filters matches, in total and per kind.
+type KindTally struct {
+	// Total is the number of groups, which is what "All" shows. The kinds can add up to
+	// more, because a group counts under every kind one of its variants has.
+	Total int
+	Kinds []KindCount
+}
+
+// Count is the number for one kind, or the total for "".
+func (t KindTally) Count(kind string) int {
+	if kind == "" {
+		return t.Total
+	}
+	for _, k := range t.Kinds {
+		if k.Kind == kind {
+			return k.Count
+		}
+	}
+	return 0
+}
+
+// KindCounts counts what a search would show under each kind: the numbers on the folder
+// view's kind switch, so that "Models 47" is exactly what clicking it lists.
+//
+// opts.Kind is ignored — these are the numbers for the *other* choices — and so is paging.
+// A group counts under a kind when any of its variants has it, which is how the kind filter
+// itself matches (groupFilters), so each number equals the grid's total for that kind.
+func (ix *Indexer) KindCounts(ctx context.Context, opts ListOptions) (KindTally, error) {
+	var tally KindTally
+
+	opts.Kind = ""
+	where, args := groupFilters(opts)
+	compiled, err := ix.compileQuery(ctx, opts.Query, "v")
+	if err != nil {
+		return tally, err
+	}
+	if compiled.SQL != "" {
+		where = append(where, `g.id IN (
+			SELECT v.group_id FROM assets v
+			WHERE v.group_id IS NOT NULL AND `+compiled.SQL+`)`)
+		args = append(args, compiled.Args...)
+	}
+	cond := strings.Join(where, " AND ")
+
+	if err := ix.db.Reader.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM asset_groups g
+		JOIN assets a ON a.id = g.primary_asset_id
+		JOIN packs p ON p.id = g.pack_id
+		WHERE `+cond, args...).Scan(&tally.Total); err != nil {
+		return tally, fmt.Errorf("count groups: %w", err)
+	}
+
+	rows, err := ix.db.Reader.QueryContext(ctx, `
+		SELECT kv.kind, count(DISTINCT g.id)
+		FROM asset_groups g
+		JOIN assets a ON a.id = g.primary_asset_id
+		JOIN packs p ON p.id = g.pack_id
+		JOIN assets kv ON kv.group_id = g.id
+		WHERE `+cond+`
+		GROUP BY kv.kind
+		ORDER BY count(DISTINCT g.id) DESC, kv.kind`, args...)
+	if err != nil {
+		return tally, fmt.Errorf("count groups by kind: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kc KindCount
+		if err := rows.Scan(&kc.Kind, &kc.Count); err != nil {
+			return tally, err
+		}
+		tally.Kinds = append(tally.Kinds, kc)
+	}
+	return tally, rows.Err()
 }
 
 // Neighbour is the asset on one side of the one you are looking at.
@@ -585,9 +717,9 @@ func groupFilters(opts ListOptions) ([]string, []any) {
 	// The folder tree's filter (M14). Matched against the primary asset's path: a
 	// group belongs to the directory its engine-ready file sits in, which is the one
 	// the grid tile represents.
-	if dir := cleanDir(opts.Dir); dir != "" {
-		where = append(where, dirExpr("a"))
-		args = append(args, dir, dir+"/", dir+"/")
+	if expr, dirArgs := dirFilter("a", opts); expr != "" {
+		where = append(where, expr)
+		args = append(args, dirArgs...)
 	}
 	// The §7 query clause is added by ListGroups, which has the context and tag
 	// resolver the compiler needs; groupFilters covers only the sidebar facets.

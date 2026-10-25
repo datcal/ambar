@@ -4,15 +4,15 @@
 <div class="stack">
   <h1>API tokens</h1>
   <p class="hint">
-    For the Godot plugin and scripts. Each device should use its own token, so one can be
+    For the Godot and Unreal plugins, and scripts. Each device should use its own token, so one can be
     revoked without disrupting the other (§11). The token is shown once, here, and never again.
   </p>
 
   {{if .NewToken}}
     <div class="card token-new">
       <h2>New token — copy it now</h2>
-      <p class="hint">This is the only time it will be shown. Store it in your Godot editor
-        settings or your <code>.env</code>.</p>
+      <p class="hint">This is the only time it will be shown. Paste it into the plugin's connection settings
+        (Godot or Unreal) or your <code>.env</code>.</p>
       <pre class="token-value"><code>{{.NewToken}}</code></pre>
     </div>
   {{end}}
@@ -34,7 +34,7 @@
            perfectly and then fails only at the moment an import is recorded, which is the one
            thing that makes §9.1's "a project uses this" protection true. */}}
       <p class="hint">
-        The Godot plugin needs <strong>write</strong> — it records what a project imports.
+        The Godot and Unreal plugins need <strong>write</strong> — they record what a project imports.
         Read alone is enough to browse and download.
       </p>
       <p><label>Expires (optional)<br><input type="date" name="expires"></label></p>

@@ -25,11 +25,16 @@ func TestSearchSuggest(t *testing.T) {
 		t.Error("suggestions are not grouped")
 	}
 
-	// A pack name is offered with the number of assets behind it, because a pack of two and a
-	// pack of four hundred are different offers.
+	// A pack is offered as its folder — choosing it makes it the search's scope rather than
+	// typing its name — with the number of assets behind it, because a pack of two and a
+	// pack of four hundred are different offers. The same name as a text search for the
+	// pack would be a second row going nowhere better, so it is left out.
 	packs := ts.body(t, ts.get(t, "/api/v1/suggest?q=ken"))
-	if !strings.Contains(packs, "kenney-sci-fi") || !strings.Contains(packs, "Packs") {
-		t.Errorf("no pack suggestion for 'ken': %s", packs)
+	if !strings.Contains(packs, `data-href="/?dir=kenney-sci-fi"`) || !strings.Contains(packs, "Folders") {
+		t.Errorf("no folder suggestion for 'ken': %s", packs)
+	}
+	if !strings.Contains(packs, "library root · 2") {
+		t.Errorf("the folder row does not count its assets: %s", packs)
 	}
 
 	// The query language is offered too — this is the only place the syntax is documented in

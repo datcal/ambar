@@ -47,7 +47,6 @@ type Server struct {
 	build BuildInfo
 
 	index    *index.Indexer
-	folders  folderTreeCache
 	tags     *tags.Store
 	saved    *savedsearch.Store
 	prov     *provenance.Store
@@ -173,6 +172,11 @@ func (s *Server) routes() http.Handler {
 	// search. A redirect so the form needs no JavaScript.
 	mux.Handle("GET /colour", auth.RequireUser(http.HandlerFunc(s.handleColourSearch)))
 	mux.Handle("GET /assets/{id}", auth.RequireUser(http.HandlerFunc(s.handleAsset)))
+	// The folder view (folderview.go): go to a pasted path or a folder's name, find a
+	// folder as you type, and the grid's right-hand panel.
+	mux.Handle("GET /go", auth.RequireUser(http.HandlerFunc(s.handleGo)))
+	mux.Handle("GET /folders/find", auth.RequireUser(http.HandlerFunc(s.handleFolderFind)))
+	mux.Handle("GET /assets/{id}/peek", auth.RequireUser(http.HandlerFunc(s.handleAssetPeek)))
 	mux.Handle("GET /assets/{id}/download", auth.RequireUser(http.HandlerFunc(s.handleAssetDownload)))
 
 	// Tagging (§7). State-changing posts are CSRF-protected by the middleware.
@@ -551,6 +555,19 @@ type pageData struct {
 	Tree      []index.FlatNode
 	TreeTotal int
 	Dir       string
+	// CurrentDir is the folder the tree is open at: the browsed one on the library page,
+	// the asset's own on an asset page.
+	CurrentDir string
+	// DirURL links a tree row to its folder; the library page's version keeps the kind,
+	// the search and the view.
+	DirURL func(string) string
+
+	// The folder view on the library page (folderview.go), and the folder search's rows.
+	Folder     *folderView
+	FolderHits []folderHit
+
+	// Engines is "use it in a game": which file Godot and which Unreal should take.
+	Engines []engineChoice
 
 	// §7 pack palette consistency.
 
@@ -586,6 +603,11 @@ func parseTemplates() (map[string]*template.Template, error) {
 		// sizes builds a literal list, which templates cannot do on their own. Used by
 		// the font specimen's size ladder (M15).
 		"sizes": func(v ...int) []int { return v },
+		// engineOf names the editor a project path belongs to, from its shape: Godot
+		// paths are res://, Unreal's are /Game/… — the manifests are otherwise the same.
+		"engineOf":  engineOf,
+		"upper":     strings.ToUpper,
+		"kindLabel": kindLabel,
 	}
 
 	pages := []string{"login.html", "index.html", "assets.html", "asset.html", "jobs.html",

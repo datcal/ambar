@@ -125,8 +125,12 @@ func (c *sidebarCache) get(ctx context.Context, build func(context.Context) (*si
 		return warm, nil
 	}
 
-	// Nothing to serve: the first request of the process waits for the real thing.
-	snap, err := c.rebuild(ctx, build)
+	// Nothing to serve: the first request of the process waits for the real thing. Not on its
+	// own context, though: a browser that navigates away mid-build (a login redirect does
+	// exactly that) would cancel the queries half way, and the half-built snapshot — no
+	// folder tree, no counts — would then be served for a whole TTL. The folder view made
+	// that visible, because the tree is now the navigation.
+	snap, err := c.rebuild(context.WithoutCancel(ctx), build)
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +244,13 @@ func (s *Server) lastScan(ctx context.Context, assets int) (*lastScanInfo, error
 // applySidebar fills the navigation half of pageData. Callers set data.Nav themselves,
 // since only the handler knows which page it is.
 func (s *Server) applySidebar(ctx context.Context, data *pageData, currentDir string) {
+	// Tree rows link to a folder. The library page replaces this with one that keeps the
+	// current kind and view; elsewhere a folder link is just the folder.
+	if data.DirURL == nil {
+		data.DirURL = func(path string) string { return libraryLink(nil, "dir", path) }
+	}
+	data.CurrentDir = currentDir
+
 	snap, err := s.nav.get(ctx, s.buildSidebar)
 	if err != nil {
 		s.log.ErrorContext(ctx, "building the sidebar failed", "error", err)
@@ -259,6 +270,6 @@ func (s *Server) applySidebar(ctx context.Context, data *pageData, currentDir st
 
 	if snap.Tree != nil {
 		data.Tree = index.Flatten(snap.Tree, currentDir)
-		data.TreeTotal = snap.Tree.Assets
+		data.TreeTotal = snap.Tree.Count(data.Kind)
 	}
 }

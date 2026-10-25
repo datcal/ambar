@@ -31,9 +31,12 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := index.ListOptions{
-		Query:          strings.TrimSpace(q.Get("q")),
-		Kind:           q.Get("kind"),
-		Dir:            q.Get("dir"),
+		Query: strings.TrimSpace(q.Get("q")),
+		Kind:  q.Get("kind"),
+		Dir:   q.Get("dir"),
+		// "Include subfolders" is on unless switched off, because "what is in this pack" is
+		// the usual question; sub=0 is the file manager's view of one folder.
+		DirOnly:        q.Get("sub") == "0",
 		IncludeMissing: q.Get("missing") == "1",
 		// The hide tag (M17). Same shape as missing: excluded by default, one link away.
 		IncludeDisabled: q.Get("disabled") == "1",
@@ -87,6 +90,9 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	data.Flash = q.Get("msg")
 
 	data.Dir = opts.Dir
+	// Tiles carry the browse context, so an asset page's previous/next walks this folder
+	// and this search rather than the whole library.
+	data.BrowseQuery = browseQueryString(opts)
 
 	// Per-tile launch links and local paths (M16), when the operator has told us how the
 	// library is mounted on their machine. String work only — no filesystem, no queries — so
@@ -108,6 +114,7 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	// The shared sidebar: counts, colours, the folder tree, saved searches, the last
 	// scan. Cached, because the asset page renders the same thing now — see sidebar.go.
 	s.applySidebar(r.Context(), &data, opts.Dir)
+	s.applyFolderView(r, &data, opts, page)
 
 	// §7's facets describe *this* result set, so a filtered view has to compute its own — but
 	// an unfiltered browse is the same for everybody and came with the cached snapshot
@@ -189,6 +196,9 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		data.Group = &group
 		if variants, err := s.index.Variants(r.Context(), group.ID); err == nil {
 			data.Variants = variants
+		}
+		if len(data.Variants) > 0 {
+			data.Engines = engineChoices(asset.Kind, data.Variants)
 		}
 
 		// Previous/next in the browse order (M16). The filters travel in the query
@@ -339,6 +349,7 @@ func browseOptions(r *http.Request) index.ListOptions {
 		Query:          strings.TrimSpace(q.Get("q")),
 		Kind:           q.Get("kind"),
 		Dir:            q.Get("dir"),
+		DirOnly:        q.Get("sub") == "0",
 		IncludeMissing: q.Get("missing") == "1",
 		// The hide tag (M17). Same shape as missing: excluded by default, one link away.
 		IncludeDisabled: q.Get("disabled") == "1",
@@ -363,6 +374,9 @@ func browseQueryString(opts index.ListOptions) string {
 	}
 	if opts.Dir != "" {
 		v.Set("dir", opts.Dir)
+	}
+	if opts.DirOnly {
+		v.Set("sub", "0")
 	}
 	if opts.PackID != 0 {
 		v.Set("pack", strconv.FormatInt(opts.PackID, 10))

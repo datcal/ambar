@@ -2,13 +2,124 @@
      be defined here, which is why the asset page had to grow its own copy. */}}
 {{define "sidebar"}}{{template "library-nav" .}}{{end}}
 
-{{define "title"}}Library — Ambar{{end}}
+{{define "title"}}{{if and .Folder .Folder.Dir}}{{.Folder.Title}}{{else}}Library{{end}} — Ambar{{end}}
 
 {{define "content"}}
-<div class="stack">
+<div class="stack folderview">
   {{/* The page's heading, for screen readers and document outline. The visible
-       identity is the toolbar and the grid itself. */}}
+       identity is the folder header below. */}}
   <h1 class="sr-only">Library</h1>
+
+  {{/* The folder view (folderview.go). Where you are, as a breadcrumb you can climb and a
+       path you can paste or copy; then what is here, counted by kind for *this* folder. */}}
+  {{with .Folder}}
+    <div class="crumbbar">
+      <nav class="crumbs" aria-label="Folder path">
+        {{range .Crumbs}}
+          {{if .Last}}
+            <span class="crumb crumb-last" aria-current="location">{{.Name}}</span>
+          {{else}}
+            <a class="crumb" href="{{.URL}}">{{.Name}}</a><span class="crumb-sep" aria-hidden="true">/</span>
+          {{end}}
+        {{end}}
+      </nav>
+      {{/* A <details> so it works without a script: paste a path from your file manager —
+           /mnt/game-assets/3d/…, a Windows path, a file:// link — or a folder's name. */}}
+      <details class="gopath">
+        <summary class="button button-quiet">Go to path…</summary>
+        <form method="get" action="/go" class="gopath-form">
+          {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
+          {{if .List}}<input type="hidden" name="view" value="list">{{end}}
+          <label class="sr-only" for="gopath">A folder path or name</label>
+          {{/* Filled with where you are, selected on open (folderview.js): paste over it,
+               or edit the end of it to climb or descend. */}}
+          <input id="gopath" name="path" type="text" spellcheck="false" autocapitalize="none"
+                 value="{{if .LocalPath}}{{.LocalPath}}{{else}}{{.Dir}}{{end}}"
+                 placeholder="/mnt/your-library/3d/Vendor/Pack" data-role="gopath-input">
+          <button type="submit" class="primary">Open</button>
+        </form>
+      </details>
+      {{with .LocalPath}}
+        <button type="button" class="button button-quiet" data-copy-path="{{.}}"
+                title="Copy {{.}} — paste it into a file manager, or drag files from there into Godot or Unreal">Copy path</button>
+      {{end}}
+    </div>
+
+    <div class="folderhead">
+      <h2 class="foldertitle">{{.Title}}</h2>
+      <p class="foldermeta">
+        {{.Groups}} asset{{if ne .Groups 1}}s{{end}} · {{.Files}} file{{if ne .Files 1}}s{{end}}
+        {{if $.Page}}{{if or $.Search $.Kind .DirOnly}} · showing {{$.Page.Total}}{{if $.Search}} for “{{$.Search}}”{{end}}{{end}}{{end}}
+        {{if or $.Search $.Kind .Dir}} · <a class="clear" href="{{.ClearAllURL}}">clear</a>{{end}}
+      </p>
+    </div>
+
+    <div class="kindbar">
+      <nav class="kinds" aria-label="Kind">
+        {{range .Kinds}}
+          <a class="kindtab{{if .On}} on{{end}}" href="{{.URL}}"{{if .On}} aria-current="true"{{end}}>
+            {{.Label}} <span class="n">{{.Count}}</span>
+          </a>
+        {{end}}
+      </nav>
+      {{/* Only inside a folder: at the root "this folder only" is the handful of loose
+           files at the top of the library, which is not a question anyone asks. */}}
+      {{if .Dir}}
+        <a class="subtoggle{{if not .DirOnly}} on{{end}}" href="{{.SubURL}}" role="switch"
+           aria-checked="{{if .DirOnly}}false{{else}}true{{end}}"
+           title="{{if .DirOnly}}Showing only what sits in this folder{{else}}Showing everything below this folder{{end}}">
+          <span class="switchbox" aria-hidden="true"></span> Include subfolders
+        </a>
+      {{end}}
+      <div class="kindbar-right">
+        {{/* Sort (M16). Submitting on change keeps it a plain GET form, so every order is
+             a shareable URL. */}}
+        {{if $.Page}}
+          <form method="get" action="/" class="gridsort">
+            {{if $.Search}}<input type="hidden" name="q" value="{{$.Search}}">{{end}}
+            {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
+            {{if .Dir}}<input type="hidden" name="dir" value="{{.Dir}}">{{end}}
+            {{if .DirOnly}}<input type="hidden" name="sub" value="0">{{end}}
+            {{if .List}}<input type="hidden" name="view" value="list">{{end}}
+            {{if $.IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
+            {{if ne $.Page.PageSize 100}}<input type="hidden" name="per" value="{{$.Page.PageSize}}">{{end}}
+            <label class="sr-only" for="gridsort">Sort by</label>
+            <select id="gridsort" name="sort" data-role="autosubmit">
+              {{range $.SortOptions}}
+                <option value="{{.}}" {{if eq (printf "%s" .) $.Sort}}selected{{end}}>{{.Label}}</option>
+              {{end}}
+            </select>
+            <noscript><button type="submit">Sort</button></noscript>
+          </form>
+        {{end}}
+        {{/* Thumbnail size. It drives --tile through the CSSOM (workspace.js) and remembers
+             the choice. Meaningless in the list, so it goes away there. */}}
+        {{if not .List}}
+          <label class="tilesize">
+            <span class="sr-only">Thumbnail size</span>
+            <input type="range" id="tilesize" min="4" max="26" step="1" value="11"
+                   aria-label="Thumbnail size">
+          </label>
+        {{end}}
+        <nav class="viewswitch" aria-label="View">
+          <a class="viewbtn{{if not .List}} on{{end}}" href="{{.GridURL}}" title="Thumbnails"
+             {{if not .List}}aria-current="true"{{end}}>▦<span class="sr-only"> Thumbnails</span></a>
+          <a class="viewbtn{{if .List}} on{{end}}" href="{{.ListURL}}" title="List"
+             {{if .List}}aria-current="true"{{end}}>☰<span class="sr-only"> List</span></a>
+        </nav>
+      </div>
+    </div>
+
+    {{if .Subfolders}}
+      <nav class="subfolders" aria-label="Subfolders">
+        {{range .Subfolders}}
+          <a class="subfolder" href="{{.URL}}" title="{{.Path}}">
+            <span class="foldericon" aria-hidden="true"></span>{{.Name}} <span class="n">{{.Count}}</span>
+          </a>
+        {{end}}
+      </nav>
+    {{end}}
+  {{end}}
 
   {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
 
@@ -18,13 +129,13 @@
        always here and getting them back is one link. */}}
   {{if and .Stats .Stats.Disabled}}
     {{if not .IncludeDisabled}}
-      <p class="note">
+      <p class="note note-quiet">
         {{.Stats.Disabled}} asset{{if ne .Stats.Disabled 1}}s are{{else}} is{{end}} hidden by
         a <code>disable:true</code> tag.
-        <a href="/?disabled=1{{if .Search}}&amp;q={{.Search}}{{end}}{{if .Kind}}&amp;kind={{.Kind}}{{end}}">Show them</a>.
+        <a href="/?disabled=1{{if .Search}}&amp;q={{.Search}}{{end}}{{if .Kind}}&amp;kind={{.Kind}}{{end}}{{if .Dir}}&amp;dir={{.Dir}}{{end}}">Show them</a>.
       </p>
     {{else}}
-      <p class="note">
+      <p class="note note-quiet">
         Showing hidden assets. Remove the <code>disable:true</code> tag on an asset's page to
         bring it back. <a href="/{{if .Search}}?q={{.Search}}{{end}}">Hide them again</a>.
       </p>
@@ -35,7 +146,7 @@
     {{if not .IncludeMissing}}
       {{/* §12: these rows are kept, never deleted. Say so plainly, because a count
            of missing files is alarming without the explanation. */}}
-      <p class="note">
+      <p class="note note-quiet">
         {{.Stats.Missing}} indexed file{{if ne .Stats.Missing 1}}s were{{else}} was{{end}}
         not present at the last scan. The entries are kept, so restoring the files
         restores everything. <a href="/?missing=1{{if .Search}}&amp;q={{.Search}}{{end}}">Show them</a>.
@@ -44,54 +155,6 @@
   {{end}}
 
   {{if .Page}}
-    <div class="gridbar">
-      <p class="resultcount">
-        {{if .Dir}}<code>{{.Dir}}</code> — {{end}}
-        {{if .Search}}
-          {{.Page.Total}} match{{if ne .Page.Total 1}}es{{end}} for “{{.Search}}”
-        {{else}}
-          {{.Page.Total}} asset{{if ne .Page.Total 1}}s{{end}}
-        {{end}}
-        {{if .Stats}}
-          {{if gt .Stats.Assets .Page.Total}}
-            <span class="hint">— {{.Stats.Assets}} files, collapsed by format variant</span>
-          {{end}}
-        {{end}}
-      </p>
-      <div class="gridbar-right">
-        {{if or .Search .Kind .IncludeMissing .Dir}}<a class="clear" href="/">clear filters</a>{{end}}
-
-        {{/* Sort (M16). There used to be exactly one order — filename A→Z over the whole
-             library — so "what did I download yesterday" had no answer, and a sprite from
-             2d/ sat between two wavs from sounds/. Submitting on change keeps it a plain
-             GET form, so every order is a shareable URL. */}}
-        <form method="get" action="/" class="gridsort">
-          {{if .Search}}<input type="hidden" name="q" value="{{.Search}}">{{end}}
-          {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
-          {{if .Dir}}<input type="hidden" name="dir" value="{{.Dir}}">{{end}}
-          {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
-          {{if ne .Page.PageSize 100}}<input type="hidden" name="per" value="{{.Page.PageSize}}">{{end}}
-          <label class="sr-only" for="gridsort">Sort by</label>
-          <select id="gridsort" name="sort" data-role="autosubmit">
-            {{range .SortOptions}}
-              <option value="{{.}}" {{if eq (printf "%s" .) $.Sort}}selected{{end}}>{{.Label}}</option>
-            {{end}}
-          </select>
-          <noscript><button type="submit">Sort</button></noscript>
-        </form>
-
-        {{/* Thumbnail size, the control Eagle puts in the same place. It drives the
-             --tile custom property through the CSSOM (workspace.js) and remembers the
-             choice, because "everything is too small to recognise" is a real problem
-             on a library of 32×32 sprites. */}}
-        <label class="tilesize">
-          size
-          <input type="range" id="tilesize" min="4" max="26" step="1" value="11"
-                 aria-label="Thumbnail size">
-        </label>
-      </div>
-    </div>
-
     {{if .Page.Groups}}
       {{/* §7 bulk tagging. The whole grid is a form: check tiles and "Tag
            selected", or "Tag all N matches" to tag the entire result set — the
@@ -100,6 +163,8 @@
         <input type="hidden" name="csrf_token" value="{{.CSRF}}">
         <input type="hidden" name="q" value="{{.Search}}">
         {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
+        {{if .Dir}}<input type="hidden" name="dir" value="{{.Dir}}">{{end}}
+        {{if and .Folder .Folder.DirOnly}}<input type="hidden" name="sub" value="0">{{end}}
         {{if .IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
         {{/* Tagging, folded into one line. It used to be a box above the grid competing
              with the results for attention; a toolbar row is what it is. */}}
@@ -127,37 +192,35 @@
 
       {{/* One tile per logical asset, not per file. §5.1: "Indexing them
            independently means every sprite appears three or four times and the grid
-           becomes noise." Also invariant 7. */}}
-      <ul class="thumbgrid" id="thumbgrid">
+           becomes noise." Also invariant 7.
+
+           The list view is the same markup laid out as rows — the folder and the size,
+           hidden on a tile, become columns — so selection, the keyboard and the panel
+           behave identically in both (grid.js and folderview.js only know .tile). */}}
+      <ul class="thumbgrid{{if and .Folder .Folder.List}} listview{{end}}" id="thumbgrid">
         {{range $group := .Page.Groups}}
           {{with $group.Primary}}
             <li class="tile{{if .Missing}} tile-missing{{end}}{{if .IsAudio}} tile-audio{{end}}"
+                data-id="{{.ID}}"
                 {{if .IsAudio}}data-audio="/assets/{{.ID}}/audio" data-asset-id="{{.ID}}" data-title="{{.Filename}}"{{end}}>
               <label class="tilecheck"><input type="checkbox" name="id" value="{{.ID}}" aria-label="Select {{.Filename}}"></label>
-              {{/* A new tab per asset (M16). You are comparing things: opening one should
-                   not throw away the grid you were reading, and the browser's back button
-                   is a poor substitute for having both on screen. */}}
-              <a class="tilelink" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener">
+              {{/* A plain click opens the panel on the right (folderview.js); the link
+                   itself still opens the full page in a new tab, which is what a middle
+                   click, Ctrl+click or a browser without scripts gets. */}}
+              <a class="tilelink" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener"
+                 data-peek="/assets/{{.ID}}/peek{{$.BrowseQuery}}">
                 {{/* Pixelated when the detector says pixel art *or* when the tile is
-                     necessarily magnifying the source (M16) — the detector is a
-                     heuristic and a 32px sprite drawn at 176px has no smooth answer. */}}
+                     necessarily magnifying the source (M16). */}}
                 <span class="thumb{{if or .IsPixelArt .ThumbUpscales}} thumb-pixelated{{end}}">
                   {{if .ShowsThumb}}
-                    {{/* Hovering swaps in the moving preview, which §8 asks for in the
-                         grid — but only where one exists. AnimatedPreview decides, and
-                         says nothing for a *detected* frame grid: a tileset is not an
-                         animation, and pointing at an anim.gif that was never written
-                         is what made a hover blank the tile (M17). */}}
+                    {{/* Hovering swaps in the moving preview, but only where one exists:
+                         AnimatedPreview decides (M17). */}}
                     <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}" loading="lazy"
                          {{with .AnimatedPreview}}data-anim="{{.}}"{{end}}>
                   {{else if .NeedsBrowserThumb}}
-                    {{/* M15: the server has no 3D renderer and Blender is optional
-                         (§6), but the browser has one and is about to be asked. Until
-                         it answers, the tile says what it is. */}}
-                    {{/* The original through the companion route, never a derived glb:
-                         the thumbnailer's whole point is the formats derive could not
-                         normalise, and for glTF the .bin and textures resolve beside
-                         it anyway. */}}
+                    {{/* M15: the server has no 3D renderer and Blender is optional (§6),
+                         but the browser has one and is about to be asked. The original
+                         through the companion route, never a derived glb. */}}
                     <span class="thumb-none thumb-pending" data-model="{{.ViewerFile}}"
                           data-format="{{.ViewerFormat}}" data-asset="{{.ID}}"
                           {{with .MTLName}}data-mtl="{{.}}"{{end}}
@@ -170,20 +233,15 @@
                 </span>
                 <span class="tilename">{{.Filename}}</span>
               </a>
-              {{/* The pack name and the byte size used to be here and wrapped to three
-                   lines under every tile, which is most of what made the grid noisy — and
-                   the pack is the same for a whole screenful anyway. Pixel size is the one
-                   that decides whether a sprite is usable; the rest is in the tooltip. */}}
+              {{/* Pixel size is the one fact that decides whether a sprite is usable; the
+                   pack and byte size are in the tooltip — and in the list's columns. */}}
               <span class="tilemeta" title="{{.PackName}} · {{bytes .Size}}{{with .Dimensions}} · {{.}}{{end}}">
-                {{with .Dimensions}}{{.}}{{else}}{{.Ext}}{{end}}
+                {{with .Dimensions}}{{.}}{{else}}{{if .TriCount}}{{.TriCount}} tris{{else}}{{bytes .Size}}{{end}}{{end}}
               </span>
-              {{/* Quick actions (M16). Hidden until the tile is hovered or focused, because a
-                   grid of a hundred tiles with six buttons each is not a grid any more. Present
-                   in the DOM either way, so the keyboard reaches them.
-
-                   The app buttons carry each application's own colour and initials rather than
-                   its logo: shipping vendor logos would mean either an external request (§11's
-                   CSP forbids one) or redistributing a trademark. */}}
+              <span class="tilefolder">{{libraryDir .LibraryPath}}</span>
+              <span class="tilebytes">{{bytes .Size}}</span>
+              {{/* Quick actions (M16). Hidden until the tile is hovered or focused. The app
+                   buttons carry each application's colour and initials rather than its logo. */}}
               {{$apps := index $.TileApps .ID}}
               {{$path := index $.TilePaths .ID}}
               {{if or $apps $path}}
@@ -206,10 +264,12 @@
               {{end}}
 
               <span class="tilebadges">
+                {{/* §5.1: one tile per artwork; the formats behind it, named. "FBX · OBJ"
+                     says what you can take into which engine, which "2 variants" did not. */}}
                 {{if $group.MultiVariant}}
-                  {{/* §5.1: the grid shows one entry per group; the count tells you
-                       there are editable sources behind it. */}}
-                  <span class="badge badge-variants">{{$group.VariantCount}} variants</span>
+                  {{range $group.Formats}}<span class="fmt">{{upper .}}</span>{{end}}
+                {{else}}
+                  <span class="fmt fmt-solo">{{upper .Ext}}</span>
                 {{end}}
                 {{if gt (len .AnimationNames) 0}}<span class="badge">{{len .AnimationNames}} anims</span>{{end}}
                 {{if .Missing}}<span class="badge">missing</span>{{end}}
@@ -233,13 +293,7 @@
         <script src="/static/modelthumb.js?v={{$.Version}}" defer></script>
       {{end}}
 
-      {{/* Numbered paging (M16), replacing "Load more".
-
-           The old control appended rows with htmx, which sounds friendlier and was worse
-           in every way that mattered here: no way back, no way to jump, no URL for where
-           you are, and the browser's back button threw away everything you had loaded. It
-           also asked the server for the *whole page* each time and discarded all but the
-           tiles. A library of 5,610 assets is 57 pages; PageNumbers windows them so this
+      {{/* Numbered paging (M16), replacing "Load more". PageNumbers windows them so this
            is nine links rather than fifty-seven. */}}
       {{with .Page}}
         {{if gt .Pages 1}}
@@ -276,6 +330,10 @@
               {{if $.Search}}<input type="hidden" name="q" value="{{$.Search}}">{{end}}
               {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
               {{if $.Dir}}<input type="hidden" name="dir" value="{{$.Dir}}">{{end}}
+              {{with $.Folder}}
+                {{if .DirOnly}}<input type="hidden" name="sub" value="0">{{end}}
+                {{if .List}}<input type="hidden" name="view" value="list">{{end}}
+              {{end}}
               {{if $.IncludeMissing}}<input type="hidden" name="missing" value="1">{{end}}
               <input type="hidden" name="sort" value="{{$.Sort}}">
               <label class="sr-only" for="pagesize">Per page</label>
@@ -291,22 +349,23 @@
       {{end}}
       </form>
     {{else}}
-      <div class="card">
-        {{if .Search}}
-          {{/* M16: the syntax lesson that used to live here is a tooltip. Someone who has
-               just got no results wants a way forward, not a paragraph — and the same
-               five examples are already in the search box's placeholder. */}}
-          <p>Nothing matched “{{.Search}}”.</p>
+      <div class="card emptycard">
+        {{if and .Folder .Folder.HiddenBelow}}
+          {{/* "Include subfolders" off and nothing sits in the folder itself: say where
+               the things are rather than pretending there are none. */}}
+          <p>Nothing{{if .Kind}} of kind {{.Kind}}{{end}} sits directly in <strong>{{.Folder.Title}}</strong>.</p>
+          <p><a class="button primary" href="{{.Folder.SubURL}}">Show the {{.Folder.HiddenBelow}} in its subfolders</a></p>
+        {{else if .Search}}
+          <p>Nothing{{if and .Folder .Folder.Dir}} in <strong>{{.Folder.Title}}</strong>{{end}} matched “{{.Search}}”.</p>
           <p class="hint">
+            {{if and .Folder .Folder.Dir}}<a href="/?q={{.Search}}{{if .Kind}}&amp;kind={{.Kind}}{{end}}">Search the whole library</a> · {{end}}
             <a href="/">Clear the search</a> ·
             <span title="Words match filenames, packs and tags as prefixes, so 'swo' finds wooden_sword_01.glb. Filter with type:model or theme:sci-fi, negate with -style:realistic, compare with width:>=64, combine with OR.">what can I type here?</span>
           </p>
         {{else if .Stats}}
           {{if eq .Stats.Assets 0}}
-            {{/* The button is in the sidebar, so pointing at a shell command here was
-                 sending the user to SSH into the NAS for something they can click. */}}
             <p>The index is empty.</p>
-            <p class="hint">Press <strong>Re-scan library</strong> to index
+            <p class="hint">Press <strong>Re-scan library</strong> (bottom of the sidebar) to index
               <code>{{.LibraryRoot}}</code>.</p>
           {{else}}
             <p>No assets match this filter.</p>
@@ -319,14 +378,126 @@
 </div>
 {{end}}
 
+{{/* The asset panel: empty until a tile is clicked, then filled from /assets/{id}/peek by
+     folderview.js. Hidden until then, so the grid keeps the whole width while you browse. */}}
+{{define "rail"}}
+<aside class="panel panel-right peekrail" id="peek" aria-label="Selected asset" data-role="peek" hidden></aside>
+{{end}}
+
+{{/* One asset, for the panel. A fragment: no page around it. */}}
+{{define "asset-peek"}}
+{{with .Asset}}
+<div class="peek" data-id="{{.ID}}">
+  <div class="peek-head">
+    <h2 class="peek-title">{{.Filename}}</h2>
+    <button type="button" class="peek-close" data-role="peek-close" aria-label="Close the panel">×</button>
+  </div>
+
+  <div class="peek-media thumb{{if or .IsPixelArt .ThumbUpscales}} thumb-pixelated{{end}}">
+    {{if .Has2DPreview}}
+      <img src="/assets/{{.ID}}/preview.webp" alt="{{.Filename}}">
+    {{else if .ShowsThumb}}
+      <img src="/assets/{{.ID}}/thumb" alt="{{.Filename}}">
+    {{else}}
+      <span class="thumb-none">{{.Ext}}</span>
+    {{end}}
+  </div>
+
+  <p class="peek-meta">
+    {{.Kind}}{{with .Dimensions}} · {{.}}{{end}}{{if .TriCount}} · {{.TriCount}} tris{{end}} · {{bytes .Size}}
+    <br><span class="hint">{{.PackName}}</span>
+  </p>
+
+  <p class="peek-actions">
+    <a class="button primary" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener">Open page</a>
+    {{if not .Missing}}<a class="button button-quiet" href="/assets/{{.ID}}/download">Download</a>{{end}}
+    <a class="button button-quiet" href="{{call $.DirURL (libraryDir .LibraryPath)}}" title="{{libraryDir .LibraryPath}}">Show in folder</a>
+  </p>
+
+  {{with $.Local}}
+    <p class="peek-path">
+      <code>{{.Path}}</code>
+      <button type="button" class="button button-quiet" data-copy-path="{{.Path}}">Copy path</button>
+    </p>
+  {{end}}
+
+  {{if gt (len $.Variants) 1}}
+    <section class="peek-section">
+      <h3>Formats</h3>
+      <ul class="peek-files">
+        {{range $.Variants}}
+          <li class="{{if .Missing}}variant-missing{{end}}">
+            <span class="fmt">{{upper .Ext}}</span>
+            <span class="peek-file" title="{{.LibraryPath}}">{{.Filename}}</span>
+            <span class="hint">{{bytes .Size}}</span>
+            {{if not .Missing}}<a class="variant-dl" href="/assets/{{.ID}}/download" aria-label="Download the .{{.Ext}}">↓</a>{{end}}
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+
+  {{template "engine-choices" $}}
+
+  {{if $.OpenApps}}
+    <section class="peek-section">
+      <h3>Open in</h3>
+      <p class="open-apps">
+        {{range $.OpenApps}}
+          <a class="button appbtn app-{{.Key}}" href="{{.URL}}"
+             title="Open in {{.Label}} — needs the one-time ambar:// helper on this machine">{{.Label}}</a>
+        {{end}}
+      </p>
+    </section>
+  {{end}}
+
+  {{if $.ProjectUses}}
+    <section class="peek-section">
+      <h3>In projects</h3>
+      <ul class="uses">
+        {{range $.ProjectUses}}
+          <li>
+            {{with engineOf .ResPath}}<span class="engine engine-{{.}}">{{.}}</span>{{end}}
+            <strong>{{.ProjectName}}</strong>
+            {{if .Outdated}}<span class="badge badge-warn">outdated</span>{{end}}
+            <br><code>{{.ResPath}}</code>
+          </li>
+        {{end}}
+      </ul>
+    </section>
+  {{end}}
+</div>
+{{end}}
+{{end}}
+
+{{/* The sidebar's jump-to-folder results (folderview.go), as a list of links. */}}
+{{define "folder-hits"}}
+  {{if .FolderHits}}
+    <ul class="jump-list" role="listbox">
+      {{range .FolderHits}}
+        <li role="presentation">
+          <a class="jump-item" role="option" href="{{.URL}}" title="{{.Path}}">
+            <span class="jump-name">{{.Name}}</span>
+            <span class="jump-where">{{if .Parent}}{{.Parent}}{{else}}library root{{end}}</span>
+            <span class="n">{{.Count}}</span>
+          </a>
+        </li>
+      {{end}}
+    </ul>
+  {{else}}
+    <p class="jump-none">No folder by that name.</p>
+  {{end}}
+{{end}}
+
 {{/* The search box's completion list (M16), rendered as a fragment into the toolbar.
 
-     Grouped by kind on purpose: a keyword answers "what can I type", a tag or a pack tells
-     you this library's vocabulary, and a filename gets you to one thing. One ranked list
-     would bury the rare exact-filename match under forty tags.
+     Grouped by kind on purpose: a keyword answers "what can I type", a folder takes you
+     somewhere, a tag or a pack tells you this library's vocabulary, and a filename gets you
+     to one thing. One ranked list would bury the rare exact-filename match under forty tags.
 
      Rows are buttons, not links: choosing one replaces the token being typed and leaves the
-     rest of the query alone, which a link cannot express. */}}
+     rest of the query alone, which a link cannot express — except the folder and kind rows,
+     which carry data-href because they change the scope rather than the text. */}}
 {{define "search-suggestions"}}
   {{if .Suggestions}}
     <ul class="suggest-list" role="listbox">
@@ -337,8 +508,8 @@
           <li class="suggest-group" role="presentation">{{.Kind.Label}}</li>
         {{end}}
         <li role="presentation">
-          <button type="button" class="suggest-item" role="option"
-                  data-insert="{{.Insert}}" tabindex="-1">
+          <button type="button" class="suggest-item suggest-{{.Kind}}" role="option"
+                  {{if .Href}}data-href="{{.Href}}"{{else}}data-insert="{{.Insert}}"{{end}} tabindex="-1">
             <span class="suggest-text">{{.Display}}</span>
             {{with .Detail}}<span class="suggest-detail">{{.}}</span>{{end}}
           </button>

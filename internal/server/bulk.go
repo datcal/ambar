@@ -16,7 +16,7 @@ import (
 
 // handleBulkTag applies one tag to many assets (§7 bulk tagging): either the
 // checked tiles (scope=selected, repeated `id`) or every asset matching the
-// current search (scope=all, carried in q/kind/missing). It redirects back to
+// current search (scope=all, carried in q/kind/dir/sub/missing). It redirects back to
 // the search with a short outcome message rather than returning a fragment, so a
 // browser refresh does not re-apply the tag.
 func (s *Server) handleBulkTag(w http.ResponseWriter, r *http.Request) {
@@ -28,8 +28,12 @@ func (s *Server) handleBulkTag(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.PostFormValue("q"))
 	kind := r.PostFormValue("kind")
 	missing := r.PostFormValue("missing") == "1"
+	// The folder travels with the search: "or all 57" inside a pack is those 57, not every
+	// asset in the library that matches the same words.
+	dir := strings.TrimSpace(r.PostFormValue("dir"))
+	dirOnly := r.PostFormValue("sub") == "0"
 	scope := r.PostFormValue("scope")
-	back := backURL(q, kind, missing)
+	back := backURL(q, kind, dir, dirOnly, missing)
 
 	if tag == "" {
 		s.redirectWithMessage(w, r, back, "Enter a tag to apply.")
@@ -39,7 +43,7 @@ func (s *Server) handleBulkTag(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	if scope == "all" {
 		matched, err := s.index.MatchingAssetIDs(r.Context(),
-			index.ListOptions{Query: q, Kind: kind, IncludeMissing: missing})
+			index.ListOptions{Query: q, Kind: kind, Dir: dir, DirOnly: dirOnly, IncludeMissing: missing})
 		if err != nil {
 			s.log.ErrorContext(r.Context(), "bulk tag: matching ids failed", "error", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -79,7 +83,7 @@ func (s *Server) handleBulkTag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveSearch(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	query := strings.TrimSpace(r.PostFormValue("q"))
-	back := backURL(query, r.PostFormValue("kind"), r.PostFormValue("missing") == "1")
+	back := backURL(query, r.PostFormValue("kind"), "", false, r.PostFormValue("missing") == "1")
 
 	if _, err := s.saved.Save(r.Context(), name, query); err != nil {
 		if errors.Is(err, savedsearch.ErrEmpty) {
@@ -115,13 +119,19 @@ func (s *Server) handleDeleteSearch(w http.ResponseWriter, r *http.Request) {
 
 // backURL rebuilds the assets URL for a given search so a redirect lands the user
 // back where they were.
-func backURL(query, kind string, missing bool) string {
+func backURL(query, kind, dir string, dirOnly, missing bool) string {
 	v := url.Values{}
 	if query != "" {
 		v.Set("q", query)
 	}
 	if kind != "" {
 		v.Set("kind", kind)
+	}
+	if dir != "" {
+		v.Set("dir", dir)
+		if dirOnly {
+			v.Set("sub", "0")
+		}
 	}
 	if missing {
 		v.Set("missing", "1")

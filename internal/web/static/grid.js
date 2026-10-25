@@ -71,47 +71,8 @@
         true,
     );
 
-    // --- copy the local path (M16) ------------------------------------------------
-    //
-    // navigator.clipboard needs a secure context, and this runs on a plain-HTTP LAN, so the
-    // hidden-textarea fallback is the path that actually gets used here — the same compromise
-    // §8 forced on the palette's copy button.
-    grid.addEventListener("click", async function (event) {
-        const button = event.target instanceof Element
-            ? event.target.closest("[data-copy-path]")
-            : null;
-        if (!button) return;
-        event.preventDefault();
-
-        const text = button.dataset.copyPath;
-        let ok = false;
-        if (navigator.clipboard && window.isSecureContext) {
-            try {
-                await navigator.clipboard.writeText(text);
-                ok = true;
-            } catch (e) {
-                ok = false;
-            }
-        }
-        if (!ok) {
-            const scratch = document.createElement("textarea");
-            scratch.value = text;
-            scratch.setAttribute("readonly", "");
-            scratch.className = "offscreen-copy";
-            document.body.appendChild(scratch);
-            scratch.select();
-            try {
-                ok = document.execCommand("copy");
-            } catch (e) {
-                ok = false;
-            }
-            document.body.removeChild(scratch);
-        }
-        if (ok) {
-            button.classList.add("copied");
-            window.setTimeout(() => button.classList.remove("copied"), 700);
-        }
-    });
+    // Copying a tile's local path (M16) moved to folderview.js, which handles every
+    // [data-copy-path] on the page — the folder header and the asset panel have one too.
 
     // --- selection ---------------------------------------------------------------
     //

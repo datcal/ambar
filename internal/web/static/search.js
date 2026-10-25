@@ -6,8 +6,12 @@
 // grouped, annotated with counts, or navigated predictably — which is why this is a real
 // listbox instead.
 //
-// Three behaviours, in the order they matter:
+// Four behaviours, in the order they matter:
 //
+//   - A scope. The folder and kind being browsed sit in the box as chips (base.html), and
+//     the suggestions can move them: a folder row makes that folder the scope — type "spy",
+//     Enter, and you are searching inside POLYGON - Spy Kit — and a kind row narrows to it,
+//     counted where you are. Backspace in an empty box drops the last chip.
 //   - Completion of the token being typed. The server returns a grouped fragment; choosing a
 //     row replaces only that token, so `type:model tur` → `type:model turret.glb` rather
 //     than losing what you had already narrowed to.
@@ -127,9 +131,15 @@
         }
     }
 
-    // choose applies a row. `data-replace` swaps the whole query (a recent search);
+    // choose applies a row. `data-href` goes somewhere (a folder or a kind: the scope
+    // changes, not the text); `data-replace` swaps the whole query (a recent search);
     // `data-insert` replaces only the token being typed.
     function choose(el) {
+        if (el.dataset.href !== undefined) {
+            hide();
+            window.location.href = el.dataset.href;
+            return;
+        }
         if (el.dataset.replace !== undefined) {
             input.value = el.dataset.replace;
         } else {
@@ -162,9 +172,27 @@
     let timer = 0;
     let inFlight = null;
 
+    // The scope the box is searching in, from its own hidden fields: what the server needs
+    // to count kinds in the right folder and to build links that keep the view.
+    function scopeParams() {
+        const params = new URLSearchParams();
+        for (const name of ["dir", "kind", "sub", "view"]) {
+            const field = form.querySelector('input[type="hidden"][name="' + name + '"]');
+            if (field && field.value) params.set(name, field.value);
+        }
+        const here = new URLSearchParams(window.location.search);
+        for (const name of ["sort", "per"]) {
+            if (here.get(name)) params.set(name, here.get(name));
+        }
+        return params;
+    }
+
     async function fetchSuggestions() {
         const query = input.value;
-        if (query.trim() === "") {
+        const scope = scopeParams();
+        // An empty box offers recent searches — unless it is scoped to a folder with no kind
+        // yet, where the kinds in that folder are the more useful next step.
+        if (query.trim() === "" && !(scope.has("dir") && !scope.has("kind"))) {
             renderRecent();
             return;
         }
@@ -176,7 +204,8 @@
         inFlight = controller;
 
         try {
-            const response = await fetch("/api/v1/suggest?q=" + encodeURIComponent(query), {
+            scope.set("q", query);
+            const response = await fetch("/api/v1/suggest?" + scope.toString(), {
                 signal: controller.signal,
                 headers: { "X-Requested-With": "fetch" },
             });
@@ -187,11 +216,16 @@
             const html = await response.text();
             panel.innerHTML = html;
             if (items().length === 0) {
-                hide();
+                if (query.trim() === "") renderRecent();
+                else hide();
                 return;
             }
             active = -1;
             show();
+            // A scope row first in the list is almost always what Enter should do: "spy" ⏎
+            // means the folder, not a text search for the letters.
+            const first = items()[0];
+            if (first && first.dataset.href !== undefined) highlight(0);
         } catch (e) {
             // Aborted or offline: leave whatever is on screen alone.
         }
@@ -203,7 +237,7 @@
     });
 
     input.addEventListener("focus", function () {
-        if (input.value.trim() === "") renderRecent();
+        if (input.value.trim() === "") fetchSuggestions();
     });
 
     input.addEventListener("blur", function () {
@@ -239,6 +273,16 @@
                 event.preventDefault();
                 hide();
                 break;
+            case "Backspace": {
+                // An empty box: widen the search by dropping the last chip, the way a
+                // token field does. The chip's own × link is where that goes.
+                if (input.value !== "") return;
+                const chips = form.querySelectorAll('[data-role="chip-x"]');
+                if (chips.length === 0) return;
+                event.preventDefault();
+                window.location.href = chips[chips.length - 1].href;
+                break;
+            }
             case "Tab":
                 // Tab completes the highlighted row without searching, which is what a
                 // shell does and what muscle memory expects.
