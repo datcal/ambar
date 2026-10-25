@@ -137,23 +137,150 @@ func (n *TreeNode) Contains(path string) bool {
 // scrollbar rather than a navigation aid — the grid's own path filter covers the
 // rest.
 func (ix *Indexer) Tree(ctx context.Context, maxDepth int) (*TreeNode, error) {
-	// Doing the grouping in SQL keeps the Go side proportional to the number of directories
-	// (thousands) rather than to the number of assets (a hundred thousand).
-	//
-	// The directory is cut in SQL rather than grouping by file path, which would be one row
-	// per file: rtrim(path, replace(path, '/', '')) strips the trailing name — every
-	// character that is not a slash, from the right — leaving "dir/", or "" at the root.
+	// Four plain reads and one pass in Go. It used to be grouped in SQL, assembling each
+	// asset's library path as a string and cutting its directory off again for every row;
+	// on a 111,000-asset library that took 1.8 s, on a developer machine, and the tree is
+	// rebuilt whenever the sidebar is. Reading the rows and doing the string work once per
+	// *directory* is a fraction of that.
+	packPaths := map[int64]string{}
+	packRows, err := ix.db.Reader.QueryContext(ctx, `SELECT id, library_rel_path FROM packs`)
+	if err != nil {
+		return nil, fmt.Errorf("load library tree packs: %w", err)
+	}
+	for packRows.Next() {
+		var id int64
+		var path string
+		if err := packRows.Scan(&id, &path); err != nil {
+			packRows.Close()
+			return nil, err
+		}
+		path = strings.Trim(path, "/")
+		if path == "." {
+			path = ""
+		}
+		packPaths[id] = path
+	}
+	packRows.Close()
+	if err := packRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// The hide tag: hidden primaries are left out of the grid by default, so out of its
+	// counts too.
+	hidden := map[int64]bool{}
+	hiddenRows, err := ix.db.Reader.QueryContext(ctx, `
+		SELECT dt.asset_id FROM asset_tags dt JOIN tags dtg ON dtg.id = dt.tag_id
+		WHERE dtg.namespace = ? AND dtg.name = ?`, DisabledNamespace, DisabledName)
+	if err != nil {
+		return nil, fmt.Errorf("load hidden assets: %w", err)
+	}
+	for hiddenRows.Next() {
+		var id int64
+		if err := hiddenRows.Scan(&id); err != nil {
+			hiddenRows.Close()
+			return nil, err
+		}
+		hidden[id] = true
+	}
+	hiddenRows.Close()
+	if err := hiddenRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Every asset once: its directory, whether it is on disk, and its group's kinds.
+	type assetInfo struct {
+		dir     string
+		present bool
+	}
+	assets := map[int64]assetInfo{}
+	dirFiles := map[string]int{}
+	groupKinds := map[int64][]string{}
+	// Directory strings repeat thousands of times; one copy each.
+	interned := map[string]string{}
+	assetRows, err := ix.db.Reader.QueryContext(ctx, `
+		SELECT id, pack_id, rel_path, kind, coalesce(group_id, 0), missing_since IS NULL FROM assets`)
+	if err != nil {
+		return nil, fmt.Errorf("load library tree: %w", err)
+	}
+	for assetRows.Next() {
+		var id, packID, groupID int64
+		var relPath, kind string
+		var present bool
+		if err := assetRows.Scan(&id, &packID, &relPath, &kind, &groupID, &present); err != nil {
+			assetRows.Close()
+			return nil, fmt.Errorf("scan tree row: %w", err)
+		}
+		dir := packPaths[packID]
+		if i := strings.LastIndex(relPath, "/"); i > 0 {
+			if dir == "" {
+				dir = relPath[:i]
+			} else {
+				dir = dir + "/" + relPath[:i]
+			}
+		}
+		if d, ok := interned[dir]; ok {
+			dir = d
+		} else {
+			interned[dir] = dir
+		}
+		assets[id] = assetInfo{dir: dir, present: present}
+		if present {
+			dirFiles[dir]++
+		}
+		// A group counts under every kind one of its variants has — present or not — as
+		// the grid's kind filter matches it (groupFilters).
+		if groupID != 0 && !containsString(groupKinds[groupID], kind) {
+			groupKinds[groupID] = append(groupKinds[groupID], kind)
+		}
+	}
+	assetRows.Close()
+	if err := assetRows.Err(); err != nil {
+		return nil, fmt.Errorf("load library tree: %w", err)
+	}
+
+	// Groups sit where their primary sits, if the primary is on disk and not hidden.
+	dirGroups := map[string]int{}
+	dirKinds := map[string]map[string]int{}
+	groupRows, err := ix.db.Reader.QueryContext(ctx, `
+		SELECT id, primary_asset_id FROM asset_groups WHERE primary_asset_id IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("load library tree groups: %w", err)
+	}
+	for groupRows.Next() {
+		var groupID, primaryID int64
+		if err := groupRows.Scan(&groupID, &primaryID); err != nil {
+			groupRows.Close()
+			return nil, fmt.Errorf("scan tree group row: %w", err)
+		}
+		primary, ok := assets[primaryID]
+		if !ok || !primary.present || hidden[primaryID] {
+			continue
+		}
+		dirGroups[primary.dir]++
+		kinds := dirKinds[primary.dir]
+		if kinds == nil {
+			kinds = map[string]int{}
+			dirKinds[primary.dir] = kinds
+		}
+		for _, kind := range groupKinds[groupID] {
+			kinds[kind]++
+		}
+	}
+	groupRows.Close()
+	if err := groupRows.Err(); err != nil {
+		return nil, fmt.Errorf("load library tree groups: %w", err)
+	}
+
+	// Now per directory, rolled up every ancestor so a collapsed branch still shows how
+	// much is inside it.
 	root := &TreeNode{Kinds: map[string]int{}, DirectKinds: map[string]int{}}
 	index := map[string]*TreeNode{"": root}
 	nodeFor := func(dir string) *TreeNode {
-		dir = strings.TrimSuffix(dir, "/")
 		if dir == "" {
 			return root
 		}
 		return ensureBranch(index, dir, maxDepth)
 	}
-	// up calls f on a node and every ancestor, so a collapsed branch still shows how much
-	// is inside it.
 	up := func(node *TreeNode, f func(*TreeNode)) {
 		for cur := node; cur != nil; cur = index[parentOf(cur.Path)] {
 			f(cur)
@@ -162,80 +289,32 @@ func (ix *Indexer) Tree(ctx context.Context, maxDepth int) (*TreeNode, error) {
 			}
 		}
 	}
-
-	// Files, per directory.
-	rows, err := ix.db.Reader.QueryContext(ctx, `
-		SELECT rtrim(lib_path, replace(lib_path, '/', '')) AS dir, count(*)
-		FROM (
-			SELECT `+libPathExpr("a")+` AS lib_path
-			FROM assets a
-			JOIN packs p ON p.id = a.pack_id
-			WHERE a.missing_since IS NULL
-		)
-		GROUP BY dir`)
-	if err != nil {
-		return nil, fmt.Errorf("load library tree: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var dir string
-		var files int
-		if err := rows.Scan(&dir, &files); err != nil {
-			return nil, fmt.Errorf("scan tree row: %w", err)
-		}
+	for dir, n := range dirFiles {
 		node := nodeFor(dir)
-		node.Direct += files
-		up(node, func(n *TreeNode) { n.Assets += files })
+		node.Direct += n
+		up(node, func(t *TreeNode) { t.Assets += n })
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("load library tree: %w", err)
-	}
-
-	// Groups, per directory of their primary: in total (kind '') and per kind of any
-	// variant — the grid's own rules (groupFilters), hidden assets left out as it leaves
-	// them out by default. Each group sits in exactly one directory, so the sums roll up.
-	groupRows, err := ix.db.Reader.QueryContext(ctx, `
-		WITH prim AS MATERIALIZED (
-			SELECT gid, rtrim(lib_path, replace(lib_path, '/', '')) AS dir
-			FROM (
-				SELECT g.id AS gid, `+libPathExpr("a")+` AS lib_path
-				FROM asset_groups g
-				JOIN assets a ON a.id = g.primary_asset_id
-				JOIN packs p ON p.id = g.pack_id
-				WHERE a.missing_since IS NULL AND `+notDisabledExpr("a")+`
-			)
-		)
-		SELECT dir, '' AS kind, count(*) FROM prim GROUP BY dir
-		UNION ALL
-		SELECT dir, kind, count(*)
-		FROM (SELECT DISTINCT prim.gid, prim.dir, kv.kind
-		      FROM prim JOIN assets kv ON kv.group_id = prim.gid)
-		GROUP BY dir, kind`)
-	if err != nil {
-		return nil, fmt.Errorf("load library tree groups: %w", err)
-	}
-	defer groupRows.Close()
-	for groupRows.Next() {
-		var dir, kind string
-		var n int
-		if err := groupRows.Scan(&dir, &kind, &n); err != nil {
-			return nil, fmt.Errorf("scan tree group row: %w", err)
-		}
+	for dir, n := range dirGroups {
 		node := nodeFor(dir)
-		if kind == "" {
-			node.DirectGroups += n
-			up(node, func(t *TreeNode) { t.Groups += n })
-		} else {
-			node.DirectKinds[kind] += n
-			up(node, func(t *TreeNode) { t.Kinds[kind] += n })
+		node.DirectGroups += n
+		up(node, func(t *TreeNode) { t.Groups += n })
+		for kind, k := range dirKinds[dir] {
+			node.DirectKinds[kind] += k
+			up(node, func(t *TreeNode) { t.Kinds[kind] += k })
 		}
-	}
-	if err := groupRows.Err(); err != nil {
-		return nil, fmt.Errorf("load library tree groups: %w", err)
 	}
 
 	sortTree(root)
 	return root, nil
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureBranch creates the node for dir and every missing ancestor, honouring

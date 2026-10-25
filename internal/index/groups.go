@@ -391,6 +391,10 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 		limit = MaxPageSize
 	}
 
+	opts, err := ix.withPacks(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
 	where, args := groupFilters(opts)
 
 	// The §7 query is matched against ANY variant in the group, compiled over the
@@ -406,14 +410,16 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 		args = append(args, compiled.Args...)
 	}
 
-	var total int
-	if err := ix.db.Reader.QueryRowContext(ctx, `
-		SELECT count(*)
-		FROM asset_groups g
-		JOIN assets a ON a.id = g.primary_asset_id
-		JOIN packs p ON p.id = g.pack_id
-		WHERE `+strings.Join(where, " AND "), args...).Scan(&total); err != nil {
-		return nil, fmt.Errorf("count groups: %w", err)
+	total := opts.TotalHint
+	if total <= 0 {
+		if err := ix.db.Reader.QueryRowContext(ctx, `
+			SELECT count(*)
+			FROM asset_groups g
+			JOIN assets a ON a.id = g.primary_asset_id
+			JOIN packs p ON p.id = g.pack_id
+			WHERE `+strings.Join(where, " AND "), args...).Scan(&total); err != nil {
+			return nil, fmt.Errorf("count groups: %w", err)
+		}
 	}
 
 	// Two paging mechanisms, on purpose (M16):
@@ -456,11 +462,25 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 		offset = (opts.Page - 1) * limit
 	}
 
+	// A large result is read off the order's own index: walk it, keep the rows that pass
+	// the filters, stop at the page. Left to itself the planner starts from the folder's
+	// (pack_id, rel_path) range instead — right for a folder of a hundred files, but for a
+	// vendor folder of ninety thousand it then sorts all of them to show a hundred: about
+	// a second per page on the NAS, against well under a millisecond this way. Below the
+	// threshold the index walk would have to skip most of the library to find the few
+	// matches, so the planner keeps its choice.
+	from := `FROM asset_groups g
+		JOIN assets a ON a.id = g.primary_asset_id
+		JOIN packs p ON p.id = g.pack_id`
+	if idx := sort.index(); !cursorMode && idx != "" && total >= sortIndexMinRows {
+		from = `FROM assets a INDEXED BY ` + idx + `
+		JOIN asset_groups g ON g.primary_asset_id = a.id
+		JOIN packs p ON p.id = g.pack_id`
+	}
+
 	query := `
 		SELECT g.id, g.pack_id, g.group_key, g.variant_count, ` + assetListColumns + `
-		FROM asset_groups g
-		JOIN assets a ON a.id = g.primary_asset_id
-		JOIN packs p ON p.id = g.pack_id
+		` + from + `
 		WHERE ` + strings.Join(pageWhere, " AND ") + `
 		ORDER BY ` + order + `
 		LIMIT ? OFFSET ?`
@@ -500,6 +520,12 @@ func (ix *Indexer) ListGroups(ctx context.Context, opts ListOptions) (*GroupPage
 	}
 	return page, nil
 }
+
+// sortIndexMinRows is the result size from which ListGroups reads a page off the sort
+// order's index rather than letting the planner sort. Measured on a 95,000-group library:
+// at 2,000 matches the walk visits a few thousand index rows for a first page, which is
+// already cheaper than sorting them.
+var sortIndexMinRows = 2000 // a var so a test can send every page down both paths
 
 // fillFormats sets Formats on every group of a page: one query for the page, and only
 // for the groups that hold more than one file — the rest are their primary's extension.
@@ -583,6 +609,10 @@ func (ix *Indexer) KindCounts(ctx context.Context, opts ListOptions) (KindTally,
 	var tally KindTally
 
 	opts.Kind = ""
+	opts, err := ix.withPacks(ctx, opts)
+	if err != nil {
+		return tally, err
+	}
 	where, args := groupFilters(opts)
 	compiled, err := ix.compileQuery(ctx, opts.Query, "v")
 	if err != nil {
@@ -646,6 +676,9 @@ type Neighbour struct {
 // filters come in as the ordinary ListOptions, so J and K walk the search you came from
 // once the grid passes it along, and the whole library when it does not.
 func (ix *Indexer) Neighbours(ctx context.Context, opts ListOptions, filename string, groupID int64) (prev, next *Neighbour, err error) {
+	if opts, err = ix.withPacks(ctx, opts); err != nil {
+		return nil, nil, err
+	}
 	where, args := groupFilters(opts)
 
 	compiled, err := ix.compileQuery(ctx, opts.Query, "v")

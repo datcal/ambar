@@ -122,3 +122,58 @@ func TestSidebarCacheKeepsTheLastGoodSnapshotOnError(t *testing.T) {
 		t.Errorf("snapshot = %d, want the last good 7", got.Stats.Assets)
 	}
 }
+
+// touch is for changes nobody is watching — a thumbnail arriving, a worker's result. They come
+// one after another, and each used to throw the snapshot away, so the next page view waited
+// for a full rebuild every time. A touched snapshot keeps being served and is refreshed behind
+// the request, and no sooner than sidebarDirtyAfter.
+func TestSidebarCacheTouchKeepsServing(t *testing.T) {
+	var builds atomic.Int64
+	build := func(context.Context) (*sidebarData, error) {
+		n := builds.Add(1)
+		return &sidebarData{Stats: index.Stats{Assets: int(n)}}, nil
+	}
+	c := &sidebarCache{}
+	if _, err := c.get(context.Background(), build); err != nil {
+		t.Fatal(err)
+	}
+
+	// A burst of touches inside the quiet period: nothing is rebuilt, nothing waits.
+	for i := 0; i < 50; i++ {
+		c.touch()
+		snap, err := c.get(context.Background(), build)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snap.Stats.Assets != 1 {
+			t.Fatalf("a touched snapshot was replaced at once (%d)", snap.Stats.Assets)
+		}
+	}
+	if got := builds.Load(); got != 1 {
+		t.Fatalf("%d builds during the burst, want 1", got)
+	}
+
+	// Once the snapshot is old enough, the old one is still what a request gets, and one
+	// refresh runs behind it.
+	c.mu.Lock()
+	c.at = time.Now().Add(-sidebarDirtyAfter - time.Second)
+	c.mu.Unlock()
+	if snap, _ := c.get(context.Background(), build); snap.Stats.Assets != 1 {
+		t.Errorf("the request waited for the refresh (%d)", snap.Stats.Assets)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for builds.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := builds.Load(); got != 2 {
+		t.Fatalf("%d builds after the quiet period, want 2", got)
+	}
+	// And then it is clean again: no further rebuilds until something else changes.
+	for i := 0; i < 5; i++ {
+		c.get(context.Background(), build) //nolint:errcheck
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := builds.Load(); got != 2 {
+		t.Errorf("%d builds without a change, want 2", got)
+	}
+}

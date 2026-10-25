@@ -71,20 +71,14 @@
 
   {{/* Folded, because they are refinements of a folder rather than ways into one. A
        <details> needs no script and remembers nothing on the server. */}}
-  {{if .Facets}}
-    <details class="panel-section fold">
-      <summary><h2>Tags</h2></summary>
-      <ul class="panel-list">
-        {{range .Facets}}
-          <li>
-            <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.Dir}}&amp;dir={{$.Dir}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
-              <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
-            </a>
-          </li>
-        {{end}}
-      </ul>
-    </details>
-  {{end}}
+  {{/* Loaded when opened (folderview.js), from the same filters as the page: the tags
+       of a large folder cost about a second to count, too much for a folded list on
+       every click. */}}
+  <details class="panel-section fold" data-role="lazy-fold" data-src="{{.FacetsURL}}">
+    <summary><h2>Tags</h2></summary>
+    <div data-role="lazy-body"><p class="panel-note">Counting tags…</p></div>
+    <noscript><p class="panel-note"><a href="{{.FacetsURL}}">Show the tags</a></p></noscript>
+  </details>
 
   {{/* §7: "palette mismatch is the main thing that makes such a game look
        incoherent". The library's own dominant colours, as a filter — this is where
@@ -208,5 +202,22 @@
         lands in CREDITS.md and is never offered for removal; a download is not.
       </p>
     </section>
+  {{end}}
+{{end}}
+
+{{/* The Tags section's list, loaded from /facets when it is opened. */}}
+{{define "facets"}}
+  {{if .Facets}}
+    <ul class="panel-list">
+      {{range .Facets}}
+        <li>
+          <a href="/?q={{$.Search}} {{.Canonical}}{{if $.Kind}}&amp;kind={{$.Kind}}{{end}}{{if $.Dir}}&amp;dir={{$.Dir}}{{end}}{{if $.IncludeMissing}}&amp;missing=1{{end}}">
+            <span>{{.Canonical}}</span><span class="n">{{.Count}}</span>
+          </a>
+        </li>
+      {{end}}
+    </ul>
+  {{else}}
+    <p class="panel-note">No tags here.</p>
   {{end}}
 {{end}}

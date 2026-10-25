@@ -70,6 +70,10 @@ func (r swatchResolver) SwatchesOf(ctx context.Context, assetID int64) ([]search
 // the sidebar facets (kind, pack, missing) plus the compiled §7 query. It is the
 // shared filter behind List and Facets, so a facet count matches the grid.
 func (ix *Indexer) assetWhere(ctx context.Context, opts ListOptions) ([]string, []any, error) {
+	opts, err := ix.withPacks(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 	where, args, err := listFilters(opts)
 	if err != nil {
 		return nil, nil, err

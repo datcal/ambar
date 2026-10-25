@@ -52,6 +52,17 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Browsing a folder without a search: the cached tree already knows how many groups the
+	// grid will list, so it need not count them — on a vendor folder of ninety thousand
+	// assets the count was half the cost of the page.
+	if opts.Query == "" && opts.PackID == 0 && !opts.IncludeMissing && !opts.IncludeDisabled {
+		if root := s.folderTree(r.Context()); root != nil {
+			if node := root.Find(opts.Dir); node != nil {
+				opts.TotalHint = node.Tally(opts.DirOnly).Count(opts.Kind)
+			}
+		}
+	}
+
 	// Groups, not individual files: §5.1's collapsing is what makes the grid usable.
 	page, err := s.index.ListGroups(r.Context(), opts)
 	if err != nil {
@@ -116,17 +127,11 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	s.applySidebar(r.Context(), &data, opts.Dir)
 	s.applyFolderView(r, &data, opts, page)
 
-	// §7's facets describe *this* result set, so a filtered view has to compute its own — but
-	// an unfiltered browse is the same for everybody and came with the cached snapshot
-	// (applySidebar). That matters because Facets was measured at 55 ms, the most expensive
-	// thing left on the request path, and "browsing with no filter" is most page views.
-	if isFiltered(opts) {
-		if facets, err := s.index.Facets(r.Context(), opts, index.DefaultFacetLimit); err != nil {
-			s.log.ErrorContext(r.Context(), "facets failed", "error", err)
-		} else {
-			data.Facets = facets
-		}
-	}
+	// §7's facets describe *this* result set, but they are not computed here any more: the
+	// Tags section is folded, and on a 111,000-asset library the facets of a vendor folder
+	// cost a second — on every click, for a list nobody had opened. It loads from
+	// /facets when the fold is opened (handleFacets).
+	data.FacetsURL = "/facets" + browseQueryString(opts)
 
 	s.render(w, r, "assets.html", http.StatusOK, data)
 }
@@ -330,12 +335,6 @@ func (s *Server) lookupAsset(w http.ResponseWriter, r *http.Request) (index.Asse
 		return index.Asset{}, false
 	}
 	return asset, true
-}
-
-// isFiltered reports whether these options narrow the library at all.
-func isFiltered(opts index.ListOptions) bool {
-	return opts.Query != "" || opts.Kind != "" || opts.Dir != "" || opts.PackID != 0 ||
-		opts.IncludeMissing || opts.IncludeDisabled
 }
 
 // browseOptions reads the filters an asset page was reached with.

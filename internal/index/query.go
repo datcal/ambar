@@ -394,6 +394,14 @@ type ListOptions struct {
 	// DirOnly narrows Dir to the files directly inside it, leaving out its subfolders. With
 	// an empty Dir it means the files at the library root.
 	DirOnly bool
+	// packs is filled by withPacks, so that Dir can be answered by an index.
+	packs []packPath
+
+	// TotalHint, when positive, is the number of groups these options match, already known
+	// to the caller — the folder view reads it from the cached tree — so the grid's count
+	// query is skipped. A stale hint costs a pager that is briefly a page long or short;
+	// the count it saves is the most expensive part of browsing a large folder.
+	TotalHint int
 	// IncludeMissing shows assets whose file was absent at the last scan. Off by
 	// default: they are not there, so they would be noise in a browse. §12 keeps
 	// the rows forever regardless.
@@ -453,18 +461,24 @@ const (
 
 // orderBy returns the SQL for a sort, always ending in a unique tiebreaker so paging
 // cannot skip or repeat a row when two assets share a value.
+//
+// The tiebreaker is the primary's a.id, which is unique per group (a group has one
+// primary), and its direction is the one the order's index already has: an index stores
+// its rows by rowid within equal keys, ascending. It used to be g.id, from the other table,
+// which meant no index could deliver the order and every page sorted the whole result —
+// the indexes migration 0016 added for exactly these orders were never used for them.
 func (s SortOrder) orderBy() string {
 	switch s {
 	case SortModified:
-		return "a.mtime DESC, g.id DESC"
+		return "a.mtime DESC, a.id ASC"
 	case SortName:
-		return "a.filename ASC, g.id ASC"
+		return "a.filename ASC, a.id ASC"
 	case SortNameDesc:
-		return "a.filename DESC, g.id DESC"
+		return "a.filename DESC, a.id DESC"
 	case SortLargest:
-		return "a.size DESC, g.id DESC"
+		return "a.size DESC, a.id ASC"
 	case SortKind:
-		return "a.kind ASC, a.filename ASC, g.id ASC"
+		return "a.kind ASC, a.filename ASC, a.id ASC"
 	case SortPixels:
 		// NULL for anything without dimensions (audio, fonts), which sorts last here
 		// rather than first — an unknown size is not a big one.
@@ -477,7 +491,26 @@ func (s SortOrder) orderBy() string {
 	case SortTrisDesc:
 		return "coalesce(a.tri_count, 0) DESC, g.id DESC"
 	default:
-		return "a.first_seen_at DESC, g.id DESC"
+		return "a.first_seen_at DESC, a.id ASC"
+	}
+}
+
+// index names the index that stores assets in this order, or "" for an order computed
+// from an expression. ListGroups walks it for a large result instead of sorting.
+func (s SortOrder) index() string {
+	switch s {
+	case SortModified:
+		return "idx_assets_mtime"
+	case SortName, SortNameDesc:
+		return "assets_filename_idx"
+	case SortLargest:
+		return "idx_assets_size"
+	case SortKind:
+		return "assets_kind_filename_idx"
+	case SortPixels, SortTrisAsc, SortTrisDesc:
+		return ""
+	default:
+		return "idx_assets_first_seen"
 	}
 }
 
@@ -985,12 +1018,21 @@ func libPathExpr(alias string) string {
 // the directory itself, which is what a file manager shows. Without it a pack folder with
 // one icon at the top and four thousand models below reads as four thousand models — the
 // right answer for "what is in here", the wrong one for "what is *here*".
+//
+// With the packs resolved (withPacks), the folder is translated into terms on
+// (pack_id, rel_path), which assets_pack_rel_path_idx answers directly. Without them it
+// falls back to comparing the assembled library path, which works but reads every row:
+// measured on a 111,000-asset library, a 100-file folder cost 440 ms that way, because a
+// vendor directory holding 180 packs is one pack of 104,000 files.
 func dirFilter(alias string, opts ListOptions) (string, []any) {
 	dir := cleanDir(opts.Dir)
+	if dir == "" && !opts.DirOnly {
+		return "", nil
+	}
+	if opts.packs != nil {
+		return packDirFilter(alias, dir, opts.DirOnly, opts.packs)
+	}
 	if !opts.DirOnly {
-		if dir == "" {
-			return "", nil
-		}
 		return dirExpr(alias), []any{dir, dir + "/", dir + "/"}
 	}
 	libPath := libPathExpr(alias)
@@ -1000,4 +1042,92 @@ func dirFilter(alias string, opts ListOptions) (string, []any) {
 	prefix := dir + "/"
 	return fmt.Sprintf("(substr(%[1]s, 1, length(?)) = ? AND instr(substr(%[1]s, length(?) + 1), '/') = 0)", libPath),
 		[]any{prefix, prefix, prefix}
+}
+
+// packPath is one pack's place in the library, for packDirFilter.
+type packPath struct {
+	id   int64
+	path string // library-relative, "" for a pack at the root
+}
+
+// withPacks loads the packs' paths into opts when it filters by folder, so dirFilter can
+// use the index. The packs table is small — dozens of rows — so this is cheaper than any
+// cache would be to keep honest.
+func (ix *Indexer) withPacks(ctx context.Context, opts ListOptions) (ListOptions, error) {
+	if cleanDir(opts.Dir) == "" && !opts.DirOnly {
+		return opts, nil
+	}
+	rows, err := ix.db.Reader.QueryContext(ctx, `SELECT id, library_rel_path FROM packs`)
+	if err != nil {
+		return opts, fmt.Errorf("load pack paths: %w", err)
+	}
+	defer rows.Close()
+	packs := []packPath{}
+	for rows.Next() {
+		var p packPath
+		if err := rows.Scan(&p.id, &p.path); err != nil {
+			return opts, err
+		}
+		p.path = strings.Trim(p.path, "/")
+		if p.path == "." {
+			p.path = ""
+		}
+		packs = append(packs, p)
+	}
+	opts.packs = packs
+	return opts, rows.Err()
+}
+
+// packDirFilter is dirFilter in terms of packs. A pack relates to a folder in one of four
+// ways: it sits inside it (every file matches), it is the folder (every file, or only the
+// top level for DirOnly), it contains it (a range of rel_path), or neither. A range on
+// rel_path for prefix "x/" is [x/, x0): '0' is the byte after '/', so that interval is
+// exactly the strings starting with "x/" — and an index can walk it.
+func packDirFilter(alias, dir string, direct bool, packs []packPath) (string, []any) {
+	var whole []any
+	var terms []string
+	var args []any
+	rangeTerm := func(id int64, relDir string) {
+		prefix := relDir + "/"
+		term := fmt.Sprintf("(%[1]s.pack_id = ? AND %[1]s.rel_path >= ? AND %[1]s.rel_path < ?", alias)
+		args = append(args, id, prefix, relDir+"0")
+		if direct {
+			term += fmt.Sprintf(" AND instr(substr(%s.rel_path, ?), '/') = 0", alias)
+			args = append(args, len(prefix)+1)
+		}
+		terms = append(terms, term+")")
+	}
+	for _, p := range packs {
+		switch {
+		case dir == "" && p.path == "":
+			// DirOnly at the library root: the loose files of a root-level pack.
+			terms = append(terms, fmt.Sprintf("(%[1]s.pack_id = ? AND instr(%[1]s.rel_path, '/') = 0)", alias))
+			args = append(args, p.id)
+		case dir == "":
+			// DirOnly at the root, and this pack is in a folder: nothing of it is loose.
+		case p.path == "":
+			rangeTerm(p.id, dir)
+		case p.path == dir:
+			if direct {
+				terms = append(terms, fmt.Sprintf("(%[1]s.pack_id = ? AND instr(%[1]s.rel_path, '/') = 0)", alias))
+				args = append(args, p.id)
+			} else {
+				whole = append(whole, p.id)
+			}
+		case strings.HasPrefix(p.path, dir+"/"):
+			if !direct {
+				whole = append(whole, p.id)
+			}
+		case strings.HasPrefix(dir, p.path+"/"):
+			rangeTerm(p.id, dir[len(p.path)+1:])
+		}
+	}
+	if len(whole) > 0 {
+		terms = append([]string{fmt.Sprintf("%s.pack_id IN (?%s)", alias, strings.Repeat(", ?", len(whole)-1))}, terms...)
+		args = append(whole, args...)
+	}
+	if len(terms) == 0 {
+		return "0", nil
+	}
+	return "(" + strings.Join(terms, " OR ") + ")", args
 }

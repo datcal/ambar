@@ -85,7 +85,7 @@ func TestListGroupsNumberedPagingCoversEverything(t *testing.T) {
 	f := newFixture(t)
 	// Identical sizes on purpose: with `size DESC` alone as the order, SQLite is free to
 	// return these in any order per query, and a pager would repeat and skip rows. The
-	// tiebreaker on g.id is what makes it stable.
+	// tiebreaker on the primary's id is what makes it stable.
 	for i := 0; i < 25; i++ {
 		f.write(filepath.Join("pack", "PNG", "same_"+itoa2(i)+".png"), "xxxx")
 	}

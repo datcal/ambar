@@ -110,14 +110,18 @@
       </div>
     </div>
 
+    {{/* A handful of subfolders are shortcuts; a vendor folder's 182 packs are a wall
+         above the grid, and the tree on the left already lists them. So past a dozen
+         they fold behind one line. */}}
     {{if .Subfolders}}
-      <nav class="subfolders" aria-label="Subfolders">
-        {{range .Subfolders}}
-          <a class="subfolder" href="{{.URL}}" title="{{.Path}}">
-            <span class="foldericon" aria-hidden="true"></span>{{.Name}} <span class="n">{{.Count}}</span>
-          </a>
-        {{end}}
-      </nav>
+      {{if gt (len .Subfolders) 12}}
+        <details class="subfolders-fold">
+          <summary class="button button-quiet">{{len .Subfolders}} subfolders</summary>
+          {{template "subfolder-links" .}}
+        </details>
+      {{else}}
+        {{template "subfolder-links" .}}
+      {{end}}
     {{end}}
   {{end}}
 
@@ -517,4 +521,14 @@
       {{end}}
     </ul>
   {{end}}
+{{end}}
+
+{{define "subfolder-links"}}
+  <nav class="subfolders" aria-label="Subfolders">
+    {{range .Subfolders}}
+      <a class="subfolder" href="{{.URL}}" title="{{.Path}}">
+        <span class="foldericon" aria-hidden="true"></span>{{.Name}} <span class="n">{{.Count}}</span>
+      </a>
+    {{end}}
+  </nav>
 {{end}}

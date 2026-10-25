@@ -153,7 +153,8 @@ func (s *Server) handleWorkerResult(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.apiError(w, http.StatusBadRequest, err.Error())
 	default:
-		s.nav.invalidate()
+		// Results arrive by the hundred; see sidebarCache.touch.
+		s.nav.touch()
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

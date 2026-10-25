@@ -62,12 +62,6 @@ type sidebarData struct {
 	NeedsProvenance int
 	ActiveJobs      int
 	LastScan        *lastScanInfo
-
-	// Facets for the *unfiltered* library. Facets normally describe the current result set,
-	// so they cannot be shared — but the unfiltered set is the same for everyone and is what
-	// most page views ask for (browsing, and every page of it). Measured at 55 ms, which made
-	// it the most expensive thing left on the request path once the grid query was fixed.
-	Facets []index.Facet
 }
 
 // sidebarCache serves one snapshot to every request inside the TTL.
@@ -77,6 +71,25 @@ type sidebarCache struct {
 	// building is the single-flight flag for a background refresh.
 	building bool
 	snap     *sidebarData
+	// dirty is set by touch: something the sidebar counts has changed in the background.
+	dirty bool
+}
+
+// sidebarDirtyAfter is how soon a touched snapshot is refreshed. Not at once: a page of
+// models renders and uploads its thumbnails one after another, and a remote worker returns
+// results by the hundred, so "refresh on every event" was a rebuild of the whole sidebar on
+// every page view — which a view had to wait for, because the old snapshot had been thrown
+// away.
+const sidebarDirtyAfter = 15 * time.Second
+
+// touch marks the snapshot out of date without throwing it away: it keeps being served,
+// and is rebuilt in the background once it is sidebarDirtyAfter old. For changes nobody is
+// watching happen — a thumbnail arriving, a worker's result. A change somebody just made
+// with a button uses invalidate, so the next page shows it.
+func (c *sidebarCache) touch() {
+	c.mu.Lock()
+	c.dirty = true
+	c.mu.Unlock()
 }
 
 // invalidate drops the snapshot so the next request rebuilds it. Called from the handlers
@@ -106,10 +119,13 @@ func (c *sidebarCache) invalidate() {
 func (c *sidebarCache) get(ctx context.Context, build func(context.Context) (*sidebarData, error)) (*sidebarData, error) {
 	c.mu.Lock()
 	warm := c.snap
-	stale := warm == nil || time.Since(c.at) >= sidebarTTL
+	age := time.Since(c.at)
+	stale := warm == nil || age >= sidebarTTL || (c.dirty && age >= sidebarDirtyAfter)
 	shouldBuild := stale && !c.building
 	if shouldBuild {
 		c.building = true
+		// Cleared when the build starts, so an event during the build marks it again.
+		c.dirty = false
 	}
 	c.mu.Unlock()
 
@@ -205,12 +221,6 @@ func (s *Server) buildSidebar(ctx context.Context) (*sidebarData, error) {
 		data.ActiveJobs = jobStats.Pending()
 	}
 
-	if facets, err := s.index.Facets(ctx, index.ListOptions{}, index.DefaultFacetLimit); err != nil {
-		s.log.ErrorContext(ctx, "facets failed", "error", err)
-	} else {
-		data.Facets = facets
-	}
-
 	if last, err := s.lastScan(ctx, stats.Assets); err != nil {
 		s.log.ErrorContext(ctx, "reading the last scan time failed", "error", err)
 	} else {
@@ -249,6 +259,9 @@ func (s *Server) applySidebar(ctx context.Context, data *pageData, currentDir st
 	if data.DirURL == nil {
 		data.DirURL = func(path string) string { return libraryLink(nil, "dir", path) }
 	}
+	if data.FacetsURL == "" {
+		data.FacetsURL = "/facets"
+	}
 	data.CurrentDir = currentDir
 
 	snap, err := s.nav.get(ctx, s.buildSidebar)
@@ -264,9 +277,6 @@ func (s *Server) applySidebar(ctx context.Context, data *pageData, currentDir st
 	data.NeedsProvenance = snap.NeedsProvenance
 	data.ActiveJobs = snap.ActiveJobs
 	data.LastScan = snap.LastScan
-
-	// The cached facets apply only to an unfiltered browse; a filtered view computes its own.
-	data.Facets = snap.Facets
 
 	if snap.Tree != nil {
 		data.Tree = index.Flatten(snap.Tree, currentDir)

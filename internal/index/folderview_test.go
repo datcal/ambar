@@ -239,3 +239,59 @@ func TestTreeTallyAgreesWithKindCounts(t *testing.T) {
 		t.Errorf("a PNG+GLB group: %v (total %d), want one under each kind and one in all", mixed.Kinds, mixed.Groups)
 	}
 }
+
+// The two ways a page is read — the planner's own, and walking the order's index for a
+// large result — must give the same rows in the same order, and paging through either must
+// meet every group once. Equal sizes and equal first-seen times on purpose: only the
+// tiebreaker separates them.
+func TestSortIndexWalkMatchesThePlanner(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 23; i++ {
+		f.write("pack/PNG/same_"+string(rune('a'+i))+".png", "xxxx")
+	}
+	f.write("pack/PSD/same_a.psd", "variant")
+	f.scan()
+
+	walk := func(sortBy SortOrder, threshold int) []int64 {
+		saved := sortIndexMinRows
+		sortIndexMinRows = threshold
+		defer func() { sortIndexMinRows = saved }()
+		var ids []int64
+		for page := 1; page < 10; page++ {
+			got, err := f.ix.ListGroups(context.Background(), ListOptions{Sort: sortBy, Limit: 5, Page: page})
+			if err != nil {
+				t.Fatalf("%s page %d: %v", sortBy, page, err)
+			}
+			for _, g := range got.Groups {
+				ids = append(ids, g.ID)
+			}
+			if !got.HasNext() {
+				break
+			}
+		}
+		return ids
+	}
+	for _, sortBy := range []SortOrder{SortNewest, SortModified, SortName, SortNameDesc, SortLargest, SortKind} {
+		planner := walk(sortBy, 1<<30)
+		indexed := walk(sortBy, 0)
+		if !reflect.DeepEqual(planner, indexed) {
+			t.Errorf("%s: the index walk gave %v, the planner %v", sortBy, indexed, planner)
+		}
+		seen := map[int64]bool{}
+		for _, id := range indexed {
+			if seen[id] {
+				t.Errorf("%s: group %d on two pages", sortBy, id)
+			}
+			seen[id] = true
+		}
+		if len(seen) != 23 {
+			t.Errorf("%s: paging met %d groups, want 23", sortBy, len(seen))
+		}
+	}
+
+	// A hint replaces the count, and the page is still the same.
+	got, err := f.ix.ListGroups(context.Background(), ListOptions{Limit: 5, Page: 1, TotalHint: 23})
+	if err != nil || got.Total != 23 || len(got.Groups) != 5 {
+		t.Errorf("with a hint: total %d, %d groups, err %v", got.Total, len(got.Groups), err)
+	}
+}

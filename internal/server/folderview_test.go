@@ -300,8 +300,36 @@ func TestBulkTagAllStaysInTheFolder(t *testing.T) {
 		t.Error("a model outside the folder was tagged")
 	}
 
-	body := ts.body(t, ts.get(t, "/?dir="+url.QueryEscape(spyKit)+"&kind=model"))
+	// The Tags section loads from /facets with the page's own filters.
+	page := ts.body(t, ts.get(t, "/?dir="+url.QueryEscape(spyKit)+"&kind=model"))
+	if !strings.Contains(page, `data-src="/facets?dir=`) {
+		t.Errorf("the Tags fold does not point at the folder's facets")
+	}
+	body := ts.body(t, ts.get(t, "/facets?kind=model&dir="+url.QueryEscape(spyKit)))
 	if !strings.Contains(body, "batch:spy") {
-		t.Error("the folder's tag facets do not list the tag just applied")
+		t.Errorf("the folder's tag facets do not list the tag just applied: %s", body)
+	}
+	if strings.Contains(body, "<html") {
+		t.Error("/facets is a fragment, not a page")
+	}
+}
+
+// A dozen subfolders are shortcuts; a vendor folder's 180 packs are a wall above the grid.
+func TestManySubfoldersFold(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	files := map[string]string{"few/a/x.png": "1", "few/b/y.png": "2"}
+	for i := 0; i < 13; i++ {
+		files["many/pack"+strconv.Itoa(i)+"/x.png"] = strconv.Itoa(100 + i)
+	}
+	ts.seedLibrary(t, files)
+
+	if body := ts.body(t, ts.get(t, "/?dir=many")); !strings.Contains(body, "13 subfolders</summary>") {
+		t.Error("thirteen subfolders are not folded away")
+	}
+	body := ts.body(t, ts.get(t, "/?dir=few"))
+	if strings.Contains(body, "subfolders</summary>") || !strings.Contains(body, `title="few/a"`) {
+		t.Error("two subfolders should be shown as they are")
 	}
 }

@@ -29,6 +29,16 @@ will not change incompatibly without a major bump.
   The first page view after a restart no longer caches a sidebar with no folder tree when
   the browser moves on before it is built.
 - `GET /api/v1/folders` serves the sidebar's cached tree instead of building its own.
+- **Browsing a large folder is fast.** Measured on a 111,000-asset library: a page of
+  `3d/` took about a second and a 100-file pack 440 ms; both are now a few milliseconds.
+  The folder filter reads the `(pack_id, rel_path)` index instead of assembling every
+  asset's path; a large result walks its sort order's index (the 0016 indexes were never
+  used, because the tiebreaker came from another table); the grid's total comes from the
+  cached tree; and the Tags list loads when its section is opened (`GET /facets`) instead
+  of with every page. The tree itself builds in a fifth of the time. Background events — a
+  browser-rendered thumbnail, a remote worker's result — mark the sidebar stale instead of
+  throwing it away, so a page view no longer waits for it to be rebuilt. A folder with more
+  than twelve subfolders folds them behind one line.
 
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,

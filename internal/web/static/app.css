@@ -2162,6 +2162,9 @@ a.crumb:hover { background: var(--surface-3); color: var(--text); }
 .viewbtn.on { background: var(--surface-3); color: var(--active); }
 
 .subfolders { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.subfolders-fold > summary { list-style: none; cursor: pointer; display: inline-flex; }
+.subfolders-fold > summary::-webkit-details-marker { display: none; }
+.subfolders-fold[open] > summary { margin-bottom: var(--s2); background: var(--active-bg); }
 .subfolder {
   display: inline-flex;
   align-items: center;

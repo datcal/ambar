@@ -176,6 +176,7 @@ func (s *Server) routes() http.Handler {
 	// folder as you type, and the grid's right-hand panel.
 	mux.Handle("GET /go", auth.RequireUser(http.HandlerFunc(s.handleGo)))
 	mux.Handle("GET /folders/find", auth.RequireUser(http.HandlerFunc(s.handleFolderFind)))
+	mux.Handle("GET /facets", auth.RequireUser(http.HandlerFunc(s.handleFacets)))
 	mux.Handle("GET /assets/{id}/peek", auth.RequireUser(http.HandlerFunc(s.handleAssetPeek)))
 	mux.Handle("GET /assets/{id}/download", auth.RequireUser(http.HandlerFunc(s.handleAssetDownload)))
 
@@ -568,6 +569,10 @@ type pageData struct {
 
 	// Engines is "use it in a game": which file Godot and which Unreal should take.
 	Engines []engineChoice
+
+	// FacetsURL is where the folded Tags section loads its list from, for the same result
+	// set as the page.
+	FacetsURL string
 
 	// §7 pack palette consistency.
 

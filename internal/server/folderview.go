@@ -408,3 +408,18 @@ func (s *Server) handleFolderFind(w http.ResponseWriter, r *http.Request) {
 	data.Kind = current.Get("kind")
 	s.renderPartial(w, r, "assets.html", "folder-hits", http.StatusOK, data)
 }
+
+// handleFacets is GET /facets?<the page's filters>: the tags present in a result set, for
+// the sidebar's Tags section when it is opened. Computing them with every page cost about a
+// second on a vendor folder of a large library, for a folded list.
+func (s *Server) handleFacets(w http.ResponseWriter, r *http.Request) {
+	opts := browseOptions(r)
+	data := s.newPageData(r)
+	data.Search, data.Kind, data.Dir, data.IncludeMissing = opts.Query, opts.Kind, opts.Dir, opts.IncludeMissing
+	if facets, err := s.index.Facets(r.Context(), opts, index.DefaultFacetLimit); err != nil {
+		s.log.ErrorContext(r.Context(), "facets failed", "error", err)
+	} else {
+		data.Facets = facets
+	}
+	s.renderPartial(w, r, "assets.html", "facets", http.StatusOK, data)
+}

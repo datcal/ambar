@@ -251,8 +251,10 @@ func (s *Server) recordThumbSwatches(ctx context.Context, sha256hex string, img 
 	if err := derive.RecordImagePalette(ctx, s.db, sha256hex, img); err != nil {
 		return err
 	}
-	// The sidebar's colour row is an aggregate over exactly that table.
-	s.nav.invalidate()
+	// The sidebar's colour row is an aggregate over exactly that table — but a page of models
+	// uploads thumbnails one after another, so this marks the sidebar stale rather than
+	// making the next page view wait for a rebuild (sidebarCache.touch).
+	s.nav.touch()
 	return nil
 }
 

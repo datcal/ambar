@@ -73,6 +73,26 @@
         }
     }
 
+    // --- folds that load when opened ------------------------------------------------
+    //
+    // The sidebar's Tags section counts the tags of the current result set, which is a
+    // second's work on a large folder; it is done when somebody opens the fold, once.
+    for (const fold of document.querySelectorAll('details[data-role="lazy-fold"]')) {
+        fold.addEventListener("toggle", async function () {
+            if (!fold.open || fold.dataset.loaded) return;
+            fold.dataset.loaded = "1";
+            const body = fold.querySelector('[data-role="lazy-body"]');
+            try {
+                const response = await fetch(fold.dataset.src, { headers: { "X-Requested-With": "fetch" } });
+                if (!response.ok) throw new Error(String(response.status));
+                body.innerHTML = await response.text();
+            } catch (e) {
+                body.innerHTML = '<p class="panel-note">The tags could not be loaded.</p>';
+                delete fold.dataset.loaded;
+            }
+        });
+    }
+
     // --- go to a path ----------------------------------------------------------------
     //
     // Opening "Go to path…" selects the current path, so a paste replaces it and the arrow
