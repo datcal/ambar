@@ -117,7 +117,9 @@ void SAmbarTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 		OwnerTable);
 }
 
-const FSlateBrush* SAmbarTile::GetPicture()
+// const because SImage's Image attribute only binds const getters (UE 5.8). Images is a
+// pointer, so asking it to fetch is still allowed.
+const FSlateBrush* SAmbarTile::GetPicture() const
 {
 	if (Images.IsValid())
 	{

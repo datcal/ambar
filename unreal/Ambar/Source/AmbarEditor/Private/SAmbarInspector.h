@@ -31,7 +31,7 @@ public:
 private:
 	void Rebuild();
 	void LoadDetail(int64 AssetId);
-	const FSlateBrush* GetPreview();
+	const FSlateBrush* GetPreview() const;
 	FText ImportLabel() const;
 	bool CanImport() const;
 	FReply OnImportClicked();

@@ -21,7 +21,7 @@ public:
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& OwnerTable);
 
 private:
-	const FSlateBrush* GetPicture();
+	const FSlateBrush* GetPicture() const;
 	FText GetBadge() const;
 
 	TSharedPtr<FAmbarAsset> Asset;

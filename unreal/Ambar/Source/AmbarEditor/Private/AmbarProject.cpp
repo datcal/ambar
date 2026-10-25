@@ -66,7 +66,10 @@ TArray<FAmbarProject::FEntry> FAmbarProject::Entries()
 {
 	TArray<FEntry> Out;
 	const TSharedRef<FJsonObject> Root = Manifest();
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
+	// auto, and the key read through operator*: UE 5.8 keys FJsonObject::Values by
+	// UE::FSharedString rather than FString, and a TPair<FString, …> here binds each entry
+	// to a converted temporary, which -Wrange-loop-construct turns into a build failure.
+	for (const auto& Pair : Root->Values)
 	{
 		const TSharedPtr<FJsonObject>* Obj = nullptr;
 		if (!Pair.Value.IsValid() || !Pair.Value->TryGetObject(Obj) || !Obj)
@@ -88,7 +91,8 @@ TSet<int64> FAmbarProject::ImportedIds()
 {
 	TSet<int64> Ids;
 	const TSharedRef<FJsonObject> Root = Manifest();
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
+	// auto for the same reason as in Entries.
+	for (const auto& Pair : Root->Values)
 	{
 		Ids.Add(FCString::Atoi64(*Pair.Key));
 	}

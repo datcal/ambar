@@ -43,6 +43,10 @@ will not change incompatibly without a major bump.
   keys (Shift for bigger steps); double-click resets it. The width is remembered per browser.
   It starts a little wider (18rem), and deep folders indent less.
 
+- Fixed: the Unreal plugin did not compile against UE 5.8.4 ("could not be compiled. Try
+  rebuilding from source manually"). 5.8 keys `FJsonObject::Values` by `FSharedString`, and
+  `SImage::Image` binds only const getters. Verified by building a project's
+  `<Project>Editor` target with the plugin in `Plugins/`.
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,
   multi-select, an inspector (large preview, licence, tags, other formats), import through the

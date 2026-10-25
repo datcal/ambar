@@ -80,7 +80,8 @@ void SAmbarInspector::LoadDetail(int64 AssetId)
 	});
 }
 
-const FSlateBrush* SAmbarInspector::GetPreview()
+// const for SImage's Image attribute, as SAmbarTile::GetPicture.
+const FSlateBrush* SAmbarInspector::GetPreview() const
 {
 	if (Images.IsValid() && !PreviewKey.IsEmpty())
 	{
