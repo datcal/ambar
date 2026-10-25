@@ -25,6 +25,7 @@ import (
 	"github.com/datcal/ambar/internal/junk"
 	"github.com/datcal/ambar/internal/projects"
 	"github.com/datcal/ambar/internal/provenance"
+	"github.com/datcal/ambar/internal/remote"
 	"github.com/datcal/ambar/internal/removal"
 	"github.com/datcal/ambar/internal/savedsearch"
 	"github.com/datcal/ambar/internal/sidecar"
@@ -52,6 +53,8 @@ type Server struct {
 	projects *projects.Store
 	sidecars *sidecar.Manager
 	jobs     *jobs.Queue
+	// remote answers the worker API; nil unless serve attached one.
+	remote *remote.Coordinator
 
 	// The shared library sidebar's cached aggregates (M16). See sidebar.go for why the
 	// cache is not optional.
@@ -317,6 +320,12 @@ func (s *Server) routes() http.Handler {
 	// handler refuses to overwrite a thumbnail that already exists, so a second client
 	// rendering the same model costs one 204 and nothing else.
 	apiWrite("POST /api/v1/assets/{id}/thumb", s.handleModelThumbUpload)
+
+	// Remote derive workers (internal/remote): another machine takes asset.derive jobs,
+	// decodes them against its own mount of the library and sends the results back.
+	apiWrite("POST /api/v1/worker/claim", s.handleWorkerClaim)
+	apiWrite("POST /api/v1/worker/jobs/{id}/result", s.handleWorkerResult)
+	apiWrite("POST /api/v1/worker/release", s.handleWorkerRelease)
 
 	// API token management (§11), session-authed like the rest of the UI.
 	// Settings: users (§11 has no self-registration, so creating one is behind auth)

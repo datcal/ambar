@@ -38,6 +38,8 @@ Usage:
   ambar trash list|restore|purge    inspect the trash, put files back, purge old batches
   ambar user add <username>         create a user (there is no self-registration)
   ambar user list                   list users
+  ambar token add <username>        create an API token (--name, --scope)
+  ambar worker                      do derive work for a server on another machine
   ambar version                     print version information
 
 Configuration is entirely by environment variable; see .env.example.
@@ -89,6 +91,10 @@ func run(args []string) error {
 		return runTrash(args[1:])
 	case "user":
 		return runUser(args[1:])
+	case "token":
+		return runToken(args[1:])
+	case "worker":
+		return runWorker(args[1:])
 	case "version", "--version", "-version":
 		fmt.Printf("ambar %s (commit %s, %s, %s/%s)\n",
 			version, commit, runtime.Version(), runtime.GOOS, runtime.GOARCH)

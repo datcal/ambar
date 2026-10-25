@@ -20,6 +20,13 @@ to deviate, say so explicitly rather than quietly doing something else.
 
 - **One container, one mode.** It runs on the NAS. No agent/server split, no sync protocol,
   no separate worker container.
+  *Deviation (2026-10, internal/remote):* derive work — and only derive work — may be done
+  by `ambar worker` on another machine, over the HTTP API, when `AMBAR_REMOTE_DERIVE` allows
+  it. Measured reason: a 92,000-file import on the target N100 queued hours of decoding a
+  twenty-thread desktop beside it does in minutes, with Blender. What this rule protects
+  still holds: one database, written only by the server; a server that needs no worker and
+  behaves exactly as before with the setting off. A worker never opens SQLite — WAL over a
+  network filesystem is corruption, not a shortcut.
 - **Everything lives on the NAS**: the asset library, the derivatives, and the SQLite
   database. Backup is `rsync` plus one database file.
 - **The filesystem is the source of truth. SQLite is a rebuildable index.**

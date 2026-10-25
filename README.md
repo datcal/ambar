@@ -173,6 +173,26 @@ every one with its default. The ones you will actually set:
 | `AMBAR_IGNORE_GLOBS` | junk to skip |
 | `AMBAR_LOCAL_LIBRARY_PATH` | the library as *your desktop* sees it, for "open in…" |
 
+### A faster machine for the heavy work: `ambar worker`
+
+Thumbnails, previews and Blender conversions can run on another computer — a desktop
+beside a slow NAS — while the server keeps the database and every write. Set
+`AMBAR_REMOTE_DERIVE=auto` on the server, create a token, and run the worker where the
+library is mounted:
+
+```sh
+ssh nas "docker exec ambar /ambar token add <user> --name worker --scope write" \
+  > ~/.config/ambar/worker.token
+ambar worker --server http://nas:8973 --library /mnt/game-assets \
+  --blender /var/lib/flatpak/exports/bin/org.blender.Blender
+```
+
+With `auto`, the server's own workers leave derive jobs alone while a worker is connected
+and take them back when it stops; `only` leaves them to workers entirely. A worker with
+Blender is also offered every FBX and `.blend` that was waiting on one. The worker must be
+built from the same version as the server — it is refused otherwise — and never touches the
+database: SQLite over a network share is not something to try.
+
 ### Hiding things: `.ambarignore`
 
 A `.ambarignore` in any folder of the library hides files and folders beneath it from
@@ -208,6 +228,8 @@ ambar backup                    VACUUM INTO a timestamped copy
 ambar dupes / junk              report duplicates and clutter (reporting only)
 ambar trash list|restore|purge  inspect the trash, put files back
 ambar user add|list             accounts; there is no self-registration
+ambar token add <user>          an API token, for a worker or a script
+ambar worker                    do derive work for a server on another machine
 ```
 
 ## Development

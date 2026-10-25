@@ -117,6 +117,11 @@ type Config struct {
 	// one copy and a double-click in your own file manager. Empty hides the feature
 	// rather than showing a path that would not work.
 	LocalLibraryPath string
+
+	// RemoteDerive is whether another machine may take derive jobs over the API
+	// (internal/remote): off, auto (this server steps aside while a worker is connected)
+	// or only (derive jobs wait for a worker).
+	RemoteDerive string
 }
 
 // DatabasePath is the SQLite file, deliberately outside the library tree (§4).
@@ -289,6 +294,13 @@ func Load() (*Config, error) {
 		fail("%w", err)
 	} else if c.MaxImagePixels < 1 {
 		fail("AMBAR_MAX_IMAGE_PIXELS must be positive, got %d", c.MaxImagePixels)
+	}
+
+	c.RemoteDerive = strings.ToLower(envStr("AMBAR_REMOTE_DERIVE", "off"))
+	switch c.RemoteDerive {
+	case "off", "auto", "only":
+	default:
+		fail("AMBAR_REMOTE_DERIVE must be off, auto or only, got %q", c.RemoteDerive)
 	}
 
 	c.DedupeLinkMode = envStr("AMBAR_DEDUPE_LINK_MODE", "reflink")

@@ -23,6 +23,7 @@ import (
 	"github.com/datcal/ambar/internal/jobs"
 	"github.com/datcal/ambar/internal/junk"
 	"github.com/datcal/ambar/internal/library"
+	"github.com/datcal/ambar/internal/remote"
 	"github.com/datcal/ambar/internal/removal"
 	"github.com/datcal/ambar/internal/server"
 	"github.com/datcal/ambar/internal/sidecar"
@@ -117,7 +118,19 @@ func runServe(args []string) error {
 		return fmt.Errorf("create the derivatives directory: %w", err)
 	}
 
-	queue := jobs.New(database, jobs.Options{Workers: cfg.Workers, Log: log})
+	// The remote derive coordinator is built once the deriver exists, below; the queue
+	// asks it on every claim which job types to leave to a remote worker.
+	var coordinator *remote.Coordinator
+	queue := jobs.New(database, jobs.Options{
+		Workers: cfg.Workers,
+		Log:     log,
+		Skip: func() []string {
+			if coordinator == nil {
+				return nil
+			}
+			return coordinator.SkipLocal()
+		},
+	})
 
 	// §7 auto-tagging. M3 shipped it as a manual `ambar retag` because the signals it
 	// reads (style:pixel-art, has:alpha) only exist after derive. Both halves are wired
@@ -139,6 +152,10 @@ func runServe(args []string) error {
 	})
 	deriver.Register(queue)
 	deriver.RegisterPalette(queue)
+
+	coordinator = remote.NewCoordinator(database, queue, deriver, remote.Options{
+		Mode: cfg.RemoteDerive, Log: log,
+	})
 
 	// A scan enqueues the derivative work it discovered. Passing this in as a
 	// callback keeps internal/index unaware of internal/derive.
@@ -233,6 +250,11 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	srv.EnableRemoteWorkers(coordinator)
+	if cfg.RemoteDerive != remote.ModeOff {
+		go coordinator.Run(ctx)
+		log.Info("remote derive workers accepted", "mode", cfg.RemoteDerive)
+	}
 
 	// One sweep at startup, not a background ticker. Nothing in this application
 	// deletes on a schedule (ARCHITECTURE.md rule 3), and Lookup rejects expired
@@ -267,20 +289,25 @@ func runServe(args []string) error {
 		}
 	}()
 
-	// Anything left pending from a previous run, picked up without waiting for a scan.
-	if n, err := derive.EnqueueStale(ctx, database, queue); err != nil {
-		log.Warn("could not enqueue outstanding derivatives", "error", err)
-	} else if n > 0 {
-		log.Info("enqueued outstanding derivative jobs", "count", n)
-	}
+	// Backlog from a previous run, in the background: it is one enqueue per asset, which on
+	// a library with a large import still waiting for thumbnails is tens of thousands of
+	// writes, and the UI has no reason to wait for them. The deploy script's health check
+	// gave up on exactly that.
+	go func() {
+		// Anything left pending from a previous run, picked up without waiting for a scan.
+		if n, err := derive.EnqueueStale(ctx, database, queue); err != nil {
+			log.Warn("could not enqueue outstanding derivatives", "error", err)
+		} else if n > 0 {
+			log.Info("enqueued outstanding derivative jobs", "count", n)
+		}
 
-	// Models whose thumbnail exists but whose palette does not (M17). Converges rather
-	// than repeating: once a model has swatches the query stops selecting it.
-	if n, err := derive.EnqueueModelPalettes(ctx, database, queue); err != nil {
-		log.Warn("could not enqueue model palettes", "error", err)
-	} else if n > 0 {
-		log.Info("enqueued model palette jobs", "count", n)
-	}
+		// Models whose thumbnail exists but whose palette does not (M17).
+		if n, err := derive.EnqueueModelPalettes(ctx, database, queue, cfg.DataRoot); err != nil {
+			log.Warn("could not enqueue model palettes", "error", err)
+		} else if n > 0 {
+			log.Info("enqueued model palette jobs", "count", n)
+		}
+	}()
 
 	// Poll _inbox for dropped archives (§5, the primary ingest path). Skipped on a
 	// read-only library, where ingest is disabled.

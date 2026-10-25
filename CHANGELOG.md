@@ -14,6 +14,21 @@ will not change incompatibly without a major bump.
   earlier scan created are dropped on the next one.
 - A scan never drops the row of an asset a Godot project has used, whatever rule excludes
   it — that would have cascaded the project's record and its `CREDITS.md` entry away.
+- **The model palette backfill no longer queues models without a thumbnail.** It assumed
+  a library of under a thousand models; after a Synty import it queued 78,570 jobs at every
+  restart, each of which found nothing to read.
+- The server starts listening immediately; the startup backlog enqueue runs beside it
+  rather than in front of it.
+- **`ambar worker`: derive work on another machine.** With `AMBAR_REMOTE_DERIVE=auto` or
+  `only`, a worker claims `asset.derive` jobs over the API, decodes against its own mount
+  of the library and uploads the results; the server checks each file against the names
+  and formats derive writes, moves it into place and records it through the same code as a
+  local derive. Leases expire after 15 minutes, a stopping worker hands its jobs back, a
+  worker built from a different derive version is refused, and a worker with Blender is
+  offered everything waiting in `needs_blender`. The server needs no worker and behaves as
+  before with the setting off. Migration 0020 adds a partial index for claiming queued jobs
+  by type.
+- **`ambar token add`** creates an API token from the command line.
 
 ## v1.0.0
 

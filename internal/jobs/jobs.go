@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,9 @@ type Queue struct {
 	mu       sync.RWMutex
 	handlers map[string]Handler
 
+	// skip names job types this process's own workers leave alone; see Options.Skip.
+	skip func() []string
+
 	// nudge wakes an idle worker the moment something is enqueued, so the queue is
 	// responsive without polling tightly.
 	nudge chan struct{}
@@ -133,6 +137,12 @@ type Options struct {
 	// generation must not starve them or freeze the UI."
 	Workers int
 	Log     *slog.Logger
+
+	// Skip returns the job types this process's own workers should leave alone, asked
+	// afresh on every claim so the answer can change while running: a remote worker
+	// (internal/remote) takes those types instead, and only while one is connected. Nil,
+	// or an empty answer, means every type — exactly the behaviour without it.
+	Skip func() []string
 }
 
 func New(database *db.DB, opts Options) *Queue {
@@ -151,6 +161,7 @@ func New(database *db.DB, opts Options) *Queue {
 		now:      time.Now,
 		handlers: map[string]Handler{},
 		nudge:    make(chan struct{}, 1),
+		skip:     opts.Skip,
 	}
 }
 
@@ -361,31 +372,62 @@ func (q *Queue) runOne(ctx context.Context, worker int) (bool, error) {
 
 	err = q.runHandler(ctx, handler, job)
 
-	switch {
-	case err == nil:
-		q.log.InfoContext(ctx, "job done",
-			"job_id", job.ID, "type", job.Type,
-			"duration_ms", q.now().Sub(start).Milliseconds())
-		return true, q.finishDone(ctx, job.ID)
-
-	case ctx.Err() != nil:
+	if err != nil && ctx.Err() != nil {
 		// Shutdown, not failure. Leave the row 'running' so the next startup
 		// requeues it, and do not burn an attempt on it.
 		q.log.InfoContext(ctx, "job interrupted by shutdown", "job_id", job.ID, "type", job.Type)
 		return false, nil
+	}
+	if err == nil {
+		q.log.InfoContext(ctx, "job done",
+			"job_id", job.ID, "type", job.Type,
+			"duration_ms", q.now().Sub(start).Milliseconds())
+	}
+	return true, q.Settle(ctx, job, err)
+}
+
+// Settle records the outcome of a claimed job: done on nil, otherwise a retry with
+// backoff, or parked as failed once MaxAttempts is reached. It is what a local worker
+// does after running a handler, exported for a job that ran somewhere else.
+func (q *Queue) Settle(ctx context.Context, job Job, err error) error {
+	switch {
+	case err == nil:
+		return q.finishDone(ctx, job.ID)
 
 	case job.Attempts >= MaxAttempts:
 		q.log.ErrorContext(ctx, "job failed permanently",
 			"job_id", job.ID, "type", job.Type, "attempts", job.Attempts, "error", err)
-		return true, q.finishFailed(ctx, job.ID, err.Error())
+		return q.finishFailed(ctx, job.ID, err.Error())
 
 	default:
 		delay := backoff(job.Attempts)
 		q.log.WarnContext(ctx, "job failed, will retry",
 			"job_id", job.ID, "type", job.Type, "attempt", job.Attempts,
 			"retry_in", delay, "error", err)
-		return true, q.scheduleRetry(ctx, job.ID, err.Error(), delay)
+		return q.scheduleRetry(ctx, job.ID, err.Error(), delay)
 	}
+}
+
+// Requeue puts a claimed job back in the queue without recording an outcome — for a job
+// handed to a remote worker that went away. refund gives back the attempt the claim
+// counted, for a worker that said it was stopping rather than one that vanished: a file
+// that crashes whatever opens it should still run out of attempts.
+func (q *Queue) Requeue(ctx context.Context, job Job, reason string, refund bool) error {
+	ctx = context.WithoutCancel(ctx)
+
+	refundBy := 0
+	if refund {
+		refundBy = 1
+	}
+	now := q.now().Unix()
+	if _, err := q.db.Writer.ExecContext(ctx, `
+		UPDATE jobs SET state = 'queued', started_at = NULL, updated_at = ?, last_error = ?,
+		                attempts = max(attempts - ?, 0)
+		WHERE id = ? AND state = 'running'`, now, truncate(reason), refundBy, job.ID); err != nil {
+		return fmt.Errorf("requeue job %d: %w", job.ID, err)
+	}
+	q.Nudge()
+	return nil
 }
 
 // runHandler isolates a panicking handler. §16 treats a recovered panic as a bug to
@@ -463,6 +505,14 @@ func (q *Queue) Reporter(ctx context.Context) func(done, total int64, note strin
 // connection, so two workers cannot both claim the same row. No SKIP LOCKED, no
 // advisory locks, no transaction to get wrong.
 func (q *Queue) claim(ctx context.Context) (Job, bool, error) {
+	var skip []string
+	if q.skip != nil {
+		skip = q.skip()
+	}
+	if len(skip) > 0 {
+		return q.ClaimTypes(ctx, q.typesExcept(skip))
+	}
+
 	now := q.now()
 
 	var job Job
@@ -487,6 +537,88 @@ func (q *Queue) claim(ctx context.Context) (Job, bool, error) {
 	}
 	job.State = StateRunning
 	return job, true, nil
+}
+
+// typesExcept is every registered type but the skipped ones, sorted so claims are
+// deterministic.
+func (q *Queue) typesExcept(skip []string) []string {
+	skipped := make(map[string]bool, len(skip))
+	for _, t := range skip {
+		skipped[t] = true
+	}
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	types := make([]string, 0, len(q.handlers))
+	for t := range q.handlers {
+		if !skipped[t] {
+			types = append(types, t)
+		}
+	}
+	sort.Strings(types)
+	return types
+}
+
+// ClaimTypes atomically takes the next runnable job of one of these types, in the same
+// priority-then-age order as every claim. The caller owns the job and must Settle or
+// Requeue it; a remote worker's claim is the reason this is exported.
+//
+// One lookup per type rather than `type IN (...)`: jobs_queued_type_idx answers "the next
+// queued job of type T" with a seek, and a handful of seeks is cheap where a filter over a
+// queue of ninety thousand derive jobs is not.
+func (q *Queue) ClaimTypes(ctx context.Context, types []string) (Job, bool, error) {
+	if len(types) == 0 {
+		return Job{}, false, nil
+	}
+	// A competing claim can take the row between the lookup and the update; the update's
+	// state guard catches that, and the next round finds the next row.
+	for round := 0; round < 3; round++ {
+		now := q.now()
+
+		var (
+			bestID       int64
+			bestPriority int
+			found        bool
+		)
+		for _, t := range types {
+			var id int64
+			var priority int
+			err := q.db.Reader.QueryRowContext(ctx, `
+				SELECT id, priority FROM jobs
+				WHERE state = 'queued' AND type = ? AND run_after <= ?
+				ORDER BY priority DESC, id
+				LIMIT 1`, t, now.Unix()).Scan(&id, &priority)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return Job{}, false, fmt.Errorf("find a queued %s job: %w", t, err)
+			}
+			if !found || priority > bestPriority || (priority == bestPriority && id < bestID) {
+				bestID, bestPriority, found = id, priority, true
+			}
+		}
+		if !found {
+			return Job{}, false, nil
+		}
+
+		var job Job
+		err := q.db.Writer.QueryRowContext(ctx, `
+			UPDATE jobs
+			SET state = 'running', attempts = attempts + 1, started_at = ?, updated_at = ?
+			WHERE id = ? AND state = 'queued'
+			RETURNING id, type, payload_json, attempts`,
+			now.Unix(), now.Unix(), bestID,
+		).Scan(&job.ID, &job.Type, &job.Payload, &job.Attempts)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return Job{}, false, fmt.Errorf("claim job %d: %w", bestID, err)
+		}
+		job.State = StateRunning
+		return job, true, nil
+	}
+	return Job{}, false, nil
 }
 
 func (q *Queue) finishDone(ctx context.Context, id int64) error {

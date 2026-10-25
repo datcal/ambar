@@ -115,14 +115,20 @@ func RecordImagePalette(ctx context.Context, database *db.DB, sha256hex string, 
 	return recordSwatchesTo(ctx, database, sha256hex, pal.Swatches)
 }
 
-// EnqueueModelPalettes queues a palette job for every model that has no swatches.
+// EnqueueModelPalettes queues a palette job for every model that has a thumbnail on disk
+// and no swatches.
 //
-// Called at startup and after a scan, beside EnqueueStale. Cheap to call repeatedly: a
-// model that has swatches is excluded by the query, and one whose thumbnail does not exist
-// yet has its job return without writing anything — so this converges rather than looping.
-// Bounded by the number of models, which is under a thousand here and would be the same
-// order on any library this application is for.
-func EnqueueModelPalettes(ctx context.Context, database *db.DB, q *jobs.Queue) (int, error) {
+// Called at startup, beside EnqueueStale. A model with swatches is excluded by the query
+// and a model with no thumbnail by the stat below, so this converges: once the backlog is
+// done it enqueues nothing.
+//
+// The stat is not an optimisation. This used to queue every model without swatches and let
+// the job find there was no thumbnail, on the assumption that a library holds under a
+// thousand models. A Synty import made it 78,570 — and since a model with no thumbnail
+// never gains swatches, every restart queued, claimed and completed all of them again, to
+// write nothing. New thumbnails do not need this job at all: the upload handler records
+// the palette as each one arrives.
+func EnqueueModelPalettes(ctx context.Context, database *db.DB, q *jobs.Queue, dataRoot string) (int, error) {
 	rows, err := database.Reader.QueryContext(ctx, `
 		SELECT DISTINCT a.sha256
 		FROM assets a
@@ -145,10 +151,18 @@ func EnqueueModelPalettes(ctx context.Context, database *db.DB, q *jobs.Queue) (
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	rows.Close() //nolint:errcheck // done reading; free the read connection before the stats
 
 	enqueued := 0
 	for _, sha := range hashes {
-		_, err := q.Enqueue(ctx, PaletteJobType, PalettePayload{SHA256: sha}, jobs.EnqueueOptions{
+		relDir, err := Dir(sha)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dataRoot, relDir, FileThumb)); err != nil {
+			continue
+		}
+		_, err = q.Enqueue(ctx, PaletteJobType, PalettePayload{SHA256: sha}, jobs.EnqueueOptions{
 			// Below thumbnails and below an interactive scan: a colour filter that gains
 			// models an hour late is fine, a grid that renders late is not.
 			Priority:  0,

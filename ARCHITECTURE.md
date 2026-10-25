@@ -55,6 +55,7 @@ UI polls for status. That is why a scan of 20,000 files can be started from a bu
 | `internal/tags` | namespaces, hierarchy, aliases, autocomplete, bulk tagging |
 | `internal/jobs` | the queue: retries, crash recovery, status |
 | `internal/derive` | thumbnails, previews, waveforms, spritesheet detection, palettes |
+| `internal/remote` | `ambar worker`: derive jobs done on another machine, results sent back over HTTP |
 | `internal/aseprite` | an `.aseprite` decoder, reading the binary format directly |
 | `internal/model` | glTF/OBJ normalisation and metadata |
 | `internal/palette` | colour extraction and `color:` search |

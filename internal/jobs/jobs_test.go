@@ -746,3 +746,69 @@ func TestCompletionSurvivesShutdown(t *testing.T) {
 			"because the context was cancelled", state)
 	}
 }
+
+// TestClaimTypesTakesOnlyThoseTypes: a remote worker asking for one type gets the
+// highest-priority, oldest job of that type and nothing else.
+func TestClaimTypesTakesOnlyThoseTypes(t *testing.T) {
+	q, _ := newTestQueue(t, 1)
+	ctx := context.Background()
+
+	low, _ := q.Enqueue(ctx, "derive", nil, EnqueueOptions{Priority: 0})
+	scan, _ := q.Enqueue(ctx, "scan", nil, EnqueueOptions{Priority: 10})
+	high, _ := q.Enqueue(ctx, "derive", nil, EnqueueOptions{Priority: 5})
+
+	for _, want := range []int64{high, low} {
+		job, ok, err := q.ClaimTypes(ctx, []string{"derive"})
+		if err != nil || !ok {
+			t.Fatalf("claim: ok=%v err=%v", ok, err)
+		}
+		if job.ID != want {
+			t.Errorf("claimed job %d, want %d", job.ID, want)
+		}
+	}
+	if _, ok, _ := q.ClaimTypes(ctx, []string{"derive"}); ok {
+		t.Error("a third derive claim found work; only the scan is left")
+	}
+	if job, ok, _ := q.ClaimTypes(ctx, []string{"derive", "scan"}); !ok || job.ID != scan {
+		t.Errorf("claiming either type = %d, want the scan %d", job.ID, scan)
+	}
+}
+
+// TestSkipLeavesATypeForSomeoneElse: with Skip naming a type, this process's workers run
+// everything else and leave that type queued for whoever does take it.
+func TestSkipLeavesATypeForSomeoneElse(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if _, err := database.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	q := New(database, Options{Workers: 1, Skip: func() []string { return []string{"slow"} }})
+
+	ranSlow := make(chan struct{}, 1)
+	done := make(chan struct{})
+	q.Register("slow", func(context.Context, []byte) error { ranSlow <- struct{}{}; return nil })
+	q.Register("fast", func(context.Context, []byte) error { close(done); return nil })
+
+	ctx := context.Background()
+	slow, _ := q.Enqueue(ctx, "slow", nil, EnqueueOptions{Priority: 10})
+	if _, err := q.Enqueue(ctx, "fast", nil, EnqueueOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, q, done, 5*time.Second)
+
+	select {
+	case <-ranSlow:
+		t.Error("a skipped type was run locally")
+	default:
+	}
+	var state string
+	if err := database.Reader.QueryRow(`SELECT state FROM jobs WHERE id = ?`, slow).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" {
+		t.Errorf("the skipped job is %s, want queued", state)
+	}
+}

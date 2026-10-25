@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/datcal/ambar/internal/db"
@@ -98,12 +97,7 @@ func DedupeKey(sha256hex string) string {
 	return fmt.Sprintf("%s:%s:%d", JobType, sha256hex, Version)
 }
 
-// Handle derives one asset.
-//
-// The distinction that matters: a decoding *failure* is retryable and recorded as
-// derive_state=failed, while an *unsupported* format is a permanent, expected outcome
-// recorded as derive_state=unsupported. Only the former returns an error to the queue,
-// so the queue does not burn three attempts on a .xcf that will never decode.
+// Handle derives one asset: Prepare, Generate, Finish, all in this process.
 func (d *Deriver) Handle(ctx context.Context, raw []byte) error {
 	var p Payload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -113,30 +107,58 @@ func (d *Deriver) Handle(ctx context.Context, raw []byte) error {
 		return fmt.Errorf("derive payload has no asset id")
 	}
 
-	asset, err := d.loadAsset(ctx, p.AssetID)
+	task, absPath, done, err := d.prepare(ctx, p.AssetID)
+	if err != nil || done {
+		return err
+	}
+
+	result, err := Generate(GenerateOptions{
+		AbsPath:    absPath,
+		Ext:        task.Ext,
+		SHA256:     task.SHA256,
+		DataRoot:   d.dataRoot,
+		MaxPixels:  d.maxPixels,
+		BlenderBin: d.blenderBin,
+	})
+	return d.Finish(ctx, task, OutcomeOf(result, err))
+}
+
+// Prepare is everything Handle does before decoding: load the row, and settle the cases
+// that need no decoder at all. done means the job is finished — the asset is gone, already
+// current, or had its outcome recorded here — and Task is only meaningful when it is false.
+//
+// Exported for the remote path (internal/remote), which prepares here, decodes on another
+// machine, and comes back through Finish.
+func (d *Deriver) Prepare(ctx context.Context, assetID int64) (task Task, done bool, err error) {
+	task, _, done, err = d.prepare(ctx, assetID)
+	return task, done, err
+}
+
+func (d *Deriver) prepare(ctx context.Context, assetID int64) (Task, string, bool, error) {
+	asset, err := d.loadAsset(ctx, assetID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// The asset was removed between enqueue and run. Nothing to do, and not a
 		// failure — this happens whenever a scan enqueues work and the library
 		// changes underneath it.
-		d.log.DebugContext(ctx, "derive skipped: asset no longer exists", "asset_id", p.AssetID)
-		return nil
+		d.log.DebugContext(ctx, "derive skipped: asset no longer exists", "asset_id", assetID)
+		return Task{}, "", true, nil
 	}
 	if err != nil {
-		return err
+		return Task{}, "", false, err
 	}
 
 	// Already current. The dedupe key normally prevents this, but a job queued
 	// before a rescan can still arrive after another path already derived the same
 	// content.
 	if asset.deriveState == StateOK && asset.deriveVersion == Version {
-		return nil
+		return Task{}, "", true, nil
 	}
 
 	// A missing file cannot be derived, and §12 keeps its row. Recorded as
 	// unsupported rather than failed so it does not sit in the failed list forever.
 	// By id, not by content: another copy of the same bytes may well be present.
 	if asset.missing {
-		return d.record(ctx, asset.id, StateUnsupported, "the file was not present at the last scan")
+		return Task{}, "", true, d.record(ctx, asset.id, StateUnsupported, "the file was not present at the last scan")
 	}
 
 	absPath, err := safepath.ResolveExisting(d.libraryRoot, asset.libraryPath())
@@ -146,46 +168,64 @@ func (d *Deriver) Handle(ctx context.Context, raw []byte) error {
 		// never followed.
 		d.log.ErrorContext(ctx, "derive could not resolve the asset path",
 			"asset_id", asset.id, "rel_path", asset.libraryPath(), "error", err)
-		return d.record(ctx, asset.id, StateFailed,
+		return Task{}, "", true, d.record(ctx, asset.id, StateFailed,
 			"the file could not be opened; run `ambar scan` to update the index")
 	}
 
-	result, err := Generate(GenerateOptions{
-		AbsPath:    absPath,
-		Ext:        asset.ext,
-		SHA256:     asset.sha256,
-		DataRoot:   d.dataRoot,
-		MaxPixels:  d.maxPixels,
-		BlenderBin: d.blenderBin,
-	})
+	return Task{
+		AssetID:       asset.id,
+		SHA256:        asset.sha256,
+		Ext:           asset.ext,
+		Filename:      asset.filename,
+		LibraryPath:   asset.libraryPath(),
+		Size:          asset.size,
+		MaxPixels:     d.maxPixels,
+		DeriveVersion: Version,
+	}, absPath, false, nil
+}
 
-	switch {
-	case errors.Is(err, ErrNeedsBlender):
+// Finish records an outcome, wherever it was produced.
+//
+// The distinction that matters: a decoding *failure* is retryable and recorded as
+// derive_state=failed, while an *unsupported* format is a permanent, expected outcome
+// recorded as derive_state=unsupported. Only the former returns an error to the queue,
+// so the queue does not burn three attempts on a .xcf that will never decode.
+func (d *Deriver) Finish(ctx context.Context, task Task, outcome Outcome) error {
+	switch outcome.State {
+	case StateNeedsBlender:
 		// Not a failure and not retryable until Blender is installed (§6). Recorded
 		// with the reason so the UI can offer to fetch Blender.
-		return d.recordForContent(ctx, asset.sha256, StateNeedsBlender, err.Error(), nil)
+		return d.recordForContent(ctx, task.SHA256, StateNeedsBlender, outcome.Message, nil)
 
-	case errors.Is(err, ErrUnsupported):
+	case StateUnsupported:
 		// Expected and permanent. Recorded with the reason so the UI can say *why*
 		// rather than just shrugging, and returning nil keeps it out of the retry
 		// path.
-		return d.recordForContent(ctx, asset.sha256, StateUnsupported, err.Error(), nil)
+		return d.recordForContent(ctx, task.SHA256, StateUnsupported, outcome.Message, nil)
 
-	case err != nil:
+	case StateFailed:
 		// A real failure: corrupt file, unreadable disk, encoder error. Recorded and
 		// returned, so the queue retries and §12's failed-job list shows it.
-		if recordErr := d.recordForContent(ctx, asset.sha256, StateFailed, err.Error(), nil); recordErr != nil {
+		if recordErr := d.recordForContent(ctx, task.SHA256, StateFailed, outcome.Message, nil); recordErr != nil {
 			d.log.ErrorContext(ctx, "could not record a derive failure",
-				"asset_id", asset.id, "error", recordErr)
+				"asset_id", task.AssetID, "error", recordErr)
 		}
-		return fmt.Errorf("derive asset %d (%s): %w", asset.id, asset.filename, err)
-	}
+		return fmt.Errorf("derive asset %d (%s): %s", task.AssetID, task.Filename, outcome.Message)
 
-	if len(result.Notes) > 0 {
-		d.log.InfoContext(ctx, "derive completed with notes",
-			"asset_id", asset.id, "filename", asset.filename, "notes", strings.Join(result.Notes, "; "))
+	case StateOK:
+		if outcome.Result == nil {
+			return fmt.Errorf("derive asset %d (%s): a successful outcome carried no result",
+				task.AssetID, task.Filename)
+		}
+		if outcome.Message != "" {
+			d.log.InfoContext(ctx, "derive completed with notes",
+				"asset_id", task.AssetID, "filename", task.Filename, "notes", outcome.Message)
+		}
+		return d.recordForContent(ctx, task.SHA256, StateOK, outcome.Message, outcome.Result)
+
+	default:
+		return fmt.Errorf("derive asset %d: unknown outcome state %q", task.AssetID, outcome.State)
 	}
-	return d.recordForContent(ctx, asset.sha256, StateOK, strings.Join(result.Notes, "; "), result)
 }
 
 // assetRow is the subset of an asset the deriver needs.
@@ -196,6 +236,7 @@ type assetRow struct {
 	filename    string
 	ext         string
 	sha256      string
+	size        int64
 	missing     bool
 
 	deriveState   string
@@ -215,12 +256,12 @@ func (d *Deriver) loadAsset(ctx context.Context, id int64) (assetRow, error) {
 		missing sql.NullInt64
 	)
 	err := d.db.Reader.QueryRowContext(ctx, `
-		SELECT a.id, p.library_rel_path, a.rel_path, a.filename, a.ext, a.sha256,
+		SELECT a.id, p.library_rel_path, a.rel_path, a.filename, a.ext, a.sha256, a.size,
 		       a.missing_since, a.derive_state, a.derive_version
 		FROM assets a
 		JOIN packs p ON p.id = a.pack_id
 		WHERE a.id = ?`, id,
-	).Scan(&a.id, &a.packRelPath, &a.relPath, &a.filename, &a.ext, &a.sha256,
+	).Scan(&a.id, &a.packRelPath, &a.relPath, &a.filename, &a.ext, &a.sha256, &a.size,
 		&missing, &a.deriveState, &a.deriveVersion)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

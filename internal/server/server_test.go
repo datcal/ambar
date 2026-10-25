@@ -37,6 +37,11 @@ type testServer struct {
 	client *http.Client
 	db     *db.DB
 	cfg    *config.Config
+
+	// The pieces serve wires together, for tests that attach more of them.
+	srv     *Server
+	queue   *jobs.Queue
+	deriver *derive.Deriver
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -92,9 +97,10 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 
 	indexer := index.New(database, index.Options{Root: cfg.LibraryRoot})
 	queue := jobs.New(database, jobs.Options{Workers: 1})
-	derive.New(database, derive.Options{
+	deriver := derive.New(database, derive.Options{
 		LibraryRoot: cfg.LibraryRoot, DataRoot: cfg.DataRoot,
-	}).Register(queue)
+	})
+	deriver.Register(queue)
 	indexer.RegisterScanJob(queue, func(ctx context.Context) error {
 		_, err := derive.EnqueueStale(ctx, database, queue)
 		return err
@@ -119,7 +125,8 @@ func newTestServerWithConfig(t *testing.T, adjust func(*config.Config)) *testSer
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
-	return &testServer{Server: httpSrv, client: client, db: database, cfg: cfg}
+	return &testServer{Server: httpSrv, client: client, db: database, cfg: cfg,
+		srv: srv, queue: queue, deriver: deriver}
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

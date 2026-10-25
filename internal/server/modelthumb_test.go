@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/datcal/ambar/internal/derive"
+	"github.com/datcal/ambar/internal/jobs"
 )
 
 // pngBytes builds a small PNG for the upload tests.
@@ -425,4 +427,30 @@ func (ts *testServer) swatchCount(t *testing.T, assetID int64) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// TestPaletteBackfillOnlyQueuesModelsWithAThumbnail: the startup backfill reads a
+// thumbnail that is already on disk, so a model without one has nothing for it to do.
+// Queuing it anyway is what put 78,570 no-op jobs on the NAS at every restart after a
+// Synty import — a model with no thumbnail never gains swatches, so nothing converged.
+func TestPaletteBackfillOnlyQueuesModelsWithAThumbnail(t *testing.T) {
+	ts := newTestServer(t)
+	ts.seedLibrary(t, map[string]string{
+		"pack/models/barrel.obj": "v 0 0 0\n",
+		"pack/models/crate.obj":  "v 1 1 1\n",
+		"pack/models/chest.fbx":  "Kaydara FBX Binary",
+	})
+	ts.writeDerivative(t, ts.assetID(t, "pack/models/barrel.obj"), derive.FileThumb, []byte("webp"))
+
+	queue := jobs.New(ts.db, jobs.Options{Workers: 1})
+	n, err := derive.EnqueueModelPalettes(context.Background(), ts.db, queue, ts.cfg.DataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("enqueued %d palette jobs, want 1 — only the barrel has a thumbnail", n)
+	}
+	if got := ts.queuedJobs(t, derive.PaletteJobType); got != 1 {
+		t.Errorf("%d palette jobs queued, want 1", got)
+	}
 }
