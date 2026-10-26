@@ -104,7 +104,7 @@ func parseOBJ(path string) (*gltf.Document, error) {
 		return nil, err
 	}
 	if len(outPos) == 0 || len(indices) == 0 {
-		return nil, fmt.Errorf("%w: no geometry in the obj", ErrUnsupported)
+		return nil, fmt.Errorf("%w in the obj", ErrNoGeometry)
 	}
 
 	doc := gltf.NewDocument()

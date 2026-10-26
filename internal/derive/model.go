@@ -51,6 +51,10 @@ func deriveModel(opts GenerateOptions) (*Result, error) {
 	case model.CanRead(opts.Ext):
 		// glTF/GLB/OBJ: normalise and analyse in pure Go.
 		info, err := model.Normalize(opts.AbsPath, previewPath)
+		if errors.Is(err, model.ErrNoGeometry) {
+			// Nothing to show, and nothing a retry would change.
+			return nil, fmt.Errorf("%w: %v", ErrUnsupported, err)
+		}
 		if err != nil {
 			return nil, err
 		}

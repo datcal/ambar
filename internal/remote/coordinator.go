@@ -172,6 +172,19 @@ type Coordinator struct {
 	// blenderOffered records that the needs_blender backlog was queued for the worker
 	// connected now; it resets when the worker goes quiet, so a reconnect offers again.
 	blenderOffered bool
+	// blenderSeen is the last worker with Blender to ask for work, kept in seenFile at most
+	// once a minute (seenWritten) so that it outlives a restart.
+	blenderSeen BlenderWorker
+	seenFile    string
+	seenWritten time.Time
+}
+
+// BlenderWorker is a worker with Blender, as the jobs page reports it.
+type BlenderWorker struct {
+	Name     string    `json:"name"`
+	LastSeen time.Time `json:"last_seen"`
+	// Connected is whether it has asked for work recently; never stored.
+	Connected bool `json:"-"`
 }
 
 // Options configures a Coordinator.
@@ -180,7 +193,10 @@ type Options struct {
 	Mode string
 	// StateFile remembers the jobs page's choice across restarts. Empty keeps it in memory.
 	StateFile string
-	Log       *slog.Logger
+	// SeenFile remembers the last worker with Blender across restarts, so the jobs page can
+	// still say how long FBX and .blend files have waited for it. Empty keeps it in memory.
+	SeenFile string
+	Log      *slog.Logger
 }
 
 // NewCoordinator builds the server side. The deriver must be the one registered on the
@@ -209,6 +225,12 @@ func NewCoordinator(database *db.DB, queue *jobs.Queue, deriver *derive.Deriver,
 		now:       time.Now,
 		leases:    map[int64]*lease{},
 		workers:   map[string]*workerState{},
+		seenFile:  opts.SeenFile,
+	}
+	if opts.SeenFile != "" {
+		if raw, err := os.ReadFile(opts.SeenFile); err == nil {
+			_ = json.Unmarshal(raw, &c.blenderSeen)
+		}
 	}
 	queue.SetPaused(mode == ModeOnly)
 	return c
@@ -341,7 +363,20 @@ func (c *Coordinator) touch(ctx context.Context, req ClaimRequest) {
 	if offer {
 		c.blenderOffered = true
 	}
+	var remember *BlenderWorker
+	if req.Blender {
+		c.blenderSeen = BlenderWorker{Name: req.Worker, LastSeen: c.lastSeen}
+		if c.lastSeen.Sub(c.seenWritten) >= time.Minute {
+			c.seenWritten = c.lastSeen
+			seen := c.blenderSeen
+			remember = &seen
+		}
+	}
 	c.mu.Unlock()
+
+	if remember != nil && c.seenFile != "" {
+		c.rememberBlender(*remember)
+	}
 
 	if announce {
 		c.log.InfoContext(ctx, "remote derive worker connected",
@@ -464,6 +499,34 @@ func (c *Coordinator) Workers() []WorkerStatus {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
 	return out
+}
+
+// Blender reports the worker with Blender: one connected now if there is one, otherwise
+// the last one seen, from before a restart too. ok is false when none ever asked for work.
+func (c *Coordinator) Blender() (w BlenderWorker, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	for _, ws := range c.workers {
+		if ws.blender && now.Sub(ws.lastSeen) < ActiveWindow {
+			return BlenderWorker{Name: ws.name, LastSeen: ws.lastSeen, Connected: true}, true
+		}
+	}
+	return c.blenderSeen, !c.blenderSeen.LastSeen.IsZero()
+}
+
+// rememberBlender writes the last worker with Blender to seenFile.
+func (c *Coordinator) rememberBlender(w BlenderWorker) {
+	raw, err := json.Marshal(w)
+	if err == nil {
+		tmp := c.seenFile + ".tmp"
+		if err = os.WriteFile(tmp, raw, 0o644); err == nil {
+			err = os.Rename(tmp, c.seenFile)
+		}
+	}
+	if err != nil {
+		c.log.Warn("could not remember the worker with Blender", "error", err)
+	}
 }
 
 // Holders maps each job out on a worker to that worker's name, so a list of running

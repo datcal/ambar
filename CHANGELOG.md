@@ -6,6 +6,24 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **The jobs page says when models wait for Blender and nothing can convert them.** FBX and
+  `.blend` waiting for Blender are counted under Previews, and while this server has no Blender
+  and no worker with Blender is connected, a warning at the top names the worker and when it was
+  last seen — remembered across restarts (`blender-worker.json` in the data root). A worker that
+  stopped at night left forty thousand of them waiting with nothing on the page to show it.
+- **Retry leaves failed FBX and `.blend` to wait for a worker with Blender** when nothing can
+  convert them, instead of running them through this server and straight back to "needs
+  Blender", which looked like a retry that did nothing. Their failed jobs are closed with
+  "waiting for a worker with Blender"; the worker is offered them when it connects. When Blender
+  is available, Retry queues everything waiting for it as well. The page says what Retry did.
+- **TIFFs with extra channels get previews.** x/image/tiff refuses an RGB TIFF whose fourth
+  channel is marked "unspecified" and any greyscale TIFF with an extra channel; Synty ships its
+  metallic and specular maps that way, smoothness in the fourth channel. They are read by a
+  fallback now (8-bit strips, plain, LZW or Deflate), the extra channel left out unless the
+  file marks it alpha. A TIFF neither reads is "no preview", not failed.
+- An `.obj` with no geometry — a locator exported beside the meshes — is "no preview", not
+  failed, so a retry no longer fails it again.
+
 - **AI assistants can use the library (MCP).** `/mcp` serves the Model Context Protocol over
   Streamable HTTP, behind the same API tokens as `/api/v1`: `search_assets`, `browse_folder`,
   `get_asset`, `view_asset` (the thumbnail, as an image) and, with a write token,

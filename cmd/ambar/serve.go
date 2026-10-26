@@ -158,6 +158,7 @@ func runServe(args []string) error {
 	coordinator = remote.NewCoordinator(database, queue, deriver, remote.Options{
 		Mode:      cfg.RemoteDerive,
 		StateFile: filepath.Join(cfg.DataRoot, "work-placement"),
+		SeenFile:  filepath.Join(cfg.DataRoot, "blender-worker.json"),
 		Log:       log,
 	})
 

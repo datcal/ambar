@@ -606,10 +606,11 @@ func EnqueueStale(ctx context.Context, database *db.DB, q *jobs.Queue) (int, err
 
 // Stats counts assets by derive state, for the health report and the UI.
 type Stats struct {
-	Pending     int
-	OK          int
-	Failed      int
-	Unsupported int
+	Pending      int
+	OK           int
+	Failed       int
+	Unsupported  int
+	NeedsBlender int
 }
 
 func LoadStats(ctx context.Context, database *db.DB) (Stats, error) {
@@ -640,6 +641,8 @@ func LoadStats(ctx context.Context, database *db.DB) (Stats, error) {
 			s.Failed = n
 		case StateUnsupported:
 			s.Unsupported = n
+		case StateNeedsBlender:
+			s.NeedsBlender = n
 		}
 	}
 	return s, rows.Err()

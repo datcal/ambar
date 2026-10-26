@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"image/png"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/datcal/ambar/internal/auth"
+	"github.com/datcal/ambar/internal/blender"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/remote"
@@ -205,6 +207,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 
 	data := s.newPageData(r)
 	data.Nav = "jobs"
+	data.Flash = r.URL.Query().Get("msg")
 	data.Jobs = recent
 	data.JobStats = &jobStats
 	data.DeriveStats = &deriveStats
@@ -215,7 +218,55 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		data.Workers = s.remote.Workers()
 		data.JobWorkers = s.remote.Holders()
 	}
+	if deriveStats.NeedsBlender > 0 {
+		exts, err := derive.WaitingOnBlender(r.Context(), s.db)
+		if err != nil {
+			s.log.ErrorContext(r.Context(), "counting the Blender backlog failed", "error", err)
+		}
+		b := &blenderBacklog{Total: deriveStats.NeedsBlender, Exts: exts}
+		var worker bool
+		b.Here, worker = s.blenderReady()
+		if s.remote != nil {
+			b.Worker, _ = s.remote.Blender()
+			b.RemoteOff = s.remote.Mode() == remote.ModeOff
+		}
+		b.Worker.Connected = worker
+		data.Blender = b
+	}
 	s.render(w, r, "jobs.html", http.StatusOK, data)
+}
+
+// blenderBacklog is what the jobs page says about the FBX and .blend files waiting for
+// Blender: how many, and whether anything can convert them. A worker with Blender that
+// stopped hours ago left them waiting with nothing on the page to say so, and a retry
+// in the meantime ran them through this server, which has no Blender, and back.
+type blenderBacklog struct {
+	Total int
+	Exts  []derive.ExtCount
+	// Here is this server converting them with its own Blender.
+	Here bool
+	// Worker is the worker with Blender, connected or last seen; no Name when none has
+	// ever connected.
+	Worker remote.BlenderWorker
+	// RemoteOff: remote workers are turned off, so a worker with Blender is given nothing.
+	RemoteOff bool
+}
+
+// blenderReady reports what can convert FBX and .blend now: this server's own Blender,
+// and a connected worker with Blender that is being given derive work.
+func (s *Server) blenderReady() (here, worker bool) {
+	mode := remote.ModeOff
+	if s.remote != nil {
+		mode = s.remote.Mode()
+	}
+	if _, ok := blender.Locate(s.cfg.BlenderBin, s.cfg.DataRoot); ok && mode != remote.ModeOnly {
+		here = true
+	}
+	if s.remote != nil && mode != remote.ModeOff {
+		w, ok := s.remote.Blender()
+		worker = ok && w.Connected
+	}
+	return here, worker
 }
 
 // handleWorkPlacement is the jobs page's choice of where background work runs: this
@@ -269,7 +320,25 @@ func (s *Server) username(r *http.Request) string {
 // §6: "Failures recorded in derive_state with a 'retry failed derivatives' action in
 // the UI." Both halves are reset — the asset rows back to pending, and the job rows
 // back to queued — because either alone would leave the other stuck.
+//
+// FBX and .blend are the exception when nothing can convert them: this server has no
+// Blender and no worker with Blender is connected. Retried, they would run through this
+// server and come straight back needs_blender, so they are set to wait for a worker
+// with Blender instead (derive.ParkForBlender), and the page says so. When something
+// can convert them, everything waiting for Blender is queued as well.
 func (s *Server) handleRetryFailed(w http.ResponseWriter, r *http.Request) {
+	here, worker := s.blenderReady()
+	var parkedAssets, parkedJobs int64
+	if !here && !worker {
+		var err error
+		parkedAssets, parkedJobs, err = derive.ParkForBlender(r.Context(), s.db, s.jobs)
+		if err != nil {
+			s.log.ErrorContext(r.Context(), "could not set failed models aside for Blender", "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	assets, err := derive.ResetFailed(r.Context(), s.db)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "could not reset failed derivatives", "error", err)
@@ -289,11 +358,27 @@ func (s *Server) handleRetryFailed(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "could not enqueue reset derivatives", "error", err)
 	}
+	var offered int
+	if here || worker {
+		if offered, err = derive.EnqueueNeedsBlender(r.Context(), s.db, s.jobs); err != nil {
+			s.log.ErrorContext(r.Context(), "could not queue the assets waiting on Blender", "error", err)
+		}
+	}
 
 	s.log.InfoContext(r.Context(), "retrying failed work",
-		"assets_reset", assets, "jobs_requeued", jobsRequeued, "derives_enqueued", enqueued)
+		"assets_reset", assets, "jobs_requeued", jobsRequeued, "derives_enqueued", enqueued,
+		"parked_for_blender", parkedAssets, "jobs_settled_for_blender", parkedJobs,
+		"blender_enqueued", offered)
 
-	http.Redirect(w, r, "/jobs", http.StatusSeeOther)
+	msg := fmt.Sprintf("Requeued %d failed jobs; %d failed previews are being made again.", jobsRequeued, assets)
+	if parkedAssets > 0 || parkedJobs > 0 {
+		msg += fmt.Sprintf(" %d failed jobs for FBX and .blend files were set aside instead: "+
+			"they need Blender, and no worker with Blender is connected.", parkedJobs)
+	}
+	if offered > 0 {
+		msg += fmt.Sprintf(" %d FBX and .blend files waiting for Blender were queued.", offered)
+	}
+	http.Redirect(w, r, "/jobs?msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 // formatJobAge renders a timestamp as a short relative age for the jobs table.

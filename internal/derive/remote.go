@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/jobs"
@@ -262,4 +263,77 @@ func EnqueueNeedsBlender(ctx context.Context, database *db.DB, q *jobs.Queue) (i
 		}
 	}
 	return enqueued, nil
+}
+
+// ExtCount is how many assets of one extension are in some state.
+type ExtCount struct {
+	Ext string
+	N   int
+}
+
+// WaitingOnBlender counts the present assets waiting for Blender, by extension, most first.
+func WaitingOnBlender(ctx context.Context, database *db.DB) ([]ExtCount, error) {
+	rows, err := database.Reader.QueryContext(ctx, `
+		SELECT ext, count(*) FROM assets
+		WHERE missing_since IS NULL AND derive_state = ?
+		GROUP BY ext
+		ORDER BY count(*) DESC, ext`, StateNeedsBlender)
+	if err != nil {
+		return nil, fmt.Errorf("count assets waiting on Blender: %w", err)
+	}
+	defer rows.Close()
+	var out []ExtCount
+	for rows.Next() {
+		var c ExtCount
+		if err := rows.Scan(&c.Ext, &c.N); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ParkForBlender moves failed FBX and .blend files to wait for Blender, and settles the
+// failed derive jobs of every asset waiting for it, for a retry when nothing can convert
+// them: this server has no Blender and no worker with one is connected. Retried here they
+// would only come back needs_blender after a trip through this server's queue, which
+// looks like a retry that did nothing. Waiting, they are offered to the first worker with
+// Blender to connect (EnqueueNeedsBlender), which is when a retry could have helped.
+//
+// assets is how many failed rows moved; settled is how many failed jobs were closed.
+func ParkForBlender(ctx context.Context, database *db.DB, q *jobs.Queue) (assets, settled int64, err error) {
+	res, err := database.Writer.ExecContext(ctx, `
+		UPDATE assets SET derive_state = ?, derive_error = ? || ' (.' || ext || ')',
+		                  derive_version = ?, updated_at = ?
+		WHERE derive_state = ? AND missing_since IS NULL AND ext IN ('fbx', 'blend')`,
+		StateNeedsBlender, ErrNeedsBlender.Error(), Version, time.Now().Unix(), StateFailed)
+	if err != nil {
+		return 0, 0, fmt.Errorf("park failed models for Blender: %w", err)
+	}
+	assets, _ = res.RowsAffected()
+
+	rows, err := database.Reader.QueryContext(ctx,
+		`SELECT id FROM assets WHERE derive_state = ?`, StateNeedsBlender)
+	if err != nil {
+		return assets, 0, fmt.Errorf("find assets waiting on Blender: %w", err)
+	}
+	waiting := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() //nolint:errcheck
+			return assets, 0, err
+		}
+		waiting[id] = true
+	}
+	rows.Close() //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return assets, 0, err
+	}
+
+	settled, err = q.SettleFailed(ctx, JobType, "waiting for a worker with Blender", func(j jobs.Job) bool {
+		var p Payload
+		return json.Unmarshal([]byte(j.Payload), &p) == nil && waiting[p.AssetID]
+	})
+	return assets, settled, err
 }

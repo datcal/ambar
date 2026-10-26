@@ -21,6 +21,10 @@ import (
 // ErrUnsupported means the file is not a glTF/GLB this package can read.
 var ErrUnsupported = errors.New("not a glTF/GLB model")
 
+// ErrNoGeometry means the file reads but has nothing to draw: an OBJ exported from a
+// locator or an empty object, which model packs ship beside the meshes.
+var ErrNoGeometry = errors.New("no geometry")
+
 // Info is the extracted 3D metadata (§4 model columns).
 type Info struct {
 	TriCount      int

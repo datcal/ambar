@@ -222,3 +222,39 @@ func TestClaimRefusesAMismatchedWorker(t *testing.T) {
 		t.Errorf("off mode claim = %v, want ErrDisabled", err)
 	}
 }
+
+// TestTheBlenderWorkerOutlivesARestart: the jobs page says which worker with Blender was
+// here last and when, after the server restarted too — the night a worker stopped and the
+// server was redeployed is when the page most needs to say how long it has been gone.
+func TestTheBlenderWorkerOutlivesARestart(t *testing.T) {
+	f := newFixture(t, 1)
+	seen := filepath.Join(t.TempDir(), "blender-worker.json")
+	c := NewCoordinator(f.db, f.queue, f.deriver, Options{Mode: ModeAuto, SeenFile: seen}).WithClock(f.now)
+	ctx := context.Background()
+
+	if w, ok := c.Blender(); ok {
+		t.Fatalf("a worker with Blender before any connected: %+v", w)
+	}
+	if _, err := c.Claim(ctx, claimRequest("plain")); err != nil {
+		t.Fatal(err)
+	}
+	if w, ok := c.Blender(); ok {
+		t.Errorf("a worker without Blender counted as one with it: %+v", w)
+	}
+
+	req := claimRequest("blender")
+	req.Worker, req.Blender = "linux1-podman", true
+	if _, err := c.Claim(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if w, ok := c.Blender(); !ok || !w.Connected || w.Name != "linux1-podman" {
+		t.Errorf("while it asks for work: %+v, %v", w, ok)
+	}
+
+	f.clock = f.clock.Add(3 * time.Hour)
+	after := NewCoordinator(f.db, f.queue, f.deriver, Options{Mode: ModeAuto, SeenFile: seen}).WithClock(f.now)
+	w, ok := after.Blender()
+	if !ok || w.Connected || w.Name != "linux1-podman" || !w.LastSeen.Equal(time.Unix(1_800_000_000, 0)) {
+		t.Errorf("after a restart: %+v, %v; want linux1-podman, not connected, last seen at its claim", w, ok)
+	}
+}

@@ -62,3 +62,17 @@ func TestDeriveFBXWithoutBlender(t *testing.T) {
 		t.Errorf("without Blender, .fbx err = %v, want ErrNeedsBlender", err)
 	}
 }
+
+// An OBJ with nothing to draw — a locator, an empty object exported beside the meshes —
+// is unsupported, not failed: a retry would fail it again.
+func TestDeriveOBJWithoutGeometryIsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	obj := filepath.Join(dir, "locator1.obj")
+	os.WriteFile(obj, []byte("o locator1\nv 0 0 0\n"), 0o644)
+	res, err := Generate(GenerateOptions{
+		AbsPath: obj, Ext: "obj", SHA256: ContentHash([]byte("o locator1\nv 0 0 0\n")), DataRoot: dir,
+	})
+	if got := OutcomeOf(res, err); got.State != StateUnsupported {
+		t.Errorf("outcome = %s (%s), want unsupported", got.State, got.Message)
+	}
+}

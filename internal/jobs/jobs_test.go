@@ -591,6 +591,50 @@ func TestRetryFailed(t *testing.T) {
 	}
 }
 
+// TestSettleFailed: matching failed jobs of the type are done with the note and no error,
+// and nothing else changes.
+func TestSettleFailed(t *testing.T) {
+	q, database := newTestQueue(t, 1)
+	ctx := context.Background()
+
+	var ids []int64
+	for _, payload := range []string{"wait", "retry"} {
+		id, err := q.Enqueue(ctx, "derive", map[string]string{"p": payload}, EnqueueOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := q.finishFailed(ctx, id, "worker gone"); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	otherID, err := q.Enqueue(ctx, "scan", map[string]string{"p": "wait"}, EnqueueOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.finishFailed(ctx, otherID, "nope"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := q.SettleFailed(ctx, "derive", "waiting for Blender", func(j Job) bool {
+		return strings.Contains(j.Payload, "wait")
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("SettleFailed = %d, %v; want 1", n, err)
+	}
+
+	for id, want := range map[int64]string{ids[0]: "done||waiting for Blender", ids[1]: "failed|worker gone|", otherID: "failed|nope|"} {
+		var state, lastErr, note string
+		if err := database.Reader.QueryRow(`SELECT state, last_error, progress_note FROM jobs WHERE id = ?`, id).
+			Scan(&state, &lastErr, &note); err != nil {
+			t.Fatal(err)
+		}
+		if got := state + "|" + lastErr + "|" + note; got != want {
+			t.Errorf("job %d = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestRecentOrdersUnfinishedFirst(t *testing.T) {
 	q, _ := newTestQueue(t, 1)
 	ctx := context.Background()

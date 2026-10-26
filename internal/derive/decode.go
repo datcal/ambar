@@ -167,6 +167,9 @@ func decodeStill(absPath string, opts DecodeOptions) (*Source, error) {
 
 	img, _, err := image.Decode(guarded)
 	if err != nil {
+		img, err = decodeTIFFFallback(f, err, opts.MaxPixels)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", filepath.Base(absPath), err)
 	}
 	return &Source{Frames: []image.Image{img}}, nil

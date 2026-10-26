@@ -895,6 +895,65 @@ func (q *Queue) RetryFailed(ctx context.Context, jobType string) (int64, error) 
 	return n, nil
 }
 
+// SettleFailed marks the failed jobs of a type that match as done, without running them,
+// and leaves note where their progress shows. It is for work that now waits on something
+// a retry cannot provide — a derive whose model waits for a worker with Blender — so that
+// a retry that leaves it out does not leave it in the failed list for good.
+func (q *Queue) SettleFailed(ctx context.Context, jobType, note string, match func(Job) bool) (int64, error) {
+	rows, err := q.db.Reader.QueryContext(ctx,
+		`SELECT id, payload_json FROM jobs WHERE state = 'failed' AND type = ?`, jobType)
+	if err != nil {
+		return 0, fmt.Errorf("list failed jobs: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		j := Job{Type: jobType, State: "failed"}
+		if err := rows.Scan(&j.ID, &j.Payload); err != nil {
+			rows.Close() //nolint:errcheck
+			return 0, err
+		}
+		if match(j) {
+			ids = append(ids, j.ID)
+		}
+	}
+	rows.Close() //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx, err := q.db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	stmt, err := tx.PrepareContext(ctx, `
+		UPDATE jobs SET state = 'done', finished_at = ?, updated_at = ?, last_error = '',
+		                progress_note = ?, dedupe_key = NULL
+		WHERE id = ? AND state = 'failed'`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	now := q.now().Unix()
+	var settled int64
+	for _, id := range ids {
+		res, err := stmt.ExecContext(ctx, now, now, note, id)
+		if err != nil {
+			return 0, fmt.Errorf("settle job %d: %w", id, err)
+		}
+		n, _ := res.RowsAffected()
+		settled += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return settled, nil
+}
+
 // Prune deletes finished job rows older than a cutoff.
 //
 // Only ever called from an explicit operator action, never on a timer: ARCHITECTURE.md

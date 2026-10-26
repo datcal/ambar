@@ -523,6 +523,9 @@ type pageData struct {
 	JobWorkers map[int64]string
 	// LocalPaused: this server's own workers are stopped (RemoteMode "only").
 	LocalPaused bool
+	// Blender is the FBX and .blend files waiting for Blender, and what can convert them.
+	// Nil when nothing waits.
+	Blender *blenderBacklog
 
 	// Junk view (§9.1, M12). Nil until a sweep has run. JunkRunning is true while a
 	// sweep is queued or in flight, so the page can say so.

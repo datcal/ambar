@@ -17,6 +17,7 @@ import (
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
+	"github.com/datcal/ambar/internal/remote"
 )
 
 // seedWithDerivatives writes files, scans, and generates derivatives synchronously.
@@ -704,5 +705,85 @@ func TestLargeThumbFallsBackToTheOneThatExists(t *testing.T) {
 	resp := ts.get(t, fmt.Sprintf("/assets/%d/thumb?size=2x", id))
 	if resp.StatusCode != http.StatusOK || len(ts.body(t, resp)) == 0 {
 		t.Errorf("GET thumb?size=2x = %d, want the smaller thumbnail", resp.StatusCode)
+	}
+}
+
+// TestRetryWithoutBlenderSetsModelsAside: with no Blender here and no worker with Blender
+// connected, a retry leaves a failed FBX to wait for one rather than running it through
+// this server and straight back to needs_blender, retries everything else, and the jobs
+// page says what waits and why. Once a worker with Blender connects, the page says so.
+func TestRetryWithoutBlenderSetsModelsAside(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.login(t, testUsername, testPassword)
+	coordinator := ts.attachCoordinator(remote.ModeAuto)
+	_, fbx := ts.seedBoat(t)
+	png := ts.assetIDByPath(t, "ui/button.png")
+
+	// The night the worker lost its library: assets and jobs failed alike.
+	if _, err := ts.db.Writer.Exec(`UPDATE assets SET derive_state = 'failed', derive_error = 'the worker could not open it'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.db.Writer.Exec(`UPDATE jobs SET state = 'failed', attempts = 3, last_error = 'the worker could not open it'`); err != nil {
+		t.Fatal(err)
+	}
+
+	csrf := ts.csrfToken(t, "/jobs")
+	resp, err := ts.client.PostForm(ts.URL+"/jobs/retry-failed", url.Values{"csrf_token": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	if msg := loc.Query().Get("msg"); !strings.Contains(msg, "1 failed jobs for FBX and .blend files were set aside") {
+		t.Errorf("the retry's report: %q", msg)
+	}
+
+	assetState := func(id int64) string {
+		var s string
+		if err := ts.db.Reader.QueryRow(`SELECT derive_state FROM assets WHERE id = ?`, id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	jobState := func(id int64) string {
+		var s, note string
+		if err := ts.db.Reader.QueryRow(`
+			SELECT state, progress_note FROM jobs
+			WHERE type = ? AND json_extract(payload_json, '$.asset_id') = ?
+			ORDER BY id DESC LIMIT 1`, derive.JobType, id).Scan(&s, &note); err != nil {
+			t.Fatal(err)
+		}
+		return s + "|" + note
+	}
+	if got := assetState(fbx); got != derive.StateNeedsBlender {
+		t.Errorf("the FBX is %s after the retry, want needs_blender", got)
+	}
+	if got := jobState(fbx); got != "done|waiting for a worker with Blender" {
+		t.Errorf("the FBX's job is %q", got)
+	}
+	if got := assetState(png); got != derive.StatePending {
+		t.Errorf("the PNG is %s after the retry, want pending", got)
+	}
+	if got := jobState(png); got != "queued|" {
+		t.Errorf("the PNG's job is %q, want queued", got)
+	}
+
+	page := ts.body(t, ts.get(t, "/jobs"))
+	for _, want := range []string{"1 models wait for Blender", "1 FBX", "nothing can convert them now",
+		"no worker with Blender has connected yet"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the jobs page does not say %q", want)
+		}
+	}
+
+	req := remote.ClaimRequest{Worker: "linux1-podman", Session: "s", DeriveVersion: derive.Version, Blender: true}
+	if _, err := coordinator.Claim(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	page = ts.body(t, ts.get(t, "/jobs"))
+	if !strings.Contains(page, "<strong>linux1-podman</strong> has Blender and is converting them") ||
+		strings.Contains(page, "nothing can convert them now") {
+		t.Errorf("with a worker with Blender connected, the page says:\n%s", page)
 	}
 }

@@ -41,6 +41,32 @@
     {{end}}
   </div>
 
+  {{if .Flash}}<p class="note note-ok" role="status">{{.Flash}}</p>{{end}}
+
+  {{/* FBX and .blend wait for Blender, which this server normally does not have (§6). When
+       nothing can convert them, say so here: a worker that stopped at night left forty
+       thousand waiting with nothing on this page to show it. */}}
+  {{with .Blender}}
+    {{if or .Here .Worker.Connected}}
+      <p class="note" role="status" data-role="blender-backlog">{{.Total}} models wait for Blender
+        ({{range $i, $e := .Exts}}{{if $i}}, {{end}}{{$e.N}} {{upper $e.Ext}}{{end}}).
+        {{if .Worker.Connected}}<strong>{{.Worker.Name}}</strong> has Blender and is converting them.
+        {{else}}This server has Blender and converts them itself.{{end}}</p>
+    {{else}}
+      <p class="note note-warn" role="alert" data-role="blender-backlog">
+        <strong>{{.Total}} models wait for Blender</strong>
+        ({{range $i, $e := .Exts}}{{if $i}}, {{end}}{{$e.N}} {{upper $e.Ext}}{{end}}), and nothing can convert them now.
+        {{if .RemoteOff}}This server has no Blender, and remote workers are turned off below.
+        {{else if .Worker.Name}}This server has no Blender, and no worker with Blender is connected:
+          <strong>{{.Worker.Name}}</strong> was last seen
+          <time datetime="{{.Worker.LastSeen.UTC.Format "2006-01-02T15:04:05Z"}}">{{jobAge .Worker.LastSeen}}</time>.
+          When it connects again they are queued for it on their own; retrying cannot convert them before then.
+        {{else}}This server has no Blender, and no worker with Blender has connected yet. Run
+          <code>ambar worker --blender …</code> on a machine with Blender.{{end}}
+      </p>
+    {{end}}
+  {{end}}
+
   {{/* Where background work runs (internal/remote). One choice, made here, remembered across
        restarts; a connected worker picks the change up on its next request. */}}
   {{if .RemoteMode}}
@@ -80,11 +106,17 @@
       <dl class="facts">
         <dt>Generated</dt><dd>{{.DeriveStats.OK}}</dd>
         {{if .DeriveStats.Pending}}<dt>Waiting</dt><dd>{{.DeriveStats.Pending}}</dd>{{end}}
+        {{if .DeriveStats.NeedsBlender}}
+          <dt>Waiting for Blender</dt>
+          <dd>{{.DeriveStats.NeedsBlender}}
+            <span class="hint">— FBX and <code>.blend</code>, converted by a worker with Blender.</span></dd>
+        {{end}}
         {{if .DeriveStats.Unsupported}}
-          <dt>No decoder</dt>
+          <dt>No preview</dt>
           <dd>{{.DeriveStats.Unsupported}}
             <span class="hint">— formats without a pure-Go decoder yet, such as
-            <code>.xcf</code> and <code>.tga</code>. Not an error, and not retried.</span></dd>
+            <code>.xcf</code> and <code>.tga</code>, and files with nothing to show, such as an
+            <code>.obj</code> with no geometry. Not an error, and not retried.</span></dd>
         {{end}}
         {{if .DeriveStats.Failed}}<dt>Failed</dt><dd>{{.DeriveStats.Failed}}</dd>{{end}}
       </dl>

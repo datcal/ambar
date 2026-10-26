@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/datcal/ambar/internal/blender"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
@@ -86,6 +87,15 @@ func runDerive(args []string) error {
 	})
 
 	if *retryFailed {
+		// As the jobs page's Retry: without Blender here, failed FBX and .blend would only
+		// come back needs_blender, so they wait for a worker with Blender instead.
+		if _, ok := blender.Locate(cfg.BlenderBin, cfg.DataRoot); !ok {
+			if parked, _, err := derive.ParkForBlender(ctx, database, queue); err != nil {
+				return err
+			} else if parked > 0 {
+				fmt.Printf("left %d failed FBX/.blend file(s) to wait for a worker with Blender\n", parked)
+			}
+		}
 		n, err := derive.ResetFailed(ctx, database)
 		if err != nil {
 			return err
