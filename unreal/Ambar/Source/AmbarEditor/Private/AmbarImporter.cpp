@@ -91,6 +91,7 @@ namespace
 				FAmbarImportResult R;
 				R.bOk = true;
 				R.Folder = Folder;
+				R.Path = Recorded;
 				R.Message = bSent ? FString::Printf(TEXT("%s %s"), *Verb, *Recorded)
 								  : FString::Printf(TEXT("%s %s. The server was not told: %s"), *Verb, *Recorded, *Why);
 				Done(R);

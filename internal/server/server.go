@@ -19,6 +19,7 @@ import (
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/dupes"
+	"github.com/datcal/ambar/internal/handoff"
 	"github.com/datcal/ambar/internal/httpx"
 	"github.com/datcal/ambar/internal/index"
 	"github.com/datcal/ambar/internal/jobs"
@@ -86,6 +87,11 @@ type Server struct {
 	linkOnce  sync.Once
 	linkProbe removal.LinkSupport
 
+	// handoff passes an assistant's "import this" to the user's open editor (mcp.go).
+	// importWait is how long the assistant's call waits for the editor's report.
+	handoff    *handoff.Broker
+	importWait time.Duration
+
 	templates map[string]*template.Template
 	handler   http.Handler
 	startedAt time.Time
@@ -134,6 +140,8 @@ func New(cfg *config.Config, database *db.DB, indexer *index.Indexer, queue *job
 		loginByIP:   auth.NewLimiter(auth.LoginAttemptsPerIP, auth.LoginWindow),
 		loginByUser: auth.NewLimiter(auth.LoginAttemptsPerUsername, auth.LoginWindow),
 		dummyHash:   dummy,
+		handoff:     handoff.New(),
+		importWait:  90 * time.Second,
 		templates:   templates,
 		startedAt:   time.Now(),
 	}
@@ -341,6 +349,13 @@ func (s *Server) routes() http.Handler {
 	apiWrite("POST /api/v1/worker/claim", s.handleWorkerClaim)
 	apiWrite("POST /api/v1/worker/jobs/{id}/result", s.handleWorkerResult)
 	apiWrite("POST /api/v1/worker/release", s.handleWorkerRelease)
+
+	// AI assistants (mcp.go): the MCP endpoint, token-authed like the API — a read token
+	// searches, a write token also imports — and the long poll through which the user's
+	// open editor takes those imports and reports on them.
+	mux.Handle("/mcp", s.tokens.RequireToken(auth.ScopeRead, s.mcpServer()))
+	apiWrite("GET /api/v1/editor/requests", s.handleEditorRequests)
+	apiWrite("POST /api/v1/editor/requests/{id}/result", s.handleEditorResult)
 
 	// API token management (§11), session-authed like the rest of the UI.
 	// Settings: users (§11 has no self-registration, so creating one is behind auth)

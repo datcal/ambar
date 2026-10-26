@@ -6,6 +6,14 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **AI assistants can use the library (MCP).** `/mcp` serves the Model Context Protocol over
+  Streamable HTTP, behind the same API tokens as `/api/v1`: `search_assets`, `browse_folder`,
+  `get_asset`, `view_asset` (the thumbnail, as an image) and, with a write token,
+  `import_into_unreal` and `import_status`. An import goes through the user's open Unreal editor:
+  the server keeps the request, the plugin collects it (`GET /api/v1/editor/requests`, a long poll),
+  imports each asset as its Import button does, picking the format Unreal takes, and reports the
+  package paths back to the assistant. The plugin setting "Accept imports from AI assistants"
+  turns it off. See the README for Claude Code's configuration.
 - **The first account can set another user's password** under Settings → Users, for one
   that was forgotten: choose the user, type the new password twice and your own once. They are
   signed out everywhere; their API tokens keep working. Nobody else can, so the second user

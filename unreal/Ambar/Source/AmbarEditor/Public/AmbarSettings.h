@@ -49,6 +49,14 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Import")
 	bool bSyncContentBrowser;
 
+	/**
+	 * An AI assistant using Ambar's MCP endpoint (Claude Code in this project, say) can ask for assets to be
+	 * imported; the server hands the request to this editor, which imports it as the browser would. Off, the
+	 * editor never asks the server for such requests.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "AI Assistants", meta = (DisplayName = "Accept imports from AI assistants"))
+	bool bAcceptAssistantImports;
+
 	/** Keep thumbnails and previews on disk, so the second visit to a folder is instant and works offline. */
 	UPROPERTY(config, EditAnywhere, Category = "Cache")
 	bool bCacheImages;

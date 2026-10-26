@@ -69,14 +69,10 @@ namespace
 		}
 	}
 
-	void GetJson(const FString& Url, FAmbarJsonCallback Done)
+	/** Sends a GET whose answer is JSON, and returns the request so a caller can cancel it. */
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> StartJson(const FString& Url, float TimeoutSeconds, FAmbarJsonCallback Done)
 	{
-		if (UAmbarSettings::Get()->BaseUrl().IsEmpty())
-		{
-			Done(false, TEXT("No server address configured."), nullptr);
-			return;
-		}
-		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = MakeRequest(Url, TEXT("GET"));
+		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = MakeRequest(Url, TEXT("GET"), TimeoutSeconds);
 		Req->OnProcessRequestComplete().BindLambda(
 			[Done](FHttpRequestPtr, FHttpResponsePtr Resp, bool bConnected)
 			{
@@ -95,6 +91,17 @@ namespace
 				Done(true, FString(), Json);
 			});
 		Req->ProcessRequest();
+		return Req;
+	}
+
+	void GetJson(const FString& Url, FAmbarJsonCallback Done)
+	{
+		if (UAmbarSettings::Get()->BaseUrl().IsEmpty())
+		{
+			Done(false, TEXT("No server address configured."), nullptr);
+			return;
+		}
+		StartJson(Url, 30.f, MoveTemp(Done));
 	}
 
 	void SendJson(const FString& Url, const TCHAR* Verb, const FString& Body, FAmbarDoneCallback Done)
@@ -246,4 +253,17 @@ void FAmbarClient::RemoveUse(const FString& ProjectUuid, int64 UseId, FAmbarDone
 void FAmbarClient::Credits(const FString& ProjectUuid, FAmbarBytesCallback Done)
 {
 	FetchBytes(FString::Printf(TEXT("%s/api/v1/projects/%s/credits.md"), *BaseUrl(), *Enc(ProjectUuid)), MoveTemp(Done));
+}
+
+TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FAmbarClient::TakeRequests(const FString& Project, int32 WaitSeconds, FAmbarJsonCallback Done)
+{
+	// The server holds the request for up to WaitSeconds; the timeout leaves room for that and a slow tunnel.
+	return StartJson(FString::Printf(TEXT("%s/api/v1/editor/requests?engine=unreal&project=%s&wait=%d"),
+		*BaseUrl(), *Enc(Project), WaitSeconds), WaitSeconds + 20.f, MoveTemp(Done));
+}
+
+void FAmbarClient::ReportRequest(int64 RequestId, const FString& Body, FAmbarDoneCallback Done)
+{
+	SendJson(FString::Printf(TEXT("%s/api/v1/editor/requests/%lld/result"), *BaseUrl(), RequestId), TEXT("POST"),
+		Body, MoveTemp(Done));
 }

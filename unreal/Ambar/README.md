@@ -97,6 +97,19 @@ the like work; for what it has no importer for (`.ogg`, `.mp3`, Aseprite files) 
 `<Project>/Ambar/` instead, and the message says so. A `.gltf` that points at separate `.bin` and texture files needs those files beside it,
 so prefer `.glb`.
 
+### AI assistants
+
+An AI assistant connected to Ambar's MCP endpoint (see the main README) can ask for assets to be
+imported into this project. The server cannot write into the project, so it keeps the request, and
+the open editor collects it: while it runs, the plugin keeps one request open to the server, which
+answers as soon as there is something. Each asset is imported exactly as the **Import** button would
+(the same folders, manifest and credits), a notification says so, and the package paths go back to
+the assistant so it can place or reference what it asked for.
+
+It needs the editor open with the project, a token with **write**, and
+**Accept imports from AI assistants** on (Editor Preferences → Plugins → Ambar; on by default). Turn
+that off and the editor never asks the server for such requests.
+
 ## The cache
 
 Everything the plugin remembers is in one folder and none of it is precious:

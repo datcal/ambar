@@ -150,6 +150,54 @@ record the project's uses on the server and write `CREDITS.md`. Folder names and
 cached on disk so a second visit is instant; each person on the team uses their own API token.
 See [unreal/Ambar/README.md](unreal/Ambar/README.md) for setup, tunnels and the cache.
 
+## AI assistants (MCP)
+
+Ambar serves the [Model Context Protocol](https://modelcontextprotocol.io) at `/mcp` (Streamable
+HTTP), so an AI assistant working in a game project (Claude Code in an Unreal project, say) can find
+assets in the library and bring them in. It signs in with an API token, like the plugins: a **read**
+token searches, a **write** token also imports.
+
+| Tool | What it does |
+| --- | --- |
+| `search_assets` | The search box: words, `type:model`, `ext:fbx`, `tris:<5000`, tags; optionally inside a folder |
+| `browse_folder` | A folder's subfolders with counts, and the kinds of asset in it |
+| `get_asset` | One asset: path, size, every format with its id, which one Unreal and Godot should take, tags, licence, projects using it |
+| `view_asset` | Its thumbnail, as an image the assistant can look at |
+| `import_into_unreal` | Imports into the project open in Unreal and answers with each asset's package path |
+| `import_status` | The result of an import that was still running when the call returned |
+
+`import_into_unreal` goes through the editor: the server keeps the request and the Ambar plugin of
+the user's open editor collects it, imports it the way its Import button does, and reports back. So
+the project must be open in Unreal with the plugin connected
+([details](unreal/Ambar/README.md#ai-assistants)).
+
+For Claude Code, on one machine:
+
+```sh
+claude mcp add --transport http ambar http://nas.local:8973/mcp --header "Authorization: Bearer <token>"
+```
+
+Or for the whole team, in the game project's `.mcp.json`, with each person setting `AMBAR_TOKEN` to
+their own token (and, through a tunnel behind Cloudflare Access, the service token the plugin uses):
+
+```json
+{
+  "mcpServers": {
+    "ambar": {
+      "type": "http",
+      "url": "${AMBAR_URL:-http://nas.local:8973}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AMBAR_TOKEN:-}",
+        "CF-Access-Client-Id": "${AMBAR_CF_ACCESS_CLIENT_ID:-}",
+        "CF-Access-Client-Secret": "${AMBAR_CF_ACCESS_CLIENT_SECRET:-}"
+      }
+    }
+  }
+}
+```
+
+Keep the `:-` defaults: Claude Code rejects the whole file when it names an unset variable without one.
+
 ## What it does with a library
 
 - **Scans in place.** Depth-agnostic pack detection, junk (`__MACOSX`, `.DS_Store`)

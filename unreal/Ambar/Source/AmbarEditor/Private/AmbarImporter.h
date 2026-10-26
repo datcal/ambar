@@ -10,6 +10,8 @@ struct FAmbarImportResult
 	/** The content folder the asset went into, e.g. /Game/Ambar/2d/kenney-pack/PNG. Empty for a file
 	 *  copied outside Content (code, notes) — the Content Browser has nothing to show for those. */
 	FString Folder;
+	/** What it became: a package (/Game/Ambar/3d/kenney/Boat) or, for a plain file, its path in the project. */
+	FString Path;
 };
 
 /** How an asset reaches the project, decided by what it is. */

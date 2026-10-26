@@ -205,6 +205,14 @@ func (s *TokenStore) RequireToken(scope string, next http.Handler) http.Handler 
 
 type tokenScopesKey struct{}
 
+// TokenHasScope reports whether the request's bearer token carries scope. For a handler
+// behind RequireToken that does more than its route's scope on some calls only: the MCP
+// endpoint reads with a read token and imports with a write one.
+func TokenHasScope(ctx context.Context, scope string) bool {
+	scopes, _ := ctx.Value(tokenScopesKey{}).([]string)
+	return scopeSatisfies(scopes, scope)
+}
+
 // bearerToken extracts the token from an Authorization: Bearer header.
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")

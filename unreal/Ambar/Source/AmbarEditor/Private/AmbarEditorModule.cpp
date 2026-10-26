@@ -1,4 +1,5 @@
 #include "AmbarCache.h"
+#include "AmbarRequests.h"
 #include "AmbarSettings.h"
 #include "Editor.h"
 #include "Framework/Application/SlateApplication.h"
@@ -72,6 +73,13 @@ public:
 
 		// Keep the picture cache inside its limit, once per editor start.
 		FAmbarCache::Trim();
+
+		// Imports asked for by AI assistants, in an editor somebody works in rather than a commandlet.
+		if (!IsRunningCommandlet())
+		{
+			Requests = MakeShared<FAmbarRequests>();
+			Requests->Start();
+		}
 	}
 
 	virtual void ShutdownModule() override
@@ -80,6 +88,11 @@ public:
 		UToolMenus::UnregisterOwner(this);
 		OpenCommand.Reset();
 		DrawerCommand.Reset();
+		if (Requests.IsValid())
+		{
+			Requests->Stop();
+			Requests.Reset();
+		}
 
 		if (FLevelEditorModule* LevelEditor = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor"))
 		{
@@ -206,6 +219,7 @@ private:
 	TUniquePtr<FAutoConsoleCommand> OpenCommand;
 	TUniquePtr<FAutoConsoleCommand> DrawerCommand;
 	TSharedPtr<SAmbarBrowser> DrawerBrowser;
+	TSharedPtr<FAmbarRequests> Requests;
 	FDelegateHandle LayoutHandle;
 	FDelegateHandle LevelEditorHandle;
 	bool bDrawerRegistered = false;

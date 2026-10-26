@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "AmbarTypes.h"
+#include "Interfaces/IHttpRequest.h"
 
 /** (ok, message, json). On failure `message` is a sentence that says what to do about it. */
 using FAmbarJsonCallback = TFunction<void(bool, const FString&, const TSharedPtr<FJsonObject>&)>;
@@ -40,4 +41,12 @@ namespace FAmbarClient
 	void ProjectUses(const FString& ProjectUuid, FAmbarJsonCallback Done);
 	void RemoveUse(const FString& ProjectUuid, int64 UseId, FAmbarDoneCallback Done);
 	void Credits(const FString& ProjectUuid, FAmbarBytesCallback Done);
+
+	/**
+	 * The long poll for imports an AI assistant asked of this editor (GET /api/v1/editor/requests): the
+	 * server answers when there is one, or after WaitSeconds with none. Returned so it can be cancelled.
+	 */
+	TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> TakeRequests(const FString& Project, int32 WaitSeconds, FAmbarJsonCallback Done);
+	/** Reports what became of such a request; Body is the JSON result. */
+	void ReportRequest(int64 RequestId, const FString& Body, FAmbarDoneCallback Done);
 }
