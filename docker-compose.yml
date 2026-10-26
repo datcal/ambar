@@ -75,6 +75,44 @@ services:
     depends_on:
       - ambar
 
+  # Optional: a derive worker on the NAS itself, with Blender, so FBX and .blend files are
+  # converted without another computer (internal/remote). Off unless COMPOSE_PROFILES
+  # includes "worker"; scripts/deploy.sh then builds Dockerfile.worker and ships it too.
+  #
+  # One file at a time, in one Blender kept open between files, capped at one core and
+  # weighted below the app, so the NAS stays responsive while it works through a backlog.
+  # With the Background work page on Automatic, the app leaves derive jobs to it.
+  #
+  # It needs two things in the compose directory, or wherever the variables point:
+  #   blender/        an official Blender for Linux, unpacked (blender.org, the .tar.xz)
+  #   worker.token    an API token with the write scope, alone in the file:
+  #                   docker exec ambar /ambar token add <user> --name nas-worker --scope write
+  worker:
+    image: ambar-worker:local
+    container_name: ambar-worker
+    profiles: [worker]
+    restart: unless-stopped
+    user: "${AMBAR_UID:-1026}:${AMBAR_GID:-100}"
+    command:
+      - --server=http://ambar:8080
+      - --token-file=/run/ambar/worker.token
+      - --library=/library
+      - --workdir=/work
+      - --blender=/opt/blender/blender
+      - --concurrency=1
+      - --name=nas
+    environment:
+      HOME: /work
+    volumes:
+      - ${AMBAR_HOST_LIBRARY:-/volume2/game/assets}:/library:ro
+      - ${AMBAR_HOST_BLENDER:-./blender}:/opt/blender:ro
+      - ${AMBAR_HOST_WORKER_TOKEN:-./worker.token}:/run/ambar/worker.token:ro
+    cpus: 1
+    cpu_shares: 256
+    mem_limit: 1536m
+    depends_on:
+      - ambar
+
 # First run, once the container is up:
 #
 #   docker exec -it ambar /ambar user add <username>

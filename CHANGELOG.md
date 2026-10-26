@@ -6,6 +6,16 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **Blender stays open between files.** A conversion used to start Blender, which on the
+  NAS's N100 was 2.9 s of a 3 s FBX; one Blender now takes file after file over stdin, each
+  from an empty factory scene: 0.06 s a file, at a steady 350 MB. An idle Blender exits after a
+  minute, one is replaced after 500 files, and one that crashes or overruns is killed and
+  replaced.
+- **A worker with Blender can run on the NAS itself:** `COMPOSE_PROFILES=worker` starts one
+  beside the app, one file at a time on one core and weighted below it, with an unpacked
+  Blender in `blender/` and a write token in `worker.token` in the compose directory.
+  `scripts/deploy.sh` builds and ships its image when it changed.
+- An ASCII FBX is "no preview" without waiting for Blender, whose importer refuses it.
 - **The jobs page says when models wait for Blender and nothing can convert them.** FBX and
   `.blend` waiting for Blender are counted under Previews, and while this server has no Blender
   and no worker with Blender is connected, a warning at the top names the worker and when it was

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -61,6 +62,10 @@ func deriveModel(opts GenerateOptions) (*Result, error) {
 		return modelResult(info), nil
 
 	case blenderExts[opts.Ext]:
+		if opts.Ext == "fbx" && !binaryFBX(opts.AbsPath) {
+			// Blender's importer refuses ASCII FBX outright, so no Blender can help.
+			return nil, fmt.Errorf("%w: an ASCII FBX; Blender reads only binary FBX", ErrUnsupported)
+		}
 		// FBX/.blend: use Blender if one is configured, otherwise defer.
 		bin, ok := blender.Locate(opts.BlenderBin, opts.DataRoot)
 		if !ok {
@@ -80,6 +85,23 @@ func deriveModel(opts GenerateOptions) (*Result, error) {
 		return nil, fmt.Errorf("%w: .%s → glb conversion is not implemented yet", ErrUnsupported, opts.Ext)
 	}
 }
+
+// binaryFBX reports whether path starts as a binary FBX does. An unreadable file
+// counts as binary, so Blender is the one to report what is wrong with it.
+func binaryFBX(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	head := make([]byte, len(fbxBinaryMagic))
+	if _, err := io.ReadFull(f, head); err != nil {
+		return true
+	}
+	return string(head) == fbxBinaryMagic
+}
+
+const fbxBinaryMagic = "Kaydara FBX Binary"
 
 func modelResult(info model.Info) *Result {
 	m := info

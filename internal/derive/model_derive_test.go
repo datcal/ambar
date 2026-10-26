@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/datcal/ambar/internal/model"
@@ -26,9 +27,17 @@ func TestDeriveFBXViaStubBlender(t *testing.T) {
 		t.Fatalf("build fixture: %v", err)
 	}
 
-	// A stub Blender that copies the fixture to its last argument (the dest).
+	// A stub Blender that speaks the session protocol (internal/blender) and copies the
+	// fixture to each request's dest.
 	stub := filepath.Join(dir, "blender")
-	os.WriteFile(stub, []byte("#!/bin/sh\nfor last; do :; done\ncp '"+fixture+"' \"$last\"\n"), 0o755)
+	os.WriteFile(stub, []byte(`#!/bin/sh
+echo "@@ambar-ready@@"
+while IFS= read -r line; do
+  dest=$(printf '%s' "$line" | sed 's/.*"dest":"\([^"]*\)".*/\1/')
+  cp '`+fixture+`' "$dest"
+  echo '@@ambar-result@@ {"ok": true}'
+done
+`), 0o755)
 
 	// The .fbx content is irrelevant since Blender is stubbed.
 	fbx := filepath.Join(dir, "rig.fbx")
@@ -74,5 +83,18 @@ func TestDeriveOBJWithoutGeometryIsUnsupported(t *testing.T) {
 	})
 	if got := OutcomeOf(res, err); got.State != StateUnsupported {
 		t.Errorf("outcome = %s (%s), want unsupported", got.State, got.Message)
+	}
+}
+
+// An ASCII FBX is unsupported before any Blender is asked: Blender's importer refuses
+// it, so waiting for one would be waiting for ever.
+func TestDeriveASCIIFBXIsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte("; FBX 7.3.0 project file\n; Created by Blender FBX Exporter\n")
+	fbx := filepath.Join(dir, "mouth.fbx")
+	os.WriteFile(fbx, content, 0o644)
+	res, err := Generate(GenerateOptions{AbsPath: fbx, Ext: "fbx", SHA256: ContentHash(content), DataRoot: dir})
+	if got := OutcomeOf(res, err); got.State != StateUnsupported || !strings.Contains(got.Message, "ASCII FBX") {
+		t.Errorf("outcome = %s (%s), want unsupported for an ASCII FBX", got.State, got.Message)
 	}
 }

@@ -264,6 +264,18 @@ A worker with Blender is also offered every FBX and `.blend` that was waiting on
 must be built from the same version as the server — it is refused otherwise — and never
 touches the database: SQLite over a network share is not something to try.
 
+The worker keeps one Blender open and hands it file after file, instead of starting
+Blender for each: on an N100 that is 0.06 s an FBX rather than 2.9 s. An idle Blender
+exits after a minute.
+
+**On the NAS itself.** Without a desktop, the same worker can run beside the app:
+`COMPOSE_PROFILES=worker` (with `tunnel` if you use it) starts it from
+[docker-compose.yml](docker-compose.yml), one file at a time on one core, and
+`scripts/deploy.sh` builds and ships its image. Put an official Blender for Linux,
+unpacked, in `blender/` in the compose directory, and a write-scoped token in
+`worker.token` beside it. Not in `$DATA_ROOT/tools/`: the app's own image is Alpine,
+which cannot run Blender's glibc build, and would fail every FBX trying.
+
 ### Hiding things: `.ambarignore`
 
 A `.ambarignore` in any folder of the library hides files and folders beneath it from

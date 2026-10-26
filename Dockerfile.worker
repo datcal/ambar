@@ -17,7 +17,7 @@
 #
 # Without the Blender mount (and the --blender flag) the worker still does everything else;
 # FBX and .blend stay needs_blender, as on a server without Blender. deploy/ has a Podman
-# Quadlet unit.
+# Quadlet unit, and docker-compose.yml runs it on the NAS itself (profile "worker").
 
 # --- build ------------------------------------------------------------------
 
@@ -53,10 +53,11 @@ RUN apt-get update \
 
 COPY --from=build /ambar /usr/local/bin/ambar
 
-# Scratch space for jobs in flight; nothing in it outlives a job.
+# Scratch space for jobs in flight; nothing in it outlives a job. Writable by any user, as
+# compose runs the NAS worker as the library's owner rather than root.
 ENV AMBAR_LOCAL_LIBRARY_PATH=/library \
     TMPDIR=/work/tmp
-RUN mkdir -p /work/tmp /opt/blender
+RUN mkdir -p /work/tmp /opt/blender && chmod 1777 /work /work/tmp
 
 ENTRYPOINT ["/usr/local/bin/ambar", "worker"]
 CMD ["--workdir", "/work"]
