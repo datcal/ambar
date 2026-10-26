@@ -1,8 +1,10 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/datcal/ambar/internal/audit"
@@ -18,11 +20,11 @@ import (
 // partner needs an account" — so any signed-in user can create another here, and
 // every creation lands in the audit log with who did it.
 //
-// Everyone can change their own password here. Deliberately not offered: deleting a
-// user or changing someone else's password. A deleted user's sessions, audit entries
-// and manual tags all reference them, and §11's "two equal users" gives nobody the
-// authority to lock the other out. Removing an account, and resetting a forgotten
-// password, stay CLI decisions made on purpose (`ambar user passwd`).
+// Everyone can change their own password here, and the owner — §11's implicit one, the
+// first account — can set anyone else's, because "they forgot it" should not need a shell
+// on the NAS. Nobody else can: the second user cannot lock the first out. Deliberately not
+// offered: deleting a user. A deleted user's sessions, audit entries and manual tags all
+// reference them, so removing an account stays a CLI decision made on purpose.
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	s.renderSettings(w, r, http.StatusOK, settingsErrors{}, r.URL.Query().Get("msg"))
@@ -32,6 +34,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 type settingsErrors struct {
 	user     string // the "Add a user" form
 	password string // the "Your password" form
+	// The owner's "Set a user's password" form, and the user it was for.
+	setPassword    string
+	setPasswordFor int64
 }
 
 // renderSettings draws the page with an optional form error and flash.
@@ -40,6 +45,8 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status i
 	data.Nav = "settings"
 	data.UserError = errs.user
 	data.PasswordError = errs.password
+	data.SetPasswordError = errs.setPassword
+	data.SetPasswordFor = errs.setPasswordFor
 	data.Flash = flash
 
 	users, err := s.users.List(r.Context())
@@ -50,6 +57,10 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status i
 	}
 	data.Users = users
 	data.MinPasswordLength = auth.MinPasswordLength
+	if u, ok := auth.UserFromContext(r.Context()); ok && len(users) > 0 {
+		// List is oldest first, so the owner is the first row.
+		data.IsOwner = users[0].ID == u.ID
+	}
 
 	s.render(w, r, "settings.html", status, data)
 }
@@ -200,6 +211,129 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/settings?msg="+url.QueryEscape(
 		"Password changed. Every other browser and device has been signed out."), http.StatusSeeOther)
+}
+
+// handleUserPasswordSet is the owner setting another user's password: the web's
+// `ambar user passwd`, for a password that was forgotten.
+//
+// It takes the owner's own password, for the reason the own-password form takes the
+// current one: a borrowed session must not become someone else's account. Wrong guesses
+// count against the owner's login limits. The user whose password it was is signed out
+// everywhere, as with the CLI; their API tokens keep working.
+func (s *Server) handleUserPasswordSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	u, ok := auth.UserFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ownerID, err := s.users.OwnerID(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "could not find the owner", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if u.ID != ownerID {
+		http.Error(w, "only the owner, the first account, can set another user's password", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderSettings(w, r, http.StatusBadRequest, settingsErrors{setPassword: "Could not read the form."}, "")
+		return
+	}
+
+	targetID, _ := strconv.ParseInt(r.PostFormValue("user_id"), 10, 64)
+	refuse := func(status int, message string) {
+		s.renderSettings(w, r, status, settingsErrors{setPassword: message, setPasswordFor: targetID}, "")
+	}
+	var (
+		password = r.PostFormValue("password")
+		confirm  = r.PostFormValue("password_confirm")
+		current  = r.PostFormValue("current_password")
+		ip       = httpx.ClientIPString(ctx)
+		ipKey    = ip
+	)
+	if ipKey == "" {
+		ipKey = "unknown"
+	}
+
+	target, err := s.users.ByID(ctx, targetID)
+	switch {
+	case errors.Is(err, auth.ErrUserNotFound):
+		refuse(http.StatusBadRequest, "Choose a user.")
+		return
+	case err != nil:
+		s.log.ErrorContext(ctx, "could not look up a user", "user_id", targetID, "error", err)
+		refuse(http.StatusInternalServerError, "Something went wrong. Try again.")
+		return
+	case target.ID == u.ID:
+		refuse(http.StatusBadRequest, "Change your own password under Your password; it asks for the current one.")
+		return
+	}
+
+	if ok, _ := s.loginByIP.Allowed(ipKey); !ok {
+		refuse(http.StatusTooManyRequests, rateLimitedMessage)
+		return
+	}
+	if ok, _ := s.loginByUser.Allowed(u.Username); !ok {
+		refuse(http.StatusTooManyRequests, rateLimitedMessage)
+		return
+	}
+	if password != confirm {
+		refuse(http.StatusBadRequest, "The two new passwords do not match.")
+		return
+	}
+	if err := auth.ValidatePassword(password); err != nil {
+		refuse(http.StatusBadRequest, capitalise(err.Error())+".")
+		return
+	}
+
+	ok, err = auth.VerifyPassword(u.PasswordHash, current)
+	if err != nil {
+		s.log.ErrorContext(ctx, "stored password hash is unreadable", "user_id", u.ID, "error", err)
+		refuse(http.StatusInternalServerError, "Something went wrong. Try again.")
+		return
+	}
+	if !ok {
+		s.loginByIP.RecordFailure(ipKey)
+		s.loginByUser.RecordFailure(u.Username)
+		s.audit.Record(ctx, audit.Entry{
+			UserID: &u.ID, Action: audit.ActionPasswordChangeFailed,
+			Entity: "user", EntityID: target.Username, IP: ip,
+			Detail: map[string]any{"reason": "wrong_password", "set_by": u.Username},
+		})
+		s.log.WarnContext(ctx, "setting a user's password refused", "user", target.Username,
+			"by", u.Username, "reason", "wrong_password", "ip", ip)
+		refuse(http.StatusBadRequest, "Your password is not correct.")
+		return
+	}
+
+	if err := s.users.SetPassword(ctx, target.ID, password); err != nil {
+		s.log.ErrorContext(ctx, "could not set a user's password", "user_id", target.ID, "error", err)
+		refuse(http.StatusInternalServerError, "Something went wrong. Try again.")
+		return
+	}
+	s.loginByIP.Reset(ipKey)
+	s.loginByUser.Reset(u.Username)
+
+	if err := s.sessions.DestroyAllForUser(ctx, target.ID); err != nil {
+		s.log.ErrorContext(ctx, "could not sign a user out after setting their password",
+			"user_id", target.ID, "error", err)
+		refuse(http.StatusInternalServerError, "The password of "+target.Username+" is set, but they "+
+			"could not be signed out everywhere. Run `ambar user passwd` on the server to make sure.")
+		return
+	}
+
+	s.audit.Record(ctx, audit.Entry{
+		UserID: &u.ID, Action: audit.ActionPasswordChanged,
+		Entity: "user", EntityID: target.Username, IP: ip,
+		Detail: map[string]any{"via": "web", "set_by": u.Username},
+	})
+	s.log.InfoContext(ctx, "password set", "user", target.Username, "by", u.Username, "ip", ip)
+
+	http.Redirect(w, r, "/settings?msg="+url.QueryEscape(
+		"Set a new password for "+target.Username+" and signed them out everywhere. Tell them the new one."),
+		http.StatusSeeOther)
 }
 
 // capitalise upper-cases the first letter of a sentence, so a store error reads as

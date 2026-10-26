@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -293,5 +294,166 @@ func TestPasswordChangeIsRateLimited(t *testing.T) {
 	}
 	if !ts.passwordVerifies(t, testPassword) {
 		t.Error("the password changed despite the rate limit")
+	}
+}
+
+// storedPasswordIs reports whether password is the one stored for username.
+func (ts *testServer) storedPasswordIs(t *testing.T, username, password string) bool {
+	t.Helper()
+	u, err := auth.NewUserStore(ts.db).ByUsername(context.Background(), username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := auth.VerifyPassword(u.PasswordHash, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ok
+}
+
+func (ts *testServer) userID(t *testing.T, username string) string {
+	t.Helper()
+	u, err := auth.NewUserStore(ts.db).ByUsername(context.Background(), username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strconv.FormatInt(u.ID, 10)
+}
+
+const (
+	partnerName     = "partner"
+	partnerPassword = "the-partners-old-password"
+	partnerNew      = "the-partners-new-password"
+)
+
+// TestOwnerSetsAnotherUsersPassword: the first account sets a forgotten password from the
+// web, with its own password as proof; the other user is signed out everywhere and signs
+// in with the new one, and the audit log says who did it.
+func TestOwnerSetsAnotherUsersPassword(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.createUser(t, partnerName, partnerPassword)
+	partner := ts.secondBrowser(t)
+	partner.login(t, partnerName, partnerPassword)
+	ts.login(t, testUsername, testPassword)
+
+	body := ts.body(t, ts.get(t, "/settings"))
+	if !strings.Contains(body, "Set a user's password") || !strings.Contains(body, ">"+partnerName+"</option>") {
+		t.Fatalf("the owner's settings page has no form to set the partner's password:\n%s", body)
+	}
+
+	status, body := ts.postForm(t, "/settings/users/password", url.Values{
+		"user_id":          {ts.userID(t, partnerName)},
+		"password":         {partnerNew},
+		"password_confirm": {partnerNew},
+		"current_password": {testPassword},
+	})
+	if status != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303\n%s", status, body)
+	}
+
+	if !ts.storedPasswordIs(t, partnerName, partnerNew) || ts.storedPasswordIs(t, partnerName, partnerPassword) {
+		t.Error("the partner's stored password is not the new one")
+	}
+	if !ts.storedPasswordIs(t, testUsername, testPassword) {
+		t.Error("the owner's own password changed")
+	}
+	resp := partner.get(t, "/settings")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/login") {
+		t.Errorf("the partner is still signed in: status %d", resp.StatusCode)
+	}
+	if resp := ts.get(t, "/settings"); resp.StatusCode != http.StatusOK {
+		t.Errorf("the owner was signed out: status %d", resp.StatusCode)
+	}
+	if resp := ts.secondBrowser(t).login(t, partnerName, partnerNew); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("the new password does not sign the partner in: status %d", resp.StatusCode)
+	}
+
+	var n int
+	if err := ts.db.Reader.QueryRow(`
+		SELECT count(*) FROM audit_log
+		WHERE action = 'password.changed' AND entity_id = ? AND user_id = ?`,
+		partnerName, ts.userID(t, testUsername)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("audit rows for the change, by the owner = %d, want 1", n)
+	}
+}
+
+// TestOnlyTheOwnerSetsPasswords: the second user sees no such form and is refused if
+// they post one anyway — they cannot lock the first account out.
+func TestOnlyTheOwnerSetsPasswords(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.createUser(t, partnerName, partnerPassword)
+	ts.login(t, partnerName, partnerPassword)
+
+	if body := ts.body(t, ts.get(t, "/settings")); strings.Contains(body, "/settings/users/password") {
+		t.Error("the second user is offered the form to set someone's password")
+	}
+	status, _ := ts.postForm(t, "/settings/users/password", url.Values{
+		"user_id":          {ts.userID(t, testUsername)},
+		"password":         {partnerNew},
+		"password_confirm": {partnerNew},
+		"current_password": {partnerPassword},
+	})
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", status)
+	}
+	if !ts.storedPasswordIs(t, testUsername, testPassword) {
+		t.Error("the second user changed the owner's password")
+	}
+}
+
+// TestSetPasswordRefusals: each mistake gets its own message, and none of them changes
+// the password or signs the other user out.
+func TestSetPasswordRefusals(t *testing.T) {
+	ts := newTestServer(t)
+	ts.createUser(t, testUsername, testPassword)
+	ts.createUser(t, partnerName, partnerPassword)
+	partner := ts.secondBrowser(t)
+	partner.login(t, partnerName, partnerPassword)
+	ts.login(t, testUsername, testPassword)
+	partnerID := ts.userID(t, partnerName)
+
+	cases := []struct {
+		name string
+		form url.Values
+		want string
+	}{
+		{"wrong own password", url.Values{"user_id": {partnerID}, "password": {partnerNew},
+			"password_confirm": {partnerNew}, "current_password": {"not-the-owners-password"}},
+			"your password is not correct"},
+		{"mismatched", url.Values{"user_id": {partnerID}, "password": {partnerNew},
+			"password_confirm": {"something-else-entirely"}, "current_password": {testPassword}},
+			"do not match"},
+		{"short", url.Values{"user_id": {partnerID}, "password": {"short"},
+			"password_confirm": {"short"}, "current_password": {testPassword}},
+			"at least"},
+		{"no such user", url.Values{"user_id": {"999"}, "password": {partnerNew},
+			"password_confirm": {partnerNew}, "current_password": {testPassword}},
+			"choose a user"},
+		{"yourself", url.Values{"user_id": {ts.userID(t, testUsername)}, "password": {partnerNew},
+			"password_confirm": {partnerNew}, "current_password": {testPassword}},
+			"under your password"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := ts.postForm(t, "/settings/users/password", tc.form)
+			if status != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", status)
+			}
+			if !strings.Contains(strings.ToLower(body), tc.want) {
+				t.Errorf("the error does not mention %q:\n%s", tc.want, body)
+			}
+		})
+	}
+
+	if !ts.storedPasswordIs(t, partnerName, partnerPassword) || !ts.storedPasswordIs(t, testUsername, testPassword) {
+		t.Error("a refused form still changed a password")
+	}
+	if resp := partner.get(t, "/settings"); resp.StatusCode != http.StatusOK {
+		t.Errorf("a refused form signed the partner out: status %d", resp.StatusCode)
 	}
 }

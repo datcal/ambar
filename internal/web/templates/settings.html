@@ -11,8 +11,9 @@
     {{/* §11: "two equal users", and no self-registration — so accounts are created
          here by someone already signed in, and every creation is audited. */}}
     <p class="hint">
-      Everyone who signs in has the same rights. There is no self-registration: accounts
-      are created here or with <code>ambar user add</code>.
+      Everyone who signs in has the same rights, except that the first account can set the
+      others' passwords. There is no self-registration: accounts are created here or with
+      <code>ambar user add</code>.
     </p>
 
     <div class="tablewrap">
@@ -58,12 +59,43 @@
         deliberate command-line action — nobody here can lock anybody else out.</p>
       <p><button type="submit" class="primary">Create user</button></p>
     </form>
+
+    {{if .IsOwner}}{{if gt (len .Users) 1}}
+    {{/* The owner only, the first account: §11's implicit owner, so the second user
+         cannot lock the first out. It takes the owner's own password, like the form below. */}}
+    <h3>Set a user's password</h3>
+    {{if .SetPasswordError}}<p class="error" role="alert">{{.SetPasswordError}}</p>{{end}}
+    <form method="post" action="/settings/users/password" class="stack userform">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <label>User
+        <select name="user_id" required>
+          {{range .Users}}{{if ne .ID $.User.ID}}
+          <option value="{{.ID}}"{{if eq .ID $.SetPasswordFor}} selected{{end}}>{{.Username}}</option>
+          {{end}}{{end}}
+        </select>
+      </label>
+      {{/* Not new-password: a password manager would offer to save it as yours. */}}
+      <label>New password
+        <input type="password" name="password" required autocomplete="off"
+               minlength="{{.MinPasswordLength}}">
+      </label>
+      <label>Repeat the new password
+        <input type="password" name="password_confirm" required autocomplete="off">
+      </label>
+      <label>Your password
+        <input type="password" name="current_password" required autocomplete="current-password">
+      </label>
+      <p class="hint">For a forgotten password. They are signed out everywhere and sign in
+        with the new one; their API tokens keep working.</p>
+      <p><button type="submit" class="primary">Set password</button></p>
+    </form>
+    {{end}}{{end}}
   </div>
 
   <div class="card">
     <h2>Your password</h2>
-    {{/* Your own only: §11's equal users give nobody the authority over someone
-         else's. A forgotten one is reset on the server with `ambar user passwd`. */}}
+    {{/* Your own. A forgotten one is set by the owner above, or on the server with
+         `ambar user passwd`. */}}
     {{if .PasswordError}}<p class="error" role="alert">{{.PasswordError}}</p>{{end}}
     <form method="post" action="/settings/password" class="stack userform">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -84,8 +116,8 @@
       <p class="hint">At least {{.MinPasswordLength}} characters. Every other browser and
         device signed in as you is signed out; this one stays. API tokens keep working —
         revoke one under <a href="/settings/tokens">API tokens</a> if it may have leaked.
-        A forgotten password is reset on the server with
-        <code>ambar user passwd &lt;username&gt;</code>.</p>
+        A forgotten password is set by the first account under Users, or on the server
+        with <code>ambar user passwd &lt;username&gt;</code>.</p>
       <p><button type="submit" class="primary">Change password</button></p>
     </form>
   </div>

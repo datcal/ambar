@@ -157,6 +157,19 @@ func (s *UserStore) ByID(ctx context.Context, id int64) (User, error) {
 	return scanUser(row)
 }
 
+// OwnerID is the first account created: §11's implicit owner, the one person who may set
+// another user's password from the web. ErrUserNotFound when there are no users.
+func (s *UserStore) OwnerID(ctx context.Context) (int64, error) {
+	var id sql.NullInt64
+	if err := s.db.Reader.QueryRowContext(ctx, `SELECT min(id) FROM users`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("find the owner: %w", err)
+	}
+	if !id.Valid {
+		return 0, ErrUserNotFound
+	}
+	return id.Int64, nil
+}
+
 // Count is used by `ambar user add` messaging and by the CLI to point out that
 // no users exist yet.
 func (s *UserStore) Count(ctx context.Context) (int, error) {

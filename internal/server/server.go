@@ -351,6 +351,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /settings/open-helper", auth.RequireUser(http.HandlerFunc(s.handleOpenHelper)))
 	mux.Handle("POST /settings/users", auth.RequireUser(http.HandlerFunc(s.handleUserCreate)))
 	mux.Handle("POST /settings/password", auth.RequireUser(http.HandlerFunc(s.handlePasswordChange)))
+	mux.Handle("POST /settings/users/password", auth.RequireUser(http.HandlerFunc(s.handleUserPasswordSet)))
 	mux.Handle("GET /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokensPage)))
 	mux.Handle("POST /settings/tokens", auth.RequireUser(http.HandlerFunc(s.handleTokenCreate)))
 	mux.Handle("POST /settings/tokens/{id}/revoke", auth.RequireUser(http.HandlerFunc(s.handleTokenRevoke)))
@@ -549,6 +550,11 @@ type pageData struct {
 	UserError         string
 	PasswordError     string
 	MinPasswordLength int
+	// IsOwner shows the owner the form that sets another user's password; SetPasswordFor
+	// keeps that form's user selected when it comes back with SetPasswordError.
+	IsOwner          bool
+	SetPasswordError string
+	SetPasswordFor   int64
 
 	// Colours is the library's own dominant palette, as a clickable filter (M15).
 	Colours []index.PackColour

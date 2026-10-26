@@ -6,6 +6,10 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **The first account can set another user's password** under Settings → Users, for one
+  that was forgotten: choose the user, type the new password twice and your own once. They are
+  signed out everywhere; their API tokens keep working. Nobody else can, so the second user
+  cannot lock the first out. `ambar user passwd` still works on the server.
 - **The library is a folder view now.** The folder tree is the sidebar — always open at the
   folder you are in, as deep as the library goes, counting what the grid would show for the
   kind you picked — with a box above it to jump to any folder by name or by a pasted path
