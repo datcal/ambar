@@ -33,6 +33,12 @@
 #   AMBAR_REMOTE_DIR    where docker-compose.yml and .env live on the NAS
 #   AMBAR_BUILDER       docker or podman; auto-detected otherwise
 #
+# And, for a derive worker on another machine (optional):
+#
+#   AMBAR_WORKER_SSH_HOST    user@host (or ssh alias) of that machine: the worker image is
+#                            built from the same commit, shipped there and restarted
+#   AMBAR_WORKER_REMOTE_DIR  where its docker-compose.yml lives (/opt/stacks/ambar-worker)
+#
 # What this script deliberately does not do: create a user. §11 has no
 # self-registration and no default account, so the first account is created by
 # hand and the script prints the command.
@@ -132,6 +138,13 @@ ssh_opts=(-o BatchMode=yes)
 
 ssh_nas() { ssh "${ssh_opts[@]}" "$SSH_HOST" "$@"; }
 
+WORKER_SSH_HOST="${AMBAR_WORKER_SSH_HOST:-$(envval AMBAR_WORKER_SSH_HOST)}"
+WORKER_REMOTE_DIR="${AMBAR_WORKER_REMOTE_DIR:-$(envval AMBAR_WORKER_REMOTE_DIR)}"
+WORKER_REMOTE_DIR="${WORKER_REMOTE_DIR:-/opt/stacks/ambar-worker}"
+
+# The worker machine has its own key in ssh's config, so AMBAR_SSH_KEY is not passed.
+ssh_worker() { ssh -o BatchMode=yes "$WORKER_SSH_HOST" "$@"; }
+
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 # --- checks ------------------------------------------------------------------
@@ -210,42 +223,55 @@ elif [ "$DO_IMAGE" = 1 ]; then
     fi
 fi
 
-# --- the worker on the NAS ---------------------------------------------------
+# --- the worker image --------------------------------------------------------
 
-# The "worker" profile runs `ambar worker` with Blender beside the app (docker-compose.yml).
-# Its image comes from Dockerfile.worker, built and shipped the same way and from the same
-# commit — a worker of another version is refused — but only shipped when the NAS does not
-# have it already: Debian and Blender's system libraries make it ten times the app's size.
+# The "worker" profile runs `ambar worker` with Blender beside the app (docker-compose.yml);
+# AMBAR_WORKER_SSH_HOST runs it on another machine instead (or as well). Either way its
+# image comes from Dockerfile.worker, built and shipped the same way and from the same
+# commit — a worker of another version is refused — but only shipped where it is not
+# already: Debian and Blender's system libraries make it ten times the app's size.
 PROFILES="${COMPOSE_PROFILES:-$(envval COMPOSE_PROFILES)}"
 WORKER_IMAGE=ambar-worker:local
 case ",$PROFILES," in
-    *,worker,*)
-        if [ "$DO_IMAGE" = 1 ]; then
-            if [ "$DO_BUILD" = 1 ]; then
-                step "building $WORKER_IMAGE with $BUILDER"
-                "$BUILDER" build -q \
-                    --platform=linux/amd64 \
-                    -f Dockerfile.worker \
-                    --build-arg "VERSION=$VERSION" \
-                    --build-arg "COMMIT=$COMMIT" \
-                    -t "$WORKER_IMAGE" . | sed 's/^/   /'
-            fi
-            local_id=$("$BUILDER" image inspect --format '{{.Id}}' "$WORKER_IMAGE")
-            remote_id=$(ssh_nas "docker image inspect --format '{{.Id}}' '$WORKER_IMAGE' 2>/dev/null" || true)
-            if [ "${local_id#sha256:}" = "${remote_id#sha256:}" ]; then
-                step "the NAS already has this $WORKER_IMAGE"
-            else
-                step "shipping $WORKER_IMAGE to $SSH_HOST"
-                loaded=$("$BUILDER" save "$WORKER_IMAGE" | gzip -1 |
-                    ssh_nas 'gunzip | docker load' | sed -n 's/^Loaded image: //p' | tail -1)
-                echo "   loaded $loaded"
-                if [ -n "$loaded" ] && [ "$loaded" != "$WORKER_IMAGE" ]; then
-                    ssh_nas "docker tag '$loaded' '$WORKER_IMAGE'"
-                fi
-            fi
-        fi
-        ;;
+    *,worker,*) WORKER_ON_NAS=1 ;;
+    *)          WORKER_ON_NAS=0 ;;
 esac
+
+# ship_worker <ssh function> <host>
+ship_worker() {
+    local local_id remote_id loaded
+    local_id=$("$BUILDER" image inspect --format '{{.Id}}' "$WORKER_IMAGE")
+    remote_id=$("$1" "docker image inspect --format '{{.Id}}' '$WORKER_IMAGE' 2>/dev/null" || true)
+    if [ "${local_id#sha256:}" = "${remote_id#sha256:}" ]; then
+        step "$2 already has this $WORKER_IMAGE"
+    else
+        step "shipping $WORKER_IMAGE to $2"
+        loaded=$("$BUILDER" save "$WORKER_IMAGE" | gzip -1 |
+            "$1" 'gunzip | docker load' | sed -n 's/^Loaded image: //p' | tail -1)
+        echo "   loaded $loaded"
+        if [ -n "$loaded" ] && [ "$loaded" != "$WORKER_IMAGE" ]; then
+            "$1" "docker tag '$loaded' '$WORKER_IMAGE'"
+        fi
+    fi
+}
+
+if [ "$DO_IMAGE" = 1 ] && { [ "$WORKER_ON_NAS" = 1 ] || [ -n "$WORKER_SSH_HOST" ]; }; then
+    if [ "$DO_BUILD" = 1 ]; then
+        step "building $WORKER_IMAGE with $BUILDER"
+        "$BUILDER" build -q \
+            --platform=linux/amd64 \
+            -f Dockerfile.worker \
+            --build-arg "VERSION=$VERSION" \
+            --build-arg "COMMIT=$COMMIT" \
+            -t "$WORKER_IMAGE" . | sed 's/^/   /'
+    fi
+    if [ "$WORKER_ON_NAS" = 1 ]; then
+        ship_worker ssh_nas "$SSH_HOST"
+    fi
+    if [ -n "$WORKER_SSH_HOST" ]; then
+        ship_worker ssh_worker "$WORKER_SSH_HOST"
+    fi
+fi
 
 # --- ship the configuration --------------------------------------------------
 
@@ -297,6 +323,14 @@ else
     echo "   /healthz did not answer — last log lines:" >&2
     ssh_nas "docker logs --tail 30 ambar" 2>&1 | sed 's/^/   /' >&2
     exit 1
+fi
+
+# After the server, so the restarted worker meets a server of its own version. compose
+# recreates the container when the image under its tag has changed, and leaves it alone
+# otherwise.
+if [ -n "$WORKER_SSH_HOST" ]; then
+    step "restarting the worker on $WORKER_SSH_HOST"
+    ssh_worker "cd '$WORKER_REMOTE_DIR' && docker compose up -d" 2>&1 | sed 's/^/   /'
 fi
 
 cat <<EOF

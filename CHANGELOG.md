@@ -6,6 +6,11 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **`scripts/deploy.sh` keeps a worker on another machine in step:** with
+  `AMBAR_WORKER_SSH_HOST` set, the worker image is built from the same commit as the app,
+  shipped to that host and restarted there after the server is healthy, so a remote worker
+  is never refused for running another version.
+
 - **Blender stays open between files.** A conversion used to start Blender, which on the
   NAS's N100 was 2.9 s of a 3 s FBX; one Blender now takes file after file over stdin, each
   from an empty factory scene: 0.06 s a file, at a steady 350 MB. An idle Blender exits after a
