@@ -1,6 +1,7 @@
 package derive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/HugoSmits86/nativewebp"
 	"github.com/datcal/ambar/internal/blender"
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/jobs"
@@ -279,13 +281,16 @@ func RenderThumb(ctx context.Context, task Task, libraryRoot, dataRoot, blenderB
 	if BlankImage(img) {
 		return Outcome{State: StateUnsupported, Message: "nothing to draw: the model rendered empty"}
 	}
-	if err := writeWebP(filepath.Join(outDir, FileThumb), img); err != nil {
-		return Outcome{State: StateFailed, Message: err.Error()}
-	}
 	// The same image is the preview, as the browser's is, so opening the asset does not
-	// draw it again.
-	if err := writeWebP(filepath.Join(outDir, FilePreview), img); err != nil {
-		return Outcome{State: StateFailed, Message: err.Error()}
+	// draw it again. Encoded once: a lossless 512 px WebP is most of a worker's own CPU time.
+	var encoded bytes.Buffer
+	if err := nativewebp.Encode(&encoded, img, nil); err != nil {
+		return Outcome{State: StateFailed, Message: fmt.Sprintf("encode the thumbnail: %v", err)}
+	}
+	for _, name := range []string{FileThumb, FilePreview} {
+		if err := writeFileAtomic(filepath.Join(outDir, name), encoded.Bytes()); err != nil {
+			return Outcome{State: StateFailed, Message: err.Error()}
+		}
 	}
 	meta, _ := json.Marshal(ThumbMeta{Renderer: RendererBlender, Untextured: info.Untextured, DrawnAt: time.Now().Unix()})
 	if err := writeFileAtomic(filepath.Join(outDir, FileThumbMeta), meta); err != nil {
