@@ -3,14 +3,17 @@ package remote
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/HugoSmits86/nativewebp"
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/derive"
 	"github.com/datcal/ambar/internal/index"
@@ -18,10 +21,11 @@ import (
 )
 
 type fixture struct {
-	db      *db.DB
-	queue   *jobs.Queue
-	deriver *derive.Deriver
-	clock   time.Time
+	db       *db.DB
+	queue    *jobs.Queue
+	deriver  *derive.Deriver
+	dataRoot string
+	clock    time.Time
 }
 
 func (f *fixture) now() time.Time { return f.clock }
@@ -29,8 +33,23 @@ func (f *fixture) now() time.Time { return f.clock }
 // newFixture indexes a library of n small PNGs and queues their derives.
 func newFixture(t *testing.T, n int) *fixture {
 	t.Helper()
+	return newLibraryFixture(t, n, nil)
+}
+
+// newLibraryFixture is newFixture with these extra files in the library as well.
+func newLibraryFixture(t *testing.T, n int, extra map[string]string) *fixture {
+	t.Helper()
 	base := t.TempDir()
 	lib := filepath.Join(base, "library")
+	for rel, content := range extra {
+		path := filepath.Join(lib, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i := 0; i < n; i++ {
 		img := image.NewRGBA(image.Rect(0, 0, 8, 8))
 		img.Set(0, 0, color.RGBA{R: uint8(i), A: 0xff})
@@ -60,10 +79,11 @@ func newFixture(t *testing.T, n int) *fixture {
 		t.Fatal(err)
 	}
 
-	f := &fixture{db: database, clock: time.Unix(1_800_000_000, 0)}
+	f := &fixture{db: database, dataRoot: filepath.Join(base, "data"), clock: time.Unix(1_800_000_000, 0)}
 	f.queue = jobs.New(database, jobs.Options{Workers: 1}).WithClock(f.now)
-	f.deriver = derive.New(database, derive.Options{LibraryRoot: lib, DataRoot: filepath.Join(base, "data")})
+	f.deriver = derive.New(database, derive.Options{LibraryRoot: lib, DataRoot: f.dataRoot})
 	f.deriver.Register(f.queue)
+	f.deriver.RegisterThumb(f.queue)
 	if _, err := derive.EnqueueStale(ctx, database, f.queue); err != nil {
 		t.Fatal(err)
 	}
@@ -149,27 +169,150 @@ func TestAutoModeStepsAsideWhileAWorkerIsConnected(t *testing.T) {
 	f := newFixture(t, 1)
 	ctx := context.Background()
 
-	if skip := f.coordinator(ModeOff).SkipLocal(); len(skip) != 0 {
-		t.Errorf("off skips %v", skip)
+	// Without a Blender of its own the server never draws thumbnails, whatever the mode.
+	thumbs := []string{derive.ThumbJobType}
+	both := []string{derive.JobType, derive.ThumbJobType}
+	if skip := f.coordinator(ModeOff).SkipLocal(); !slices.Equal(skip, thumbs) {
+		t.Errorf("off skips %v, want %v", skip, thumbs)
 	}
-	if skip := f.coordinator(ModeOnly).SkipLocal(); len(skip) != 1 || skip[0] != derive.JobType {
-		t.Errorf("only skips %v, want [%s]", skip, derive.JobType)
+	local := NewCoordinator(f.db, f.queue, f.deriver, Options{Mode: ModeOff, LocalThumbs: true})
+	if skip := local.SkipLocal(); len(skip) != 0 {
+		t.Errorf("off with a Blender of its own skips %v", skip)
+	}
+	if skip := f.coordinator(ModeOnly).SkipLocal(); !slices.Equal(skip, both) {
+		t.Errorf("only skips %v, want %v", skip, both)
 	}
 
 	c := f.coordinator(ModeAuto)
-	if skip := c.SkipLocal(); len(skip) != 0 {
-		t.Errorf("auto with no worker skips %v", skip)
+	if skip := c.SkipLocal(); !slices.Equal(skip, thumbs) {
+		t.Errorf("auto with no worker skips %v, want %v", skip, thumbs)
 	}
 	if _, err := c.Claim(ctx, claimRequest("s1")); err != nil {
 		t.Fatal(err)
 	}
-	if skip := c.SkipLocal(); len(skip) != 1 {
-		t.Errorf("auto with a worker connected skips %v, want derive", skip)
+	if skip := c.SkipLocal(); !slices.Equal(skip, both) {
+		t.Errorf("auto with a worker connected skips %v, want %v", skip, both)
 	}
 	f.clock = f.clock.Add(ActiveWindow + time.Second)
-	if skip := c.SkipLocal(); len(skip) != 0 {
-		t.Errorf("auto after the worker went quiet skips %v", skip)
+	if skip := c.SkipLocal(); !slices.Equal(skip, thumbs) {
+		t.Errorf("auto after the worker went quiet skips %v, want %v", skip, thumbs)
 	}
+}
+
+// TestABlenderWorkerDrawsTheModelThumbnails: a worker that can draw is offered every
+// derived model without a Blender thumbnail, its picture is moved into place, and a model
+// with nothing to draw is remembered so it is not offered again. A worker that cannot
+// draw is never handed one.
+func TestABlenderWorkerDrawsTheModelThumbnails(t *testing.T) {
+	const tri = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+	f := newLibraryFixture(t, 0, map[string]string{
+		"pack/crate.obj": tri,
+		"pack/rig.obj":   tri + "# a different file\n",
+	})
+	ctx := context.Background()
+	// Both derived, and nothing else waiting.
+	if _, err := f.db.Writer.Exec(`UPDATE assets SET derive_state = 'ok', derive_version = ?`, derive.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.Exec(`UPDATE jobs SET state = 'done', dedupe_key = NULL`); err != nil {
+		t.Fatal(err)
+	}
+
+	c := f.coordinator(ModeOnly)
+	blenderOnly := claimRequest("old")
+	blenderOnly.Blender = true
+	if claim, err := c.Claim(ctx, blenderOnly); err != nil || claim != nil {
+		t.Fatalf("a worker that cannot draw was handed %+v, %v", claim, err)
+	}
+
+	drawer := claimRequest("new")
+	drawer.Blender, drawer.Thumbs = true, true
+	got := map[string]*ClaimResponse{}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(got) < 2 {
+		claim, err := c.Claim(ctx, drawer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claim != nil {
+			if claim.Task.Op != derive.OpThumb || claim.Task.PackPath != "pack" {
+				t.Fatalf("handed %+v, want a thumbnail in pack", claim.Task)
+			}
+			got[claim.Task.Filename] = claim
+			continue
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the models were never offered to draw; got %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The crate is drawn.
+	crate := got["crate.obj"]
+	staging := t.TempDir()
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := 16; y < 48; y++ {
+		for x := 16; x < 48; x++ {
+			img.Set(x, y, color.RGBA{R: 0xc0, G: 0x80, B: 0x30, A: 0xff})
+		}
+	}
+	var webp bytes.Buffer
+	if err := nativewebp.Encode(&webp, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{
+		derive.FileThumb:     webp.Bytes(),
+		derive.FilePreview:   webp.Bytes(),
+		derive.FileThumbMeta: []byte(`{"renderer":3,"untextured":0,"drawn_at":1}`),
+	} {
+		if err := os.WriteFile(filepath.Join(staging, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ok := derive.Outcome{State: derive.StateOK, Result: &derive.Result{
+		Files: []string{derive.FileThumb, derive.FilePreview, derive.FileThumbMeta}}}
+	if err := c.Submit(ctx, crate.JobID, "new", ok, staging); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := f.jobState(t, crate.JobID); state != "done" {
+		t.Errorf("the drawn thumbnail's job is %s, want done", state)
+	}
+	dir := f.thumbDir(t, crate.Task.SHA256)
+	if derive.ModelThumbStatus(dir, derive.RendererBlender) != derive.ThumbCurrent {
+		t.Error("the crate's thumbnail is not current after it was drawn")
+	}
+	var palette sql.NullString
+	if err := f.db.Reader.QueryRow(`SELECT palette_json FROM assets WHERE id = ?`, crate.Task.AssetID).Scan(&palette); err != nil || !palette.Valid {
+		t.Errorf("no palette recorded from the drawn thumbnail: %v, %v", palette, err)
+	}
+	var state string
+	if err := f.db.Reader.QueryRow(`SELECT derive_state FROM assets WHERE id = ?`, crate.Task.AssetID).Scan(&state); err != nil || state != "ok" {
+		t.Errorf("derive_state after a thumbnail = %q, %v; want it untouched", state, err)
+	}
+
+	// The rig has nothing to draw.
+	rig := got["rig.obj"]
+	nothing := derive.Outcome{State: derive.StateUnsupported, Message: "nothing to draw: no geometry"}
+	if err := c.Submit(ctx, rig.JobID, "new", nothing, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if derive.ModelThumbStatus(f.thumbDir(t, rig.Task.SHA256), derive.RendererBlender) != derive.ThumbCurrent {
+		t.Error("a model with nothing to draw would be offered again")
+	}
+
+	// So the next worker to connect is offered nothing.
+	if n, err := f.deriver.QueueThumbs(ctx); err != nil || n != 0 {
+		t.Errorf("queued %d thumbnails after both were settled (%v), want none", n, err)
+	}
+}
+
+func (f *fixture) thumbDir(t *testing.T, sha256hex string) string {
+	t.Helper()
+	rel, err := derive.Dir(sha256hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(f.dataRoot, rel)
 }
 
 // TestABlenderWorkerIsOfferedWhatWaitsOnBlender: FBX files sit in needs_blender at the

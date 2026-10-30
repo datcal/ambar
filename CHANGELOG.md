@@ -6,6 +6,23 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **A worker with Blender draws every model's thumbnail.** Model pictures came only from a
+  browser, one tile at a time as someone scrolled past it: of 79,000 models in the library
+  73,500 had none, so the grid, the Unreal plugin and `view_asset` showed an extension chip.
+  A worker with Blender now takes `model.thumb` jobs as well: it opens the model (FBX, OBJ,
+  glTF or `.blend`), finds the textures it names with the same search the viewer uses, and
+  draws a 512 px picture with Workbench and a studio light (no GPU needed; one makes it
+  faster). When it connects, every derived model without a picture, or with one a browser
+  drew, is queued, behind derive work; a model derived while it is connected is queued
+  next. An FBX with no mesh — an animation — is remembered as having nothing to draw.
+  The server draws them itself only with `AMBAR_BLENDER_BIN` set; otherwise its own
+  workers leave these jobs alone. A browser never draws over a Blender thumbnail.
+- **Textures: the product's atlas as a last resort.** A colour texture that nothing else
+  finds — a Synty FBX naming another product's working file, an OBJ with no materials at
+  all — is the colour texture named like the product the model is in
+  (`POLYGON - Samurai Pack` → `PolygonSamurai_Tex_01.png`). The viewer and the thumbnails
+  use it alike; it is never used for a normal or other non-colour map.
+
 - **`scripts/deploy.sh` keeps a worker on another machine in step:** with
   `AMBAR_WORKER_SSH_HOST` set, the worker image is built from the same commit as the app,
   shipped to that host and restarted there after the server is healthy, so a remote worker

@@ -15,7 +15,6 @@ import (
 
 	"github.com/datcal/ambar/internal/db"
 	"github.com/datcal/ambar/internal/jobs"
-	"github.com/datcal/ambar/internal/safepath"
 )
 
 // Deriving on another machine (internal/remote).
@@ -33,6 +32,9 @@ import (
 
 // Task is one asset's derive, as handed to a remote worker.
 type Task struct {
+	// Op is what to do: a derive when empty, a Blender thumbnail when OpThumb. A worker too
+	// old to know OpThumb never says it can draw, so it is never handed one.
+	Op       string `json:"op,omitempty"`
 	AssetID  int64  `json:"asset_id"`
 	SHA256   string `json:"sha256"`
 	Ext      string `json:"ext"`
@@ -40,6 +42,9 @@ type Task struct {
 	// LibraryPath is slash-separated and relative to the library root, which the worker
 	// resolves against its own mount of the same library.
 	LibraryPath string `json:"library_path"`
+	// PackPath is the library-relative root of the asset's pack, the bound of a thumbnail's
+	// texture search.
+	PackPath string `json:"pack_path,omitempty"`
 	// Size is what the last scan recorded, so a worker reading a file that has changed
 	// since does not record derivatives for bytes the row does not describe.
 	Size int64 `json:"size"`
@@ -80,18 +85,12 @@ func OutcomeOf(result *Result, err error) Outcome {
 // mount of the library, and the derivatives are written under dataRoot, a scratch
 // directory the caller uploads from and then removes.
 func RunTask(task Task, libraryRoot, dataRoot, blenderBin string) Outcome {
-	absPath, err := safepath.ResolveExisting(libraryRoot, task.LibraryPath)
-	if err != nil {
-		return Outcome{State: StateFailed,
-			Message: fmt.Sprintf("the worker could not open %s under its library: %v", task.LibraryPath, err)}
+	if task.Op == OpThumb {
+		return RenderThumb(context.Background(), task, libraryRoot, dataRoot, blenderBin)
 	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return Outcome{State: StateFailed, Message: fmt.Sprintf("the worker could not stat the file: %v", err)}
-	}
-	if info.Size() != task.Size {
-		return Outcome{State: StateFailed, Message: fmt.Sprintf(
-			"the file is %d bytes but the last scan recorded %d; run `ambar scan`", info.Size(), task.Size)}
+	absPath, failed := openTaskFile(task, libraryRoot)
+	if failed != nil {
+		return *failed
 	}
 
 	maxPixels := task.MaxPixels
@@ -121,6 +120,7 @@ var derivativeLimits = map[string]int64{
 	FileSheet:        256 << 20,
 	FilePeaks:        16 << 20,
 	FileModelPreview: 1 << 30,
+	FileThumbMeta:    64 << 10,
 }
 
 // DerivativeLimit reports whether name is a derivative file a worker may upload, and the
@@ -148,11 +148,19 @@ func (d *Deriver) Accept(ctx context.Context, task Task, outcome Outcome, stagin
 		return fmt.Errorf("a successful outcome for asset %d carried no result", task.AssetID)
 	}
 
+	if err := d.place(task, outcome.Result.Files, staging); err != nil {
+		return err
+	}
+	return d.Finish(ctx, task, outcome)
+}
+
+// place checks each uploaded file and moves it into the task's derivative directory.
+func (d *Deriver) place(task Task, files []string, staging string) error {
 	relDir, err := Dir(task.SHA256)
 	if err != nil {
 		return err
 	}
-	for _, name := range outcome.Result.Files {
+	for _, name := range files {
 		if err := checkDerivative(staging, name); err != nil {
 			return fmt.Errorf("asset %d: %w", task.AssetID, err)
 		}
@@ -162,12 +170,12 @@ func (d *Deriver) Accept(ctx context.Context, task Task, outcome Outcome, stagin
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("create derivative directory: %w", err)
 	}
-	for _, name := range outcome.Result.Files {
+	for _, name := range files {
 		if err := os.Rename(filepath.Join(staging, name), filepath.Join(outDir, name)); err != nil {
 			return fmt.Errorf("move %s into place: %w", name, err)
 		}
 	}
-	return d.Finish(ctx, task, outcome)
+	return nil
 }
 
 // checkDerivative validates one uploaded file.
@@ -197,7 +205,7 @@ func checkDerivative(staging, name string) error {
 		if _, err := io.ReadFull(f, magic); err != nil || !bytes.Equal(magic, []byte("glTF")) {
 			return fmt.Errorf("%s is not a GLB file", name)
 		}
-	case FilePeaks:
+	case FilePeaks, FileThumbMeta:
 		raw, err := io.ReadAll(f)
 		if err != nil || !json.Valid(raw) {
 			return fmt.Errorf("%s is not valid JSON", name)

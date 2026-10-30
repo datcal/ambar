@@ -282,7 +282,7 @@ func (w *worker) process(ctx context.Context, claim *ClaimResponse) {
 func (w *worker) claim(ctx context.Context) (*ClaimResponse, error) {
 	body, _ := json.Marshal(ClaimRequest{
 		Worker: w.opts.Name, Session: w.session, DeriveVersion: derive.Version, Blender: w.blender,
-		Concurrency: w.opts.Concurrency,
+		Thumbs: w.blender, Concurrency: w.opts.Concurrency,
 	})
 	resp, err := w.do(ctx, http.MethodPost, ClaimPath, "application/json", bytes.NewReader(body))
 	if err != nil {

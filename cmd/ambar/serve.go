@@ -121,6 +121,9 @@ func runServe(args []string) error {
 	// The remote derive coordinator is built once the deriver exists, below; the queue
 	// asks it on every claim which job types to leave to a remote worker.
 	var coordinator *remote.Coordinator
+	// Whether this server draws model thumbnails with a Blender of its own; otherwise a
+	// worker with Blender does.
+	var localThumbs bool
 	queue := jobs.New(database, jobs.Options{
 		Workers: cfg.Workers,
 		Log:     log,
@@ -149,9 +152,14 @@ func runServe(args []string) error {
 			_, err := tagger.RetagContent(ctx, sha256hex)
 			return err
 		},
+		DrawsThumbs: func() bool {
+			return localThumbs || (coordinator != nil && coordinator.DrawsThumbs())
+		},
 	})
 	deriver.Register(queue)
 	deriver.RegisterPalette(queue)
+	deriver.RegisterThumb(queue)
+	localThumbs = deriver.CanDrawThumbs()
 
 	// Where background work runs. AMBAR_REMOTE_DERIVE is the default; the jobs page's
 	// choice, once made, is remembered in the data root and wins.
@@ -160,6 +168,8 @@ func runServe(args []string) error {
 		StateFile: filepath.Join(cfg.DataRoot, "work-placement"),
 		SeenFile:  filepath.Join(cfg.DataRoot, "blender-worker.json"),
 		Log:       log,
+
+		LocalThumbs: localThumbs,
 	})
 
 	// A scan enqueues the derivative work it discovered. Passing this in as a
@@ -309,6 +319,16 @@ func runServe(args []string) error {
 			log.Warn("could not enqueue model palettes", "error", err)
 		} else if n > 0 {
 			log.Info("enqueued model palette jobs", "count", n)
+		}
+
+		// Models this server's own Blender should draw. Without one, a worker with Blender
+		// is offered them when it connects.
+		if localThumbs {
+			if n, err := deriver.QueueThumbs(ctx); err != nil {
+				log.Warn("could not enqueue model thumbnails", "error", err)
+			} else if n > 0 {
+				log.Info("enqueued model thumbnail jobs", "count", n)
+			}
 		}
 	}()
 

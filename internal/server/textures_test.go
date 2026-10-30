@@ -67,8 +67,10 @@ func TestTextureResolution(t *testing.T) {
 			dumbbell, `..\Textures\PolygonZombieBoss_Normal.psd`, "", ""},
 		{"a decal only exists as .tga, which a browser cannot show",
 			dumbbell, `..\..\PolygonZombies\_Working\Textures\Blood_Decal.tga`, "", ""},
-		{"traversal finds nothing outside the pack",
-			tree, `../../../../../../etc/passwd.png`, "", ""},
+		{"a working file of another product finds this product's atlas",
+			tree, `..\Textures\PolygonElven_Texture_01.png`, "trains 01", "atlas"},
+		{"traversal never leaves the pack: a colour name nothing matches is the pack's atlas",
+			tree, `../../../../../../etc/passwd.png`, "trains 01", "atlas"},
 	}
 	for _, c := range cases {
 		resp := ts.get(t, itoa("/assets/%d/texture?ref=", c.asset)+url.QueryEscape(c.ref))

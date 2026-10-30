@@ -161,12 +161,14 @@
     </div>
   {{end}}
 
-  {{/* Model thumbnails are drawn by a browser, not by this server. This card redraws, in
-       this tab, every one that is missing or was drawn by an older renderer — the white FBX
-       tiles drawn before textures were found by name (renderqueue.js, rethumb.go). */}}
+  {{/* Model thumbnails are drawn by a worker's Blender (model.thumb jobs) or by a browser,
+       never by this server's own code. This card redraws, in this tab, every one that is
+       missing or was drawn by an older browser renderer — the white FBX tiles drawn before
+       textures were found by name (renderqueue.js, rethumb.go). */}}
   <div class="card" data-role="rethumb" data-version="{{.Version}}">
     <h2>Model thumbnails</h2>
-    <p class="hint">3D thumbnails are drawn by a browser, not by this server. This draws every model
+    <p class="hint">A worker with Blender draws every model's thumbnail by itself, as
+      <code>model.thumb</code> jobs, as soon as it connects. Without one, this draws every model
       whose thumbnail is missing or was drawn without its textures, here in this tab, with this
       computer's graphics card. Keep the tab open and visible; you can stop and continue later.</p>
     <div class="actions-row">

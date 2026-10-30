@@ -43,9 +43,11 @@ import (
 //     derive_state=ok, which hides the fact that the model never rendered. Every .fbx in
 //     the library got exactly that treatment before this check existed.
 //   - Overwrite a thumbnail that is current. A thumbnail is current when it was drawn by
-//     a renderer at least as good as thumbRendererVersion, which thumb.json beside it
-//     records. One drawn before textures were resolved by name — most of the library's
-//     FBX tiles, white — is stale, and a current renderer replacing it is the point.
+//     a renderer at least as good as this browser's (derive.RendererBrowser), which
+//     thumb.json beside it records. One drawn before textures were resolved by name —
+//     most of the library's FBX tiles, white — is stale, and a current renderer replacing
+//     it is the point. One a worker's Blender drew is better than any browser's, and a
+//     browser never replaces it.
 
 // maxBrowserThumbBytes caps the upload. A 512×512 PNG of a model is tens of
 // kilobytes; a megabyte is generous and still bounded.
@@ -54,60 +56,6 @@ const maxBrowserThumbBytes = 1 << 20
 // maxBrowserThumbPixels bounds the decode, the same defence §5 applies to archives
 // and §6 to images.
 const maxBrowserThumbPixels = 4096 * 4096
-
-// thumbRendererVersion is the model-thumbnail renderer the server now expects.
-//
-//	1  the original: textures fetched by the path the model carries
-//	2  textures resolved by name through /assets/{id}/texture (textures.go)
-//
-// A client says which it is in the X-Ambar-Renderer header; one that does not is 1.
-const thumbRendererVersion = 2
-
-// fileThumbMeta records, beside a model's thumb.webp, how it was drawn.
-const fileThumbMeta = "thumb.json"
-
-// thumbMeta is fileThumbMeta's content.
-type thumbMeta struct {
-	Renderer int `json:"renderer"`
-	// Untextured is how many of the model's textures could not be found when it was
-	// drawn: a thumbnail with any is drawn again when a better renderer exists.
-	Untextured int   `json:"untextured"`
-	DrawnAt    int64 `json:"drawn_at"`
-}
-
-// readThumbMeta reads the record beside a thumbnail. A thumbnail without one predates
-// the record, which is the same as renderer 1.
-func readThumbMeta(outDir string) thumbMeta {
-	raw, err := os.ReadFile(filepath.Join(outDir, fileThumbMeta))
-	if err != nil {
-		return thumbMeta{Renderer: 1}
-	}
-	var m thumbMeta
-	if json.Unmarshal(raw, &m) != nil || m.Renderer < 1 {
-		return thumbMeta{Renderer: 1}
-	}
-	return m
-}
-
-// thumbStatus is what a model's thumbnail needs: nothing, a first render, or a redraw.
-type thumbStatus int
-
-const (
-	thumbCurrent thumbStatus = iota
-	thumbMissing
-	thumbStale
-)
-
-// modelThumbStatus decides from the derivative directory alone.
-func modelThumbStatus(outDir string) thumbStatus {
-	if _, err := os.Stat(filepath.Join(outDir, derive.FileThumb)); err != nil {
-		return thumbMissing
-	}
-	if readThumbMeta(outDir).Renderer < thumbRendererVersion {
-		return thumbStale
-	}
-	return thumbCurrent
-}
 
 // handleModelThumbUpload stores a browser-rendered thumbnail for a model.
 func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +98,7 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	}
 	untextured, _ := strconv.Atoi(r.Header.Get("X-Ambar-Untextured"))
 	if _, err := os.Stat(thumbPath); err == nil && asset.DeriveState == "ok" {
-		if modelThumbStatus(outDir) != thumbStale || renderer < thumbRendererVersion {
+		if derive.ModelThumbStatus(outDir, derive.RendererBrowser) != derive.ThumbStale || renderer < derive.RendererBrowser {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -164,7 +112,7 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	img, err := decodeThumbPNG(raw)
-	if err == nil && blankImage(img) {
+	if err == nil && derive.BlankImage(img) {
 		err = errors.New("the image is blank; the model probably did not render")
 	}
 	if err != nil {
@@ -197,8 +145,8 @@ func (s *Server) handleModelThumbUpload(w http.ResponseWriter, r *http.Request) 
 		s.log.WarnContext(r.Context(), "could not write the browser preview", "error", err)
 	}
 	// How it was drawn, so a better renderer later knows this one is worth replacing.
-	meta, _ := json.Marshal(thumbMeta{Renderer: renderer, Untextured: max(untextured, 0), DrawnAt: time.Now().Unix()})
-	if err := writeFileAtomic(filepath.Join(outDir, fileThumbMeta), meta); err != nil {
+	meta, _ := json.Marshal(derive.ThumbMeta{Renderer: renderer, Untextured: max(untextured, 0), DrawnAt: time.Now().Unix()})
+	if err := writeFileAtomic(filepath.Join(outDir, derive.FileThumbMeta), meta); err != nil {
 		s.log.WarnContext(r.Context(), "could not record how a thumbnail was drawn", "error", err)
 	}
 
@@ -295,39 +243,4 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
-}
-
-// minVisibleRatio is how much of a thumbnail must actually be covered by the model.
-// A 512x512 frame of a barrel fills a good part of it; 0.2% is far below anything a
-// real render produces and far above the zero a failed one gives.
-const minVisibleRatio = 0.002
-
-// blankImage reports whether an image has (almost) nothing visible in it.
-//
-// The thumbnailer renders onto a transparent canvas, so a failed render arrives as a
-// fully transparent PNG — about 550 bytes, which is small enough to look plausible and
-// large enough to pass any size check. Alpha is therefore what gets counted; a sparse
-// sample is enough, because the question is "did anything draw at all", not "how much".
-func blankImage(img image.Image) bool {
-	b := img.Bounds()
-	if b.Empty() {
-		return true
-	}
-
-	// Every 4th pixel in each direction: 1/16th of the work, and a model that covers
-	// 0.2% of the frame still lands dozens of samples.
-	const step = 4
-	var sampled, visible int
-	for y := b.Min.Y; y < b.Max.Y; y += step {
-		for x := b.Min.X; x < b.Max.X; x += step {
-			sampled++
-			if _, _, _, a := img.At(x, y).RGBA(); a > 0x1000 {
-				visible++
-			}
-		}
-	}
-	if sampled == 0 {
-		return true
-	}
-	return float64(visible)/float64(sampled) < minVisibleRatio
 }

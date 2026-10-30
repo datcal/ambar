@@ -80,6 +80,9 @@ type ClaimRequest struct {
 	DeriveVersion int `json:"derive_version"`
 	// Blender says whether this worker can convert FBX and .blend.
 	Blender bool `json:"blender"`
+	// Thumbs says whether it can also draw model thumbnails with that Blender
+	// (derive.ThumbJobType). A worker built before it could never says so.
+	Thumbs bool `json:"thumbs,omitempty"`
 	// Concurrency is how many jobs the worker runs at once, for the jobs page.
 	Concurrency int `json:"concurrency,omitempty"`
 }
@@ -127,6 +130,7 @@ type WorkerJob struct {
 type workerState struct {
 	name        string
 	blender     bool
+	thumbs      bool
 	concurrency int
 	since       time.Time
 	lastSeen    time.Time
@@ -172,6 +176,10 @@ type Coordinator struct {
 	// blenderOffered records that the needs_blender backlog was queued for the worker
 	// connected now; it resets when the worker goes quiet, so a reconnect offers again.
 	blenderOffered bool
+	// thumbsOffered is the same for the models whose thumbnails Blender should draw.
+	thumbsOffered bool
+	// localThumbs is whether this server draws thumbnails with a Blender of its own.
+	localThumbs bool
 	// blenderSeen is the last worker with Blender to ask for work, kept in seenFile at most
 	// once a minute (seenWritten) so that it outlives a restart.
 	blenderSeen BlenderWorker
@@ -196,7 +204,10 @@ type Options struct {
 	// SeenFile remembers the last worker with Blender across restarts, so the jobs page can
 	// still say how long FBX and .blend files have waited for it. Empty keeps it in memory.
 	SeenFile string
-	Log      *slog.Logger
+	// LocalThumbs says this server has a Blender of its own to draw model thumbnails with.
+	// Without one its workers leave those jobs to a remote worker, whatever the mode.
+	LocalThumbs bool
+	Log         *slog.Logger
 }
 
 // NewCoordinator builds the server side. The deriver must be the one registered on the
@@ -226,6 +237,8 @@ func NewCoordinator(database *db.DB, queue *jobs.Queue, deriver *derive.Deriver,
 		leases:    map[int64]*lease{},
 		workers:   map[string]*workerState{},
 		seenFile:  opts.SeenFile,
+
+		localThumbs: opts.LocalThumbs,
 	}
 	if opts.SeenFile != "" {
 		if raw, err := os.ReadFile(opts.SeenFile); err == nil {
@@ -273,15 +286,36 @@ func (c *Coordinator) Mode() string {
 // SkipLocal is jobs.Options.Skip for the server's own queue: the job types its workers
 // should leave to remote workers right now.
 func (c *Coordinator) SkipLocal() []string {
+	var skip []string
 	switch c.Mode() {
 	case ModeOnly:
-		return []string{derive.JobType}
+		skip = []string{derive.JobType, derive.ThumbJobType}
 	case ModeAuto:
 		if c.Active() {
-			return []string{derive.JobType}
+			skip = []string{derive.JobType, derive.ThumbJobType}
 		}
 	}
-	return nil
+	if skip == nil && !c.localThumbs {
+		skip = []string{derive.ThumbJobType}
+	}
+	return skip
+}
+
+// DrawsThumbs reports whether a worker that draws model thumbnails is connected and may
+// be handed work.
+func (c *Coordinator) DrawsThumbs() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mode == ModeOff {
+		return false
+	}
+	now := c.now()
+	for _, ws := range c.workers {
+		if ws.thumbs && now.Sub(ws.lastSeen) < ActiveWindow {
+			return true
+		}
+	}
+	return false
 }
 
 // Active reports whether a worker has asked for work recently.
@@ -309,18 +343,27 @@ func (c *Coordinator) Claim(ctx context.Context, req ClaimRequest) (*ClaimRespon
 	}
 	c.touch(ctx, req)
 
+	types := []string{derive.JobType}
+	if req.Blender && req.Thumbs {
+		types = append(types, derive.ThumbJobType)
+	}
 	for i := 0; i < maxSkipsPerClaim; i++ {
-		job, ok, err := c.queue.ClaimTypes(ctx, []string{derive.JobType})
+		job, ok, err := c.queue.ClaimTypes(ctx, types)
 		if err != nil || !ok {
 			return nil, err
 		}
 
+		// Both payloads are just the asset id.
 		var payload derive.Payload
 		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
-			_ = c.queue.Settle(ctx, job, fmt.Errorf("unmarshal derive payload: %w", err))
+			_ = c.queue.Settle(ctx, job, fmt.Errorf("unmarshal %s payload: %w", job.Type, err))
 			continue
 		}
-		task, done, err := c.deriver.Prepare(ctx, payload.AssetID)
+		prepare := c.deriver.Prepare
+		if job.Type == derive.ThumbJobType {
+			prepare = c.deriver.PrepareThumb
+		}
+		task, done, err := prepare(ctx, payload.AssetID)
 		if err != nil {
 			_ = c.queue.Settle(ctx, job, err)
 			continue
@@ -359,9 +402,14 @@ func (c *Coordinator) touch(ctx context.Context, req ClaimRequest) {
 		c.workers[req.Session] = ws
 	}
 	ws.name, ws.blender, ws.concurrency, ws.lastSeen = req.Worker, req.Blender, req.Concurrency, c.lastSeen
+	ws.thumbs = req.Blender && req.Thumbs
 	offer := req.Blender && !c.blenderOffered
 	if offer {
 		c.blenderOffered = true
+	}
+	offerThumbs := ws.thumbs && !c.thumbsOffered
+	if offerThumbs {
+		c.thumbsOffered = true
 	}
 	var remember *BlenderWorker
 	if req.Blender {
@@ -396,6 +444,19 @@ func (c *Coordinator) touch(ctx context.Context, req ClaimRequest) {
 			}
 		}()
 	}
+	if offerThumbs {
+		// A stat per model, and tens of thousands of models: not on the request either.
+		go func() {
+			n, err := c.deriver.QueueThumbs(context.WithoutCancel(ctx))
+			if err != nil {
+				c.log.Warn("could not queue model thumbnails", "error", err)
+				return
+			}
+			if n > 0 {
+				c.log.Info("queued model thumbnails for the remote worker to draw", "count", n)
+			}
+		}()
+	}
 }
 
 // Submit records the result of a leased job. staging holds the uploaded derivative
@@ -411,7 +472,11 @@ func (c *Coordinator) Submit(ctx context.Context, jobID int64, session string, o
 		return ErrNoLease
 	}
 
-	acceptErr := c.deriver.Accept(ctx, l.task, outcome, staging)
+	accept := c.deriver.Accept
+	if l.task.Op == derive.OpThumb {
+		accept = c.deriver.AcceptThumb
+	}
+	acceptErr := accept(ctx, l.task, outcome, staging)
 	if err := c.queue.Settle(ctx, l.job, acceptErr); err != nil {
 		return err
 	}
@@ -591,6 +656,7 @@ func (c *Coordinator) expire(ctx context.Context) {
 	if quiet {
 		c.connected = false
 		c.blenderOffered = false
+		c.thumbsOffered = false
 	}
 	worker := c.worker
 	mode := c.mode

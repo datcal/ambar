@@ -41,7 +41,12 @@ type Deriver struct {
 	blenderBin   string
 	maxPixels    int64
 	afterAnalyse func(ctx context.Context, sha256hex string) error
+	drawsThumbs  func() bool
 	log          *slog.Logger
+
+	// queue is the one Register attached the deriver to, for the thumbnail a derived model
+	// gets next.
+	queue *jobs.Queue
 }
 
 // Options configures a Deriver.
@@ -62,7 +67,12 @@ type Options struct {
 	// swallowed: a missing tag is not worth failing a derived thumbnail over, and the
 	// next `ambar retag` fixes it.
 	AfterAnalyse func(ctx context.Context, sha256hex string) error
-	Log          *slog.Logger
+	// DrawsThumbs reports whether anything can draw a model's thumbnail with Blender right
+	// now — this server, or a worker that is connected. A derived model's thumbnail is
+	// queued only then, so a library with no Blender anywhere does not collect a queued job
+	// per model that nothing will ever run. Nil means never.
+	DrawsThumbs func() bool
+	Log         *slog.Logger
 }
 
 func New(database *db.DB, opts Options) *Deriver {
@@ -81,12 +91,14 @@ func New(database *db.DB, opts Options) *Deriver {
 		blenderBin:   opts.BlenderBin,
 		maxPixels:    maxPixels,
 		afterAnalyse: opts.AfterAnalyse,
+		drawsThumbs:  opts.DrawsThumbs,
 		log:          log,
 	}
 }
 
 // Register attaches the handler to a queue.
 func (d *Deriver) Register(q *jobs.Queue) {
+	d.queue = q
 	q.Register(JobType, d.Handle)
 }
 
@@ -221,10 +233,25 @@ func (d *Deriver) Finish(ctx context.Context, task Task, outcome Outcome) error 
 			d.log.InfoContext(ctx, "derive completed with notes",
 				"asset_id", task.AssetID, "filename", task.Filename, "notes", outcome.Message)
 		}
-		return d.recordForContent(ctx, task.SHA256, StateOK, outcome.Message, outcome.Result)
+		if err := d.recordForContent(ctx, task.SHA256, StateOK, outcome.Message, outcome.Result); err != nil {
+			return err
+		}
+		d.queueThumb(ctx, task)
+		return nil
 
 	default:
 		return fmt.Errorf("derive asset %d: unknown outcome state %q", task.AssetID, outcome.State)
+	}
+}
+
+// queueThumb queues a freshly derived model's thumbnail when something can draw it. A
+// model derived while nothing can is queued by EnqueueModelThumbs once something can.
+func (d *Deriver) queueThumb(ctx context.Context, task Task) {
+	if task.Op != "" || !DrawsThumb(task.Ext) || d.queue == nil || d.drawsThumbs == nil || !d.drawsThumbs() {
+		return
+	}
+	if _, err := EnqueueThumb(ctx, d.queue, task.AssetID, task.SHA256); err != nil {
+		d.log.WarnContext(ctx, "could not queue a model thumbnail", "asset_id", task.AssetID, "error", err)
 	}
 }
 

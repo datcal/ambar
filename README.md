@@ -128,8 +128,9 @@ What it does:
 - **Inspect before importing** — full-size preview, dimensions, frame count, triangle
   count, tags, licence, and the other formats of the same artwork
 - **Render models nobody has looked at yet.** The server has no renderer and Blender is
-  optional, so most models have no thumbnail. The plugin is inside a game engine: it
-  draws them itself and posts the result back, so the web UI fills in too
+  optional, so without a worker that has Blender most models have no thumbnail. The
+  plugin is inside a game engine: it draws them itself and posts the result back, so the
+  web UI fills in too
 - **Import** into `res://assets/<kind>/<pack>/<file>`, verify the bytes against the hash
   the server advertised, and record it in `res://.ambar/manifest.json` (commit that
   file) and on the server

@@ -91,10 +91,10 @@ func (s *Server) handleModelRenderQueue(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		var reason string
-		switch modelThumbStatus(filepath.Join(s.cfg.DataRoot, relDir)) {
-		case thumbMissing:
+		switch derive.ModelThumbStatus(filepath.Join(s.cfg.DataRoot, relDir), derive.RendererBrowser) {
+		case derive.ThumbMissing:
 			reason = "missing"
-		case thumbStale:
+		case derive.ThumbStale:
 			reason = "stale"
 		default:
 			continue

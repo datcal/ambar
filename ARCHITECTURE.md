@@ -103,8 +103,10 @@ variants, then enqueue derivatives for anything that lacks them.
 **Deriving.** A job per asset. Images get a thumbnail and a preview, with the pixel-art
 path — nearest-neighbour, never smoothed, decided by colour count and edge hardness
 rather than image size. Audio gets peaks. Models get a normalised `preview.glb` and
-geometry counts. Anything with no pure-Go decoder is recorded as `unsupported` with a
-reason, which is a state, not a failure.
+geometry counts, and then a picture: a `model.thumb` job that a worker with Blender draws
+(Workbench, textures found by `internal/texture`), or, without one, a browser that has the
+model open. Anything with no pure-Go decoder is recorded as `unsupported` with a reason,
+which is a state, not a failure.
 
 **Ingesting.** An archive in `_inbox/` (or uploaded) is extracted into the library with
 every entry path resolved and checked against the destination root, then classified,
@@ -160,7 +162,8 @@ These are not style preferences. Violating one is a bug regardless of what else 
 - **External tools are optional and never baked into the image.** Blender, Aseprite and
   ffmpeg are configured by path. Without Blender, `.fbx` and `.blend` sit in
   `needs_blender` and say so — and the Godot plugin fills that gap for the formats it
-  can read by rendering them itself.
+  can read by rendering them itself. A remote worker (`ambar worker`) brings its own
+  Blender, and with it converts those formats and draws every model's thumbnail.
 - **Content hash is identity** for derivatives, duplicate detection, and now for
   attribution: a project use recorded against an id whose content does not match is
   corrected from the hash.

@@ -247,8 +247,8 @@ func TestBlankImage(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := blankImage(tc.img); got != tc.want {
-				t.Errorf("blankImage() = %v, want %v", got, tc.want)
+			if got := derive.BlankImage(tc.img); got != tc.want {
+				t.Errorf("BlankImage() = %v, want %v", got, tc.want)
 			}
 		})
 	}

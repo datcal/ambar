@@ -84,7 +84,7 @@ func TestStaleThumbnailsAreRedrawnOnlyByABetterRenderer(t *testing.T) {
 	if code := ts.uploadThumb(t, id, white, 0, 0); code != http.StatusNoContent {
 		t.Fatalf("first upload = %d", code)
 	}
-	if err := os.Remove(filepath.Join(dir, fileThumbMeta)); err != nil {
+	if err := os.Remove(filepath.Join(dir, derive.FileThumbMeta)); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(filepath.Join(dir, derive.FileThumb))
@@ -96,19 +96,19 @@ func TestStaleThumbnailsAreRedrawnOnlyByABetterRenderer(t *testing.T) {
 	}
 
 	// The current renderer can, and says how it went.
-	ts.uploadThumb(t, id, green, thumbRendererVersion, 1)
+	ts.uploadThumb(t, id, green, derive.RendererBrowser, 1)
 	after, _ := os.ReadFile(filepath.Join(dir, derive.FileThumb))
 	if bytes.Equal(after, before) {
 		t.Fatal("the current renderer could not replace a stale thumbnail")
 	}
-	var meta thumbMeta
-	raw, _ := os.ReadFile(filepath.Join(dir, fileThumbMeta))
-	if err := json.Unmarshal(raw, &meta); err != nil || meta.Renderer != thumbRendererVersion || meta.Untextured != 1 {
-		t.Errorf("thumb.json = %s, want renderer %d with 1 untextured", raw, thumbRendererVersion)
+	var meta derive.ThumbMeta
+	raw, _ := os.ReadFile(filepath.Join(dir, derive.FileThumbMeta))
+	if err := json.Unmarshal(raw, &meta); err != nil || meta.Renderer != derive.RendererBrowser || meta.Untextured != 1 {
+		t.Errorf("thumb.json = %s, want renderer %d with 1 untextured", raw, derive.RendererBrowser)
 	}
 
 	// And what it drew is current: kept.
-	ts.uploadThumb(t, id, red, thumbRendererVersion, 0)
+	ts.uploadThumb(t, id, red, derive.RendererBrowser, 0)
 	if now, _ := os.ReadFile(filepath.Join(dir, derive.FileThumb)); !bytes.Equal(now, after) {
 		t.Error("a current thumbnail was replaced")
 	}
@@ -132,8 +132,8 @@ func TestRenderQueueListsMissingAndStale(t *testing.T) {
 	current := ts.assetID(t, "3d/synty/c_current.fbx")
 	grey := colourPNG(t, color.RGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff})
 	ts.uploadThumb(t, stale, grey, 0, 0)
-	_ = os.Remove(filepath.Join(ts.thumbDir(t, stale), fileThumbMeta))
-	ts.uploadThumb(t, current, grey, thumbRendererVersion, 0)
+	_ = os.Remove(filepath.Join(ts.thumbDir(t, stale), derive.FileThumbMeta))
+	ts.uploadThumb(t, current, grey, derive.RendererBrowser, 0)
 
 	var page renderQueuePage
 	if err := json.Unmarshal([]byte(readBody(t, ts.get(t, "/models/render-queue?after=0&limit=50"))), &page); err != nil {
