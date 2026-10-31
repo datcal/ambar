@@ -78,13 +78,26 @@ def load(src):
     if ext == ".blend":
         bpy.ops.wm.open_mainfile(filepath=src)
     elif ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=src)
+        load_fbx(src)
     elif ext == ".obj":
         bpy.ops.wm.obj_import(filepath=src)
     elif ext in (".gltf", ".glb"):
         bpy.ops.import_scene.gltf(filepath=src)
     else:
         raise ValueError("not a model Blender reads here: " + ext)
+
+# The Python importer reads binary FBX 7.1 (2010) and later only. Blender's C++ one (4.5 on,
+# built on ufbx) also reads FBX 6 and ASCII files, as older Synty packs ship them; it is
+# the newer of the two, so it comes second, and its own error is not the one reported.
+def load_fbx(src):
+    try:
+        bpy.ops.import_scene.fbx(filepath=src)
+    except RuntimeError as first:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        try:
+            bpy.ops.wm.fbx_import(filepath=src)
+        except Exception:
+            raise first from None
 
 def convert(req):
     load(req["src"])

@@ -22,6 +22,10 @@ will not change incompatibly without a major bump.
   all — is the colour texture named like the product the model is in
   (`POLYGON - Samurai Pack` → `PolygonSamurai_Tex_01.png`). The viewer and the thumbnails
   use it alike; it is never used for a normal or other non-colour map.
+- **FBX 6 and ASCII FBX convert.** Blender's Python FBX importer reads binary FBX 7.1 and
+  later only, so older Synty packs (SIMPLE Zombies, SIMPLE Military, …) failed with
+  "Version 6100 unsupported" on every retry. When it refuses a file, Blender's C++
+  importer (4.5 and later), which reads both, gets a second try.
 
 - **`scripts/deploy.sh` keeps a worker on another machine in step:** with
   `AMBAR_WORKER_SSH_HOST` set, the worker image is built from the same commit as the app,
