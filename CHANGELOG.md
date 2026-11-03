@@ -6,6 +6,13 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **New look, built on [HeroUI](https://heroui.com).** The web UI is restyled with HeroUI v3's
+  design tokens and component classes — pill buttons, soft chips, rounded cards and fields,
+  a translucent toolbar. Still server-rendered Go templates and htmx, still dark: HeroUI's
+  Tailwind-based stylesheet is compiled once from `tools/heroui` (`make css`) into
+  `internal/web/static/heroui.css` and committed, so the image and `make build` have no Node
+  in them. `app.css` keeps its role names (`--brand`, `--surface-2`, …) as aliases of HeroUI
+  tokens, and the JavaScript islands are untouched.
 - **Unreal Engine plugin** (`unreal/Ambar`, UE 5.8, Windows and Linux): an Ambar tab in the
   editor with live search, a folder tree opened one level at a time, kind and sort filters,
   multi-select, an inspector (large preview, licence, tags, other formats), import through the

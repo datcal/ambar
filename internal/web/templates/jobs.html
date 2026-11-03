@@ -9,18 +9,18 @@
 
   {{if .JobStats}}
     <nav class="kinds" aria-label="Filter by job state">
-      <a class="chip{{if not .JobState}} chip-on{{end}}" href="/jobs">all</a>
-      <a class="chip{{if eq .JobState "queued"}} chip-on{{end}}" href="/jobs?state=queued">queued {{.JobStats.Queued}}</a>
-      <a class="chip{{if eq .JobState "running"}} chip-on{{end}}" href="/jobs?state=running">running {{.JobStats.Running}}</a>
-      <a class="chip{{if eq .JobState "done"}} chip-on{{end}}" href="/jobs?state=done">done {{.JobStats.Done}}</a>
-      <a class="chip{{if eq .JobState "failed"}} chip-on{{end}}" href="/jobs?state=failed">failed {{.JobStats.Failed}}</a>
+      <a class="chip chip--secondary{{if not .JobState}} chip-on{{end}}" href="/jobs">all</a>
+      <a class="chip chip--secondary{{if eq .JobState "queued"}} chip-on{{end}}" href="/jobs?state=queued">queued {{.JobStats.Queued}}</a>
+      <a class="chip chip--secondary{{if eq .JobState "running"}} chip-on{{end}}" href="/jobs?state=running">running {{.JobStats.Running}}</a>
+      <a class="chip chip--secondary{{if eq .JobState "done"}} chip-on{{end}}" href="/jobs?state=done">done {{.JobStats.Done}}</a>
+      <a class="chip chip--secondary{{if eq .JobState "failed"}} chip-on{{end}}" href="/jobs?state=failed">failed {{.JobStats.Failed}}</a>
     </nav>
   {{end}}
 
   <div class="actions-row">
     <form method="post" action="/scan" class="inline" data-role="scan-form">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit" class="primary">Scan the library</button>
+      <button type="submit" class="button button--primary">Scan the library</button>
     </form>
 
     {{/* Clearing deletes waiting jobs only. Previews come back at the next scan or restart,
@@ -28,7 +28,7 @@
     {{if and .JobStats .JobStats.Queued}}
       <form method="post" action="/jobs/clear-queue" class="inline">
         <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-        <button type="submit"
+        <button type="submit" class="button button--secondary"
                 data-confirm="Delete all {{.JobStats.Queued}} waiting jobs? Running jobs finish. Previews that still need making are queued again at the next scan or restart.">Clear the queue ({{.JobStats.Queued}})</button>
       </form>
     {{end}}
@@ -36,7 +36,7 @@
     {{if and .JobStats (or .JobStats.Failed (and .DeriveStats .DeriveStats.Failed))}}
       <form method="post" action="/jobs/retry-failed" class="inline">
         <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-        <button type="submit">Retry everything that failed</button>
+        <button type="submit" class="button button--secondary">Retry everything that failed</button>
       </form>
     {{end}}
   </div>
@@ -65,7 +65,7 @@
           <span class="hint">— this server starts nothing itself. Preview work goes to remote workers;
           scans and sweeps wait until you switch back.</span>
         </label>
-        <div><button type="submit" class="primary">Save</button></div>
+        <div><button type="submit" class="button button--primary">Save</button></div>
       </form>
       {{if .LocalPaused}}
         <p class="hint"><span class="state state-failed">paused</span>
@@ -138,7 +138,7 @@
       whose thumbnail is missing or was drawn without its textures, here in this tab, with this
       computer's graphics card. Keep the tab open and visible; you can stop and continue later.</p>
     <div class="actions-row">
-      <button type="button" class="primary" data-role="rethumb-start">Draw model thumbnails here</button>
+      <button type="button" class="button button--primary" data-role="rethumb-start">Draw model thumbnails here</button>
       <button type="button" data-role="rethumb-stop" hidden>Stop</button>
     </div>
     <p class="hint" data-role="rethumb-status"></p>

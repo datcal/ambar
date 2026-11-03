@@ -19,7 +19,7 @@
   <div class="actions-row">
     <form method="post" action="/junk/scan" class="inline">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit"{{if .JunkRunning}} disabled{{end}}>
+      <button type="submit" class="button button--secondary"{{if .JunkRunning}} disabled{{end}}>
         {{if .Junk}}Rescan{{else}}Scan for junk{{end}}
       </button>
     </form>
@@ -102,8 +102,8 @@
               </p>
             {{end}}
             <div class="actions-row">
-              <button type="submit">Review removal…</button>
-              <button type="submit" formaction="/removals/script" class="linkish">Export as a shell script</button>
+              <button type="submit" class="button button--secondary">Review removal…</button>
+              <button type="submit" class="button button--ghost button--sm" formaction="/removals/script">Export as a shell script</button>
             </div>
           </form>
         </div>

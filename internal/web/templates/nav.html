@@ -18,7 +18,7 @@
          form posts normally and lands back on the same page. */}}
     <form method="post" action="/scan" class="panel-action" data-role="scan-form">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit" class="primary">Re-scan library</button>
+      <button type="submit" class="button button--primary">Re-scan library</button>
     </form>
     <p class="panel-note" data-role="scan-line"
        {{if .LastScan}}title="{{.LastScan.At.Format "2006-01-02 15:04:05"}}"{{end}}>
@@ -69,7 +69,7 @@
         <label class="sr-only" for="colour-typed">or type a colour</label>
         <input type="text" id="colour-typed" name="typed" placeholder="#aabbcc"
                autocomplete="off" spellcheck="false" inputmode="text">
-        <button type="submit">Find</button>
+        <button type="submit" class="button button--secondary">Find</button>
         {{/* An eyedropper, where the browser has one. Chromium does; Firefox does not
              implement EyeDropper, so the button is created by the island only when the
              API exists rather than sitting here as a promise it cannot keep. */}}

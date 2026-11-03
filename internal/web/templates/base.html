@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +10,7 @@
   {{/* ?v= is the cache buster (M16). Without it the one-hour TTL on /static meant a
        deployed CSS or JS change did not appear until a manual hard refresh, so a fix
        looked like it had done nothing. The version is stamped in at link time. */}}
+  <link rel="stylesheet" href="/static/heroui.css?v={{.Version}}">
   <link rel="stylesheet" href="/static/app.css?v={{.Version}}">
   <script src="/static/htmx.min.js?v={{.Version}}" defer></script>
   {{/* The §8 viewer, as an ES module island. It looks for .viewer and does nothing
@@ -88,7 +89,7 @@
         <span class="who">{{.User.Username}}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-          <button type="submit" class="linkish">log out</button>
+          <button type="submit" class="button button--ghost button--sm">Log out</button>
         </form>
       {{end}}
     </nav>

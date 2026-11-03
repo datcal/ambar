@@ -19,7 +19,7 @@
         <p>The index is empty.</p>
         <form method="post" action="/scan" class="actions">
           <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-          <button type="submit" class="primary">Scan the library</button>
+          <button type="submit" class="button button--primary">Scan the library</button>
         </form>
         <p class="hint">Indexes <code>{{.LibraryRoot}}</code> in the background.</p>
       </div>
@@ -52,8 +52,8 @@
       </div>
 
       <p class="actions">
-        <a class="button" href="/">Browse the library</a>
-        <a class="button button-quiet" href="/jobs">Background work</a>
+        <a class="button button--primary" href="/">Browse the library</a>
+        <a class="button button--secondary" href="/jobs">Background work</a>
       </p>
     {{end}}
   {{end}}
