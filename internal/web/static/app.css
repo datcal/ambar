@@ -1,57 +1,55 @@
-/* Ambar's stylesheet. Dark by default — §6 composites thumbnails over mid-grey "so
-   alpha-heavy sprites are visible in a dark UI", so that is the assumed direction. No
-   inline styles anywhere, which keeps the CSP at default-src 'self' with no
-   'unsafe-inline'.
+/* Ambar's stylesheet, on top of HeroUI.
 
-   M16 rebuilt the token layer. What was here before had grown one variable per need
-   rather than one per *role*: a single --accent was the link colour, the button fill,
-   the focus ring, the active-tab marker and the highlight, so nothing could be
-   emphasised relative to anything else, and every button on every page shouted equally
-   loudly. The roles below exist so that "primary action", "current page" and "this is a
-   link" can look different from each other, and so a destructive action can look
-   dangerous. See docs/decisions.md → "M16 — the visual language". */
+   Two layers, loaded in this order by base.html:
+
+     heroui.css  HeroUI v3's design tokens (--background, --surface, --accent,
+                 --field-background, --radius, …) and the component classes Ambar's
+                 templates use directly: .button .button--primary, .chip, .card. It is
+                 compiled from tools/heroui with `make css` and committed, so the image
+                 still has no Node in it. The page is always dark (class="dark" on
+                 <html>): §6 composites thumbnails over mid-grey "so alpha-heavy sprites
+                 are visible in a dark UI".
+     app.css     this file: the legacy role names below, now aliases of HeroUI tokens,
+                 plus everything HeroUI has no component for — the workspace shell, the
+                 thumbnail grid, the viewers, the palette.
+
+   Never redefine a HeroUI token name here (--surface, --border, --muted, --accent,
+   --focus, --danger, --radius): this file is unlayered, so it would win over heroui.css
+   and quietly un-theme every HeroUI component. Add an alias under an Ambar name instead.
+
+   No inline styles anywhere, which keeps the CSP at default-src 'self' with no
+   'unsafe-inline'. See docs/decisions.md → "M16 — the visual language" for the roles. */
 
 :root {
-  color-scheme: dark;
+  /* Ambar role names → HeroUI tokens. Surfaces, back to front. */
+  --bg: var(--background);
+  --surface-2: var(--surface-secondary);
+  --surface-3: var(--surface-tertiary);
+  --border-strong: var(--border-secondary);
 
-  /* Surfaces, back to front. Four steps rather than two: a card inside a panel inside
-     the page needs to separate without a border on every edge. */
-  --bg: #101216;
-  --surface: #171a20;
-  --surface-2: #1d2128;
-  --surface-3: #242a34;
-  --border: #292f3a;
-  --border-strong: #3a4252;
-
-  /* Text roles. The old --muted (#9aa3b2 on #1e2128) sat at about 4.3:1 — under AA for
-     body text, and it was used for whole paragraphs. Now: --text for content, --text-2
-     for secondary prose that must still be read comfortably, --muted for labels and
-     metadata only. */
-  --text: #e9ebf0;
-  --text-2: #bcc3d0;
-  --muted: #98a1b0;
+  /* Text roles: --text for content, --text-2 for secondary prose, --muted (HeroUI's) for
+     labels and metadata only. */
+  --text: var(--foreground);
+  --text-2: color-mix(in oklab, var(--foreground) 78%, var(--background));
 
   /* Accent roles. */
-  --link: #7cb3ff;
-  --brand: #4f86e8;
-  --brand-hover: #5f93ee;
-  --on-brand: #0a1120;
-  --active: #9cc6ff;
-  --focus: #7cb3ff;
+  --link: var(--accent);
+  --brand: var(--accent);
+  --brand-hover: var(--accent-hover);
+  --on-brand: var(--accent-foreground);
+  --active: var(--accent-soft-foreground);
 
-  --danger: #ff8080;
-  --danger-fill: #b03a35;
-  --danger-fill-hover: #c04440;
-  --danger-bg: #3a1e21;
-  --ok: #7ec894;
-  --ok-bg: #1d3a28;
-  --warn: #e2b45c;
-  --warn-bg: #34290f;
+  --danger-fill: var(--danger);
+  --danger-fill-hover: var(--danger-hover);
+  --danger-bg: var(--danger-soft);
+  --ok: var(--success);
+  --ok-bg: var(--success-soft);
+  --warn: var(--warning);
+  --warn-bg: var(--warning-soft);
 
-  /* Kept so nothing that still says --accent or --error breaks. */
-  --accent: var(--link);
+  /* Kept so nothing that still says --error breaks. */
   --error: var(--danger);
-  --error-bg: var(--danger-bg);
+  --error-bg: var(--danger-soft);
 
   /* One spacing scale, so gaps stop being invented per component. */
   --s1: 0.25rem;
@@ -61,9 +59,10 @@
   --s5: 1.3rem;
   --s6: 2rem;
 
-  --radius: 7px;
-  --radius-sm: 4px;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-lg: calc(var(--radius) * 2);
   --radius-pill: 999px;
+  --wash: color-mix(in oklab, var(--foreground) 5%, transparent);
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
@@ -72,10 +71,10 @@
   --fs-sm: 0.82rem;
   --fs-md: 0.9rem;
   --fs-lg: 1.05rem;
-  --fs-xl: 1.25rem;
+  --fs-xl: 1.35rem;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-1: var(--surface-shadow);
+  --shadow-2: var(--overlay-shadow);
 
   /* The workspace shell (M14). Panel widths and the grid tile size are set here so
      workspace.js can change them at runtime through the CSSOM — never through an
@@ -92,30 +91,47 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font: 15px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* --- chrome --- */
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s4);
   padding: var(--s3) var(--s5);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(1.4);
 }
 
 .brand {
-  font-family: var(--mono);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 700;
+  font-size: var(--fs-lg);
+  letter-spacing: -0.02em;
+  color: var(--foreground);
   text-decoration: none;
+}
+
+/* The wordmark's dot: the one place the accent is used decoratively. */
+.brand::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .topbar nav, .topnav {
@@ -127,7 +143,7 @@ body {
 .who {
   color: var(--muted);
   font-size: var(--fs-sm);
-  padding-left: var(--s3);
+  padding: 0 var(--s3);
 }
 
 main {
@@ -140,37 +156,39 @@ main {
 
 .footer {
   padding: var(--s3) var(--s5);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator);
   color: var(--muted);
   font-size: var(--fs-xs);
 }
 
 /* --- blocks --- */
 
+/* .card itself is HeroUI's (rounded, surface fill, soft shadow, flex column). Ambar's
+   cards hold forms and tables, so they get a hairline border and more room than the
+   default 1rem. */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: var(--s5);
+  gap: var(--s3);
+  border: 1px solid var(--separator);
 }
+
+.card > h1, .card > h2, .card > h3, .card > p { margin: 0; }
 
 .card.narrow { max-width: 24rem; margin: 3rem auto; }
 
-/* Type scale. Headings were 1.25rem and 1rem against 15px body text, which is barely a
-   hierarchy at all; panel headings were 0.72rem uppercase grey, which is a different
-   system again. Three levels, each clearly a level. */
+/* Type scale. Three levels, each clearly a level. */
 h1 {
   margin: 0 0 var(--s4);
   font-size: var(--fs-xl);
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 h2 {
   margin: 0 0 var(--s3);
   font-size: var(--fs-lg);
   font-weight: 620;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
 }
 
 h3 { margin: 0 0 var(--s2); font-size: var(--fs-md); font-weight: 620; }
@@ -180,23 +198,24 @@ p:last-child { margin-bottom: 0; }
 
 /* .hint is metadata, not prose: one line under a control. Anything longer belongs in a
    tooltip or in /settings — see the M16 note in docs/decisions.md. */
-.hint { color: var(--text-2); font-size: var(--fs-sm); }
+.hint { color: var(--muted); font-size: var(--fs-sm); }
 
 code {
   font-family: var(--mono);
   font-size: 0.88em;
-  background: #ffffff10;
-  color: var(--text);
-  padding: 0.1em 0.35em;
+  background: var(--default);
+  color: var(--foreground);
+  padding: 0.1em 0.4em;
   border-radius: var(--radius-sm);
 }
 
+/* An error is HeroUI's danger Alert: soft red wash, accent bar on the left. */
 .error {
-  background: var(--danger-bg);
-  border: 1px solid #6b3336;
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
   border-left: 3px solid var(--danger);
-  border-radius: var(--radius);
-  color: #ffbcbc;
+  border-radius: var(--field-radius);
+  color: var(--danger-soft-foreground);
   padding: var(--s3) var(--s4);
   margin: 0 0 var(--s4);
   font-size: var(--fs-md);
@@ -211,7 +230,7 @@ code {
 }
 
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; color: var(--text); }
+.facts dd { margin: 0; color: var(--foreground); }
 
 /* --- forms --- */
 
@@ -225,6 +244,8 @@ label {
   color: var(--text-2);
 }
 
+/* Fields follow HeroUI's Input: filled rather than outlined, large radius, a ring on
+   focus instead of a border change. */
 input[type="text"],
 input[type="password"],
 input[type="url"],
@@ -232,18 +253,28 @@ input[type="number"],
 input[type="search"],
 select {
   width: 100%;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
+  padding: 0.5rem 0.8rem;
+  border: var(--field-border-width) solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-background);
+  box-shadow: var(--field-shadow);
+  color: var(--field-foreground);
   font: inherit;
   font-size: var(--fs-md);
+  transition: background-color 0.12s, box-shadow 0.12s;
 }
 
-input::placeholder { color: var(--muted); }
+input::placeholder { color: var(--field-placeholder); }
 
-input:hover, select:hover { border-color: #495264; }
+input:hover, select:hover { background: var(--field-hover); }
+
+input[type="color"] {
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
 
 /* One focus ring for everything, drawn outside the element so it never shifts layout. */
 input:focus-visible,
@@ -254,156 +285,97 @@ summary:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
 }
 
-/* Four button roles, and only four.
-
-   The default is *secondary*: a neutral, outlined control. Before M16 the bare element
-   was a filled accent button with `margin-top: 1.2rem`, which had two consequences —
-   every button on every page carried maximum emphasis, so nothing stood out, and the
-   stray top margin knocked buttons out of alignment inside every flex row it appeared
-   in (the tag-add form is the clearest example). Emphasis is now opt-in:
-
-     button              secondary — the common case
-     button.primary      the one action a page is for
-     button.linkish      quiet, inline, reads as text
-     button.danger       irreversible; §9.1's purge is the only true one         */
-button,
-.button {
+/* Buttons: templates use HeroUI's own classes — `button button--primary` for the one
+   action a page is for, `button--secondary` for the common case, `button--ghost` for a
+   quiet inline action, `button--danger` for the irreversible one (§9.1's purge) — and
+   HeroUI styles them. What follows is only for the *bare* <button> that JavaScript
+   builds or that sits inside a toolbar (viewer controls, palette sort, copy buttons),
+   so those match a `button--secondary` without carrying the class. */
+button:not(.button) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--s2);
   margin: 0;
-  padding: 0.4rem 0.75rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-  color: var(--text);
+  padding: 0.35rem 0.8rem;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--default);
+  color: var(--default-foreground);
   font: inherit;
   font-size: var(--fs-md);
   font-weight: 500;
   line-height: 1.35;
-  text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+  transition: background-color 0.1s, transform 0.2s;
 }
 
-button:hover,
-.button:hover {
-  background: #2c333f;
-  border-color: #49536580;
-  filter: none;
-}
+button:not(.button):hover { background: var(--default-hover); }
+button:not(.button):active { transform: scale(0.97); }
+button:not(.button):disabled { opacity: var(--disabled-opacity); cursor: not-allowed; }
 
-button:active, .button:active { transform: translateY(0.5px); }
+/* A link that looks like a button and a button that looks like a link — both are
+   HeroUI buttons, so keep the underline off. */
+/* HeroUI ships without Tailwind's preflight here, so the UA's 2px outset button border
+   and font have to be reset by hand. */
+.button { border: 0; font-family: inherit; line-height: 1.25; }
+a.button, a.button:hover { text-decoration: none; }
+a.button--primary, a.button--primary:hover { color: var(--accent-foreground); }
+.button.is-disabled { opacity: var(--disabled-opacity); pointer-events: none; }
 
-button:disabled,
-button[disabled] {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-button:disabled:hover { background: var(--surface-3); }
-
-/* An <a class="button"> is always a page's own call to action — "Download original",
-   "Browse assets" — so it carries the primary fill without needing a second class. */
-button.primary,
-.button {
-  background: var(--brand);
-  border-color: transparent;
-  color: var(--on-brand);
-  font-weight: 600;
-}
-
-button.primary:hover,
-.button:hover { background: var(--brand-hover); }
-
-/* …except when it is explicitly quiet (the M15 "open in" links). */
-.button.button-quiet {
-  background: transparent;
-  border-color: var(--border-strong);
-  color: var(--text);
-  font-weight: 500;
-}
-.button.button-quiet:hover { background: var(--surface-3); }
-
-/* Destructive: it must not be reachable by muscle memory alone, so it looks different
-   rather than merely being labelled differently. */
-button.danger {
-  background: var(--danger-fill);
-  border-color: transparent;
-  color: #fff;
-  font-weight: 600;
-}
-button.danger:hover { background: var(--danger-fill-hover); }
-
-button.linkish {
-  margin: 0;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--text-2);
-  font-weight: 400;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-button.linkish:hover { color: var(--text); background: none; filter: none; }
-
-/* Login and the settings forms have a bare submit as a direct form child, and they used
-   to lean on the removed global margin for their breathing room. */
+/* Login and the settings forms have a bare submit as a direct form child. */
 .card.narrow form > button { margin-top: var(--s5); width: 100%; }
 
-a { color: var(--link); text-underline-offset: 2px; }
-a:hover { color: var(--active); }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { color: var(--accent-hover); }
 
 /* --- asset browsing (M1) --- */
 
 .stack { display: flex; flex-direction: column; gap: var(--s5); }
 
-/* `.searchbar` and `.kinds` were the M1 in-page search row and kind chips. Search moved
-   into the toolbar and kinds moved into the sidebar in M14, so both selectors were dead
-   weight; removed in M16. `.chip` is still used by the tag facets. */
-.chip {
-  padding: 0.1rem 0.55rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  text-decoration: none;
+/* .chip is HeroUI's. In Ambar it is a link — tag facets, filter pills — so it gets a hover
+   and a selected state (.chip-on), which HeroUI's static chip has no need for. */
+a.chip { text-decoration: none; transition: background-color 0.1s; }
+a.chip:hover { background: var(--default-hover); color: var(--foreground); }
+.chip-on, a.chip.chip-on {
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
 }
-
-.chip:hover { color: var(--text); border-color: #49536580; }
-.chip-on { border-color: var(--active); color: var(--active); background: #7cb3ff1a; }
 
 .clear { font-size: var(--fs-sm); color: var(--text-2); }
 
 .resultcount { color: var(--text-2); font-size: var(--fs-md); margin: 0; }
 
-/* A note is a message *about* the page, so it reads at content size rather than in
-   metadata grey — the old #9aa3b2 at 0.87rem was a paragraph nobody could read. */
+/* A note is a message *about* the page, so it reads at content size. It is HeroUI's
+   Alert in soft form: tinted wash, a bar on the leading edge. */
 .note {
   margin: 0;
   padding: var(--s3) var(--s4);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--link);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  border: 1px solid var(--separator);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--field-radius);
+  background: var(--accent-soft);
   color: var(--text-2);
   font-size: var(--fs-md);
 }
 
-.note-warn { border-left-color: var(--warn); background: var(--warn-bg); color: #f0d9a8; }
+.note-warn {
+  border-color: color-mix(in oklab, var(--warning) 30%, transparent);
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning-soft-foreground);
+}
 
 /* Wide content scrolls inside its own box rather than making the page scroll. */
 .tablewrap {
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--surface-shadow);
 }
 
 .grid {
@@ -424,7 +396,7 @@ a:hover { color: var(--active); }
 .grid thead th {
   position: sticky;
   top: 0;
-  background: var(--surface-2);
+  background: var(--surface-secondary);
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -433,7 +405,7 @@ a:hover { color: var(--active); }
 }
 
 .grid tbody tr:last-child td { border-bottom: none; }
-.grid tbody tr:hover { background: #ffffff08; }
+.grid tbody tr:hover { background: var(--wash); }
 .grid .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .row-missing td { opacity: 0.55; }
@@ -454,14 +426,13 @@ a:hover { color: var(--active); }
 .badge {
   display: inline-block;
   margin-left: var(--s2);
-  padding: 0.05rem 0.4rem;
-  border-radius: var(--radius-sm);
-  background: #ffffff14;
-  color: var(--text-2);
+  padding: 0 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--default);
+  color: var(--default-foreground);
   font-size: var(--fs-xs);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  line-height: 1.25rem;
   white-space: nowrap;
 }
 
@@ -494,11 +465,14 @@ a:hover { color: var(--active); }
   flex-direction: column;
   gap: 0.3rem;
   padding: 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: var(--surface-shadow);
   min-width: 0;
+  transition: border-color 0.12s, transform 0.12s;
 }
+.tile:hover { border-color: var(--border-secondary); }
 
 .tile-missing { opacity: 0.5; }
 
@@ -509,7 +483,7 @@ a:hover { color: var(--active); }
   align-items: center;
   justify-content: center;
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: var(--field-radius);
   overflow: hidden;
   /* Mid-grey behind the thumbnail as well as composited into it, so an image with
      transparent margins still reads as a single tile. */
@@ -554,7 +528,7 @@ a:hover { color: var(--active); }
 
 .tilebadges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .tilebadges .badge { margin-left: 0; }
-.badge-variants { background: #6ea8fe28; color: var(--accent); }
+.badge-variants { background: var(--accent-soft); color: var(--accent); }
 
 /* --- the 2D viewer (§8) --- */
 
@@ -601,14 +575,14 @@ a:hover { color: var(--active); }
 .viewer-toolbar button:hover,
 .palette-controls button:hover,
 .audio-controls button:hover,
-.sheet-controls button:hover { color: var(--text); background: #2f3744; }
+.sheet-controls button:hover { color: var(--text); background: var(--default-hover); }
 
 /* Pressed state, one definition. It used to be the same blue as every link, so "this is
    on" and "this is clickable" looked identical. */
 .viewer-toolbar button.on,
 .palette-controls button.on,
 .audio-controls button.on {
-  background: #7cb3ff26;
+  background: var(--accent-soft);
   border-color: var(--active);
   color: var(--active);
   z-index: 1;
@@ -688,13 +662,13 @@ a:hover { color: var(--active); }
   font-size: 0.75rem;
   padding: 0.1em 0.4em;
   border-radius: 3px;
-  background: #ffffff14;
+  background: var(--default);
   color: var(--muted);
 }
 
-.state-running { background: #6ea8fe28; color: var(--accent); }
-.state-failed  { background: #ff8a8a24; color: var(--error); }
-.state-done    { background: #4fa84f24; color: #86c586; }
+.state-running { background: var(--accent-soft); color: var(--accent); }
+.state-failed  { background: var(--danger-soft); color: var(--error); }
+.state-done    { background: var(--success-soft); color: var(--success-soft-foreground); }
 
 .errorcell {
   max-width: 28rem;
@@ -722,7 +696,7 @@ a:hover { color: var(--active); }
   background: var(--surface-2);
   font-size: var(--fs-sm);
 }
-.tag:hover { border-color: #49536580; }
+.tag:hover { border-color: var(--border-secondary); }
 .tag a { font-family: var(--mono); text-decoration: none; color: var(--link); }
 .tag a:hover { text-decoration: underline; }
 /* §7: inherited pack tags shown greyed. */
@@ -765,7 +739,7 @@ a:hover { color: var(--active); }
 .facet-n { color: var(--muted); }
 
 /* --- saved searches, bulk tagging (§7) --- */
-.note-ok { background: #2b5f3a2e; color: #86c99a; border-color: transparent; }
+.note-ok { background: var(--success-soft); color: var(--success-soft-foreground); border-color: transparent; }
 .saved-chip { display: inline-flex; align-items: center; gap: 0.2rem; }
 .saved-chip a { text-decoration: none; color: var(--accent); }
 .save-search { display: flex; gap: 0.4rem; max-width: 30rem; margin: -0.2rem 0 0.2rem; }
@@ -931,7 +905,7 @@ kbd {
 
 /* Copy feedback: the ring, not a colour change — a swatch must never lie about its
    colour, not even for 600ms. */
-.dot.copied .dot-fill { box-shadow: 0 0 0 2px var(--active), 0 0 0 4px #7cb3ff40; }
+.dot.copied .dot-fill { box-shadow: 0 0 0 2px var(--active), 0 0 0 4px var(--accent-soft); }
 
 /* The same circle at table size, for the Details rows. */
 .dot-sm {
@@ -979,7 +953,7 @@ kbd {
 
 /* The keep hint (§9.1: a label, never a selection). Deliberately understated: it
    marks a row as worth keeping without looking like it has been chosen. */
-tr.favoured { background: #2b5f3a1f; }
+tr.favoured { background: var(--success-soft); }
 tr.favoured code { font-weight: 600; }
 
 /* The swatch action icons used to be defined twice — once here for §7's colour search
@@ -1007,10 +981,10 @@ body.app {
 .topsearch input {
   width: 100%;
   padding: 0.45rem 0.7rem;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  background: var(--field-background);
+  color: var(--field-foreground);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-pill);
   font: inherit;
   font-size: var(--fs-md);
 }
@@ -1020,14 +994,15 @@ body.app {
 /* Toolbar links are navigation, not prose links: they get the pill treatment and a real
    current-page state, which the flat blue text row never had. */
 .topnav a {
-  padding: 0.28rem 0.6rem;
-  border-radius: var(--radius-sm);
-  color: var(--text-2);
+  padding: 0.3rem 0.8rem;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
   text-decoration: none;
+  transition: background-color 0.1s, color 0.1s;
 }
-.topnav a:hover { background: var(--surface-3); color: var(--text); }
+.topnav a:hover { background: var(--default); color: var(--foreground); }
 .topnav a[aria-current="page"] {
-  background: #7cb3ff1f;
+  background: var(--accent-soft);
   color: var(--active);
   font-weight: 550;
 }
@@ -1046,14 +1021,14 @@ body.app {
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--s4) var(--s3) var(--s6);
-  background: var(--surface);
+  background: var(--background);
   font-size: var(--fs-md);
 }
-.panel-left { border-right: 1px solid var(--border); }
+.panel-left { border-right: 1px solid var(--separator); }
 .panel-right {
   width: var(--panel-right);
-  border-left: 1px solid var(--border);
-  background: var(--surface);
+  border-left: 1px solid var(--separator);
+  background: var(--background);
   min-height: 0;
   overflow-y: auto;
   padding: var(--s4) var(--s3) var(--s6);
@@ -1085,20 +1060,19 @@ body.app {
   display: flex;
   justify-content: space-between;
   gap: var(--s2);
-  padding: 0.24rem var(--s2);
-  border-radius: var(--radius-sm);
+  padding: 0.3rem var(--s3);
+  border-radius: var(--field-radius);
   color: var(--text-2);
   text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.panel-list a:hover { background: var(--surface-3); color: var(--text); }
+.panel-list a:hover { background: var(--default); color: var(--foreground); }
 /* Current selection: a left marker plus the accent, so it is legible at a glance in a
    list of thirty folders rather than being a slightly lighter grey. */
 .panel-list a.on {
-  background: #7cb3ff1a;
-  box-shadow: inset 2px 0 0 var(--active);
+  background: var(--accent-soft);
   color: var(--active);
   font-weight: 550;
 }
@@ -1265,7 +1239,7 @@ body.app .thumbgrid {
 /* "File manager" is not an application with a colour of its own, and leaving it to inherit
    .button's brand fill made it look like the primary action on the page. */
 .appbtn.app-reveal { background: var(--surface-3); color: var(--text); font-weight: 500; }
-.appbtn.app-reveal:hover { background: #2f3744; color: var(--text); }
+.appbtn.app-reveal:hover { background: var(--default-hover); color: var(--text); }
 
 /* Live job progress (M16). The bar's width comes from data-percent through the CSSOM in
    jobs.js — never an inline style, which the CSP forbids. */
@@ -1314,11 +1288,11 @@ body.app .thumbgrid {
   text-align: center;
   transition: border-color 0.12s, background-color 0.12s;
 }
-.dropzone:hover { border-color: #495264; }
+.dropzone:hover { border-color: var(--border-secondary); }
 /* The whole page is the drop target; this is the box saying so. */
 .dropzone.is-over {
   border-color: var(--active);
-  background: #7cb3ff14;
+  background: var(--accent-soft);
 }
 .dropzone-title { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
 .dropzone-sub { font-size: var(--fs-sm); color: var(--muted); }
@@ -1331,7 +1305,7 @@ body.app .thumbgrid {
   border-radius: var(--radius);
   background: var(--surface);
 }
-.upload-done { border-color: #2f5d3f; }
+.upload-done { border-color: var(--success); }
 
 .upload-head {
   display: flex;
@@ -1411,7 +1385,7 @@ body.app .thumbgrid {
   font-size: var(--fs-md);
   white-space: normal;
 }
-.suggest-item:hover, .suggest-item.on { background: #7cb3ff1f; }
+.suggest-item:hover, .suggest-item.on { background: var(--accent-soft); }
 .suggest-text { overflow-wrap: anywhere; }
 .suggest-detail {
   flex: 0 0 auto;
@@ -1435,15 +1409,15 @@ body.app .thumbgrid {
 .pager-n {
   min-width: 1.9rem;
   padding: 0.2rem 0.35rem;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   text-align: center;
   text-decoration: none;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
-.pager-n:hover { background: var(--surface-3); color: var(--text); }
+.pager-n:hover { background: var(--default); color: var(--foreground); }
 .pager-n.on {
-  background: #7cb3ff1f;
+  background: var(--accent-soft);
   color: var(--active);
   font-weight: 600;
 }
@@ -1664,7 +1638,15 @@ body.app .model-stage { min-height: 24rem; }
 .folders summary::-webkit-details-marker { display: none; }
 .folders summary::before { content: "▸"; color: var(--muted); font-size: 0.7rem; }
 .folders[open] summary::before { content: "▾"; }
-.folders summary h2 { display: inline; margin: 0; }
+.folders summary h2 {
+    display: inline;
+    margin: 0;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+}
 
 /* Pick a colour, search for it (M17). The native <input type="color"> is deliberate:
    every browser already has a good picker and an eyedropper, and none of it is ours to
@@ -1756,7 +1738,7 @@ body.app .model-stage { min-height: 24rem; }
     cursor: pointer;
     font-family: inherit;
 }
-.swatch-icon:hover { color: var(--text); border-color: var(--border-strong); background: #ffffff0f; }
+.swatch-icon:hover { color: var(--text); border-color: var(--border-strong); background: var(--wash); }
 .swatch-icon.copied { color: var(--active); border-color: var(--active); }
 
 /* --- the live font specimen (M15) -------------------------------------------- */
@@ -1782,13 +1764,7 @@ body.app .model-stage { min-height: 24rem; }
 /* Launch buttons for the ambar:// helper (M15): present but quiet, because they only
    work once the helper is installed. */
 .open-apps { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.2rem 0 0.4rem; }
-.button-quiet {
-    font-size: 0.85rem;
-    padding: 0.3rem 0.6rem;
-    background: transparent;
-    border: 1px solid var(--border);
-}
-.button-quiet:hover { background: #ffffff0f; }
+
 
 
 /* The bulk-tag row (M15): a toolbar line, not a box. */

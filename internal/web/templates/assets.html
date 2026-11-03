@@ -77,7 +77,7 @@
               <option value="{{.}}" {{if eq (printf "%s" .) $.Sort}}selected{{end}}>{{.Label}}</option>
             {{end}}
           </select>
-          <noscript><button type="submit">Sort</button></noscript>
+          <noscript><button type="submit" class="button button--secondary">Sort</button></noscript>
         </form>
 
         {{/* Thumbnail size, the control Eagle puts in the same place. It drives the
@@ -109,12 +109,12 @@
                  hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
                  hx-target="#bulk-suggestions" hx-swap="innerHTML" hx-params="*">
           <datalist id="bulk-suggestions"></datalist>
-          <button type="submit" name="scope" value="selected" data-role="tag-selected">
+          <button type="submit" class="button button--secondary" name="scope" value="selected" data-role="tag-selected">
             Tag <span data-role="selected-count">0</span> selected
           </button>
           {{/* "or all N" looked like a link and tagged the entire result set — 5,610 assets
                from a mis-click, with no undo. It asks now. */}}
-          <button type="submit" name="scope" value="all" class="linkish"
+          <button type="submit" class="button button--ghost button--sm" name="scope" value="all"
                   data-confirm="Tag all {{.Page.Total}} assets matching this search?"
                   title="Every asset matching this search, not only the ones on screen">
             or all {{.Page.Total}}
@@ -245,10 +245,10 @@
         {{if gt .Pages 1}}
           <nav class="pager" aria-label="Pages">
             {{if .HasPrev}}
-              <a class="button button-quiet" href="{{call $.PageURL .PrevPage}}" rel="prev"
+              <a class="button button--secondary" href="{{call $.PageURL .PrevPage}}" rel="prev"
                  data-role="prev-page">‹ Prev</a>
             {{else}}
-              <span class="button button-quiet is-disabled">‹ Prev</span>
+              <span class="button button--secondary is-disabled">‹ Prev</span>
             {{end}}
 
             <span class="pager-pages">
@@ -264,10 +264,10 @@
             </span>
 
             {{if .HasNext}}
-              <a class="button button-quiet" href="{{call $.PageURL .NextPage}}" rel="next"
+              <a class="button button--secondary" href="{{call $.PageURL .NextPage}}" rel="next"
                  data-role="next-page">Next ›</a>
             {{else}}
-              <span class="button button-quiet is-disabled">Next ›</span>
+              <span class="button button--secondary is-disabled">Next ›</span>
             {{end}}
 
             <span class="pager-range">{{.FirstShown}}–{{.LastShown}} of {{.Total}}</span>
@@ -284,7 +284,7 @@
                   <option value="{{.}}" {{if eq . $.Page.PageSize}}selected{{end}}>{{.}} / page</option>
                 {{end}}
               </select>
-              <noscript><button type="submit">Apply</button></noscript>
+              <noscript><button type="submit" class="button button--secondary">Apply</button></noscript>
             </form>
           </nav>
         {{end}}

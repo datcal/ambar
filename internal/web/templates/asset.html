@@ -250,7 +250,7 @@
         <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
         <label>cols <input type="number" name="cols" value="{{.FrameCols}}" min="1" max="256"></label>
         <label>rows <input type="number" name="rows" value="{{.FrameRows}}" min="1" max="256"></label>
-        <button type="submit">{{if .SheetConfirmed}}Update{{else}}Confirm{{end}}</button>
+        <button type="submit" class="button button--secondary">{{if .SheetConfirmed}}Update{{else}}Confirm{{end}}</button>
       </form>
     </div>
   {{end}}
@@ -392,17 +392,17 @@
        the filters they were reached with, so J and K walk the search you came from. */}}
   <nav class="rail-nav" aria-label="Browse">
     {{if .PrevAsset}}
-      <a class="button button-quiet" href="/assets/{{.PrevAsset.ID}}{{.BrowseQuery}}"
+      <a class="button button--secondary" href="/assets/{{.PrevAsset.ID}}{{.BrowseQuery}}"
          data-role="prev-asset" title="{{.PrevAsset.Filename}} (k or ←)">‹ Previous</a>
     {{else}}
-      <span class="button button-quiet is-disabled" aria-disabled="true">‹ Previous</span>
+      <span class="button button--secondary is-disabled" aria-disabled="true">‹ Previous</span>
     {{end}}
     <a class="rail-nav-back" href="/{{.BrowseQuery}}">Results</a>
     {{if .NextAsset}}
-      <a class="button button-quiet" href="/assets/{{.NextAsset.ID}}{{.BrowseQuery}}"
+      <a class="button button--secondary" href="/assets/{{.NextAsset.ID}}{{.BrowseQuery}}"
          data-role="next-asset" title="{{.NextAsset.Filename}} (j or →)">Next ›</a>
     {{else}}
-      <span class="button button-quiet is-disabled" aria-disabled="true">Next ›</span>
+      <span class="button button--secondary is-disabled" aria-disabled="true">Next ›</span>
     {{end}}
   </nav>
 
@@ -413,14 +413,14 @@
         <a href="/assets?pack={{.PackID}}">{{.PackName}}</a> · <code>.{{.Ext}}</code> · {{bytes .Size}}
       </p>
       {{if not .Missing}}
-        <p class="actions"><a class="button" href="/assets/{{.ID}}/download">Download original</a></p>
+        <p class="actions"><a class="button button--primary" href="/assets/{{.ID}}/download">Download original</a></p>
       {{end}}
       {{/* The sideways jumps the asset page's own sidebar used to carry, now beside the
            identity they are about instead of replacing the library navigation. */}}
       <p class="rail-jumps">
-        <a class="chip" href="/?q=type%3A{{.Kind}}">more {{.Kind}}</a>
-        <a class="chip" href="/assets?pack={{.PackID}}">this pack</a>
-        {{if .HasPalette}}<a class="chip" href="/?q=palette-near%3A{{.ID}}">similar palette</a>{{end}}
+        <a class="chip chip--secondary" href="/?q=type%3A{{.Kind}}">more {{.Kind}}</a>
+        <a class="chip chip--secondary" href="/assets?pack={{.PackID}}">this pack</a>
+        {{if .HasPalette}}<a class="chip chip--secondary" href="/?q=palette-near%3A{{.ID}}">similar palette</a>{{end}}
       </p>
     </div>
   {{end}}
@@ -441,7 +441,7 @@
              feature exists for. Not the vendors' logos: see appShort in openhelper.go. */}}
         <p class="open-apps">
           {{range .OpenApps}}
-            <a class="button appbtn app-{{.Key}}" href="{{.URL}}"
+            <a class="button button--secondary appbtn app-{{.Key}}" href="{{.URL}}"
                title="Open in {{.Label}} — needs the one-time ambar:// helper on this machine">{{.Label}}</a>
           {{end}}
           <a class="hint" href="/settings#open-in">helper</a>
@@ -504,7 +504,7 @@
         <input id="prov-source" type="url" name="source_url" placeholder="https://…"
                value="{{if .Prov}}{{.Prov.SourceURL}}{{end}}">
         <div class="prov-actions">
-          <button type="submit" class="primary">Save</button>
+          <button type="submit" class="button button--primary">Save</button>
           <a class="hint" href="/packs/{{.Asset.PackID}}/provenance">More fields…</a>
         </div>
         <p class="hint">Applies to the whole pack.</p>
@@ -617,7 +617,7 @@
            hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
            hx-target="#tag-suggestions" hx-swap="innerHTML" hx-params="*">
     <datalist id="tag-suggestions">{{template "tag-options" .}}</datalist>
-    <button type="submit">Add</button>
+    <button type="submit" class="button button--secondary">Add</button>
   </form>
   {{/* The syntax was two standing lines under a one-line form; the placeholder already
        shows the shape, so the rest is a tooltip. */}}

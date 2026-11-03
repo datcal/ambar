@@ -1,0 +1,13 @@
+{
+  "name": "ambar-heroui-css",
+  "private": true,
+  "description": "Build-time only: compiles the HeroUI v3 stylesheet into internal/web/static/heroui.css. Nothing here ships in the image or runs at runtime.",
+  "scripts": {
+    "build": "tailwindcss -i input.css -o ../../internal/web/static/heroui.css --minify"
+  },
+  "devDependencies": {
+    "@heroui/styles": "3.2.7",
+    "@tailwindcss/cli": "4.1.17",
+    "tailwindcss": "4.1.17"
+  }
+}
