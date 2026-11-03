@@ -1,0 +1,36 @@
+/* Entry for the HeroUI stylesheet that Ambar serves. Build with `make css`.
+
+   This is @heroui/styles' own index.css minus two things Ambar does not want: the
+   Tailwind preflight reset (app.css is hand-written and styles bare elements itself) and
+   the components Ambar has no use for (date pickers, modals, toasts, …) — the full set is
+   ~460 KB, this is a fraction. Only the pieces that server-rendered HTML can use as plain
+   classes are imported: HeroUI v3's components are BEM class names (.button--primary,
+   .chip--soft) that work without React. */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@import "@heroui/styles/base/base.css" layer(base);
+
+/* Component structure, then the default theme's variables and customisations. */
+@import "@heroui/styles/components/button.css" layer(components);
+@import "@heroui/styles/components/chip.css" layer(components);
+@import "@heroui/styles/components/card.css" layer(components);
+@import "@heroui/styles/components/alert.css" layer(components);
+@import "@heroui/styles/components/input.css" layer(components);
+@import "@heroui/styles/components/label.css" layer(components);
+@import "@heroui/styles/components/link.css" layer(components);
+@import "@heroui/styles/components/kbd.css" layer(components);
+@import "@heroui/styles/components/separator.css" layer(components);
+@import "@heroui/styles/components/progress-bar.css" layer(components);
+@import "@heroui/styles/components/table.css" layer(components);
+@import "@heroui/styles/components/tabs.css" layer(components);
+@import "@heroui/styles/components/pagination.css" layer(components);
+@import "@heroui/styles/components/surface.css" layer(components);
+
+@import "@heroui/styles/themes/default" layer(theme);
+
+@import "@heroui/styles/utilities";
+@import "@heroui/styles/variants";

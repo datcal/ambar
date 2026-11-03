@@ -27,7 +27,7 @@
   <div class="actions-row">
     <form method="post" action="/trash/purge" class="inline">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit" class="danger"{{if not .Trash}} disabled{{end}}>Purge older batches</button>
+      <button type="submit" class="button button--danger"{{if not .Trash}} disabled{{end}}>Purge older batches</button>
     </form>
     <span class="hint">
       {{if .TrashRetention}}
@@ -93,7 +93,7 @@
         </div>
         {{if .Restorable}}
           <div class="actions-row">
-            <button type="submit" class="primary">Restore the ticked items</button>
+            <button type="submit" class="button button--primary">Restore the ticked items</button>
             <span class="hint">
               Restoring never overwrites: a path that has since been re-created is reported and
               left here.

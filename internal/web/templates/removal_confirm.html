@@ -147,10 +147,10 @@
         {{range .Ops}}<input type="hidden" name="path" value="{{.Path}}">{{end}}
 
         <div class="actions-row">
-          <button type="submit">
+          <button type="submit" class="button button--secondary">
             {{if .LinkOps}}Link {{len .LinkOps}} file(s){{else}}Move {{len .TrashOps}} item(s) to the trash{{end}}
           </button>
-          <button type="submit" formaction="/removals/script" class="linkish">
+          <button type="submit" class="button button--ghost button--sm" formaction="/removals/script">
             Download as a shell script instead
           </button>
           <a href="/dupes">cancel</a>

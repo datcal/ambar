@@ -129,7 +129,7 @@
             if (!newName.hidden) newName.focus();
         });
 
-        const go = el("button", "primary", "Extract");
+        const go = el("button", "button button--primary", "Extract");
         go.type = "submit";
         form.appendChild(go);
 

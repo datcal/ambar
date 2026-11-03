@@ -26,7 +26,7 @@
       {{/* A <details> so it works without a script: paste a path from your file manager —
            /mnt/game-assets/3d/…, a Windows path, a file:// link — or a folder's name. */}}
       <details class="gopath">
-        <summary class="button button-quiet">Go to path…</summary>
+        <summary class="button button--secondary">Go to path…</summary>
         <form method="get" action="/go" class="gopath-form">
           {{if $.Kind}}<input type="hidden" name="kind" value="{{$.Kind}}">{{end}}
           {{if .List}}<input type="hidden" name="view" value="list">{{end}}
@@ -36,11 +36,11 @@
           <input id="gopath" name="path" type="text" spellcheck="false" autocapitalize="none"
                  value="{{if .LocalPath}}{{.LocalPath}}{{else}}{{.Dir}}{{end}}"
                  placeholder="/mnt/your-library/3d/Vendor/Pack" data-role="gopath-input">
-          <button type="submit" class="primary">Open</button>
+          <button type="submit" class="button button--primary">Open</button>
         </form>
       </details>
       {{with .LocalPath}}
-        <button type="button" class="button button-quiet" data-copy-path="{{.}}"
+        <button type="button" class="button button--secondary" data-copy-path="{{.}}"
                 title="Copy {{.}} — paste it into a file manager, or drag files from there into Godot or Unreal">Copy path</button>
       {{end}}
     </div>
@@ -89,7 +89,7 @@
                 <option value="{{.}}" {{if eq (printf "%s" .) $.Sort}}selected{{end}}>{{.Label}}</option>
               {{end}}
             </select>
-            <noscript><button type="submit">Sort</button></noscript>
+            <noscript><button type="submit" class="button button--secondary">Sort</button></noscript>
           </form>
         {{end}}
         {{/* Thumbnail size. It drives --tile through the CSSOM (workspace.js) and remembers
@@ -116,7 +116,7 @@
     {{if .Subfolders}}
       {{if gt (len .Subfolders) 12}}
         <details class="subfolders-fold">
-          <summary class="button button-quiet">{{len .Subfolders}} subfolders</summary>
+          <summary class="button button--secondary">{{len .Subfolders}} subfolders</summary>
           {{template "subfolder-links" .}}
         </details>
       {{else}}
@@ -178,12 +178,12 @@
                  hx-get="/api/v1/tags/suggest" hx-trigger="keyup changed delay:200ms"
                  hx-target="#bulk-suggestions" hx-swap="innerHTML" hx-params="*">
           <datalist id="bulk-suggestions"></datalist>
-          <button type="submit" name="scope" value="selected" data-role="tag-selected">
+          <button type="submit" class="button button--secondary" name="scope" value="selected" data-role="tag-selected">
             Tag <span data-role="selected-count">0</span> selected
           </button>
           {{/* "or all N" looked like a link and tagged the entire result set — 5,610 assets
                from a mis-click, with no undo. It asks now. */}}
-          <button type="submit" name="scope" value="all" class="linkish"
+          <button type="submit" class="button button--ghost button--sm" name="scope" value="all"
                   data-confirm="Tag all {{.Page.Total}} assets matching this search?"
                   title="Every asset matching this search, not only the ones on screen">
             or all {{.Page.Total}}
@@ -303,10 +303,10 @@
         {{if gt .Pages 1}}
           <nav class="pager" aria-label="Pages">
             {{if .HasPrev}}
-              <a class="button button-quiet" href="{{call $.PageURL .PrevPage}}" rel="prev"
+              <a class="button button--secondary" href="{{call $.PageURL .PrevPage}}" rel="prev"
                  data-role="prev-page">‹ Prev</a>
             {{else}}
-              <span class="button button-quiet is-disabled">‹ Prev</span>
+              <span class="button button--secondary is-disabled">‹ Prev</span>
             {{end}}
 
             <span class="pager-pages">
@@ -322,10 +322,10 @@
             </span>
 
             {{if .HasNext}}
-              <a class="button button-quiet" href="{{call $.PageURL .NextPage}}" rel="next"
+              <a class="button button--secondary" href="{{call $.PageURL .NextPage}}" rel="next"
                  data-role="next-page">Next ›</a>
             {{else}}
-              <span class="button button-quiet is-disabled">Next ›</span>
+              <span class="button button--secondary is-disabled">Next ›</span>
             {{end}}
 
             <span class="pager-range">{{.FirstShown}}–{{.LastShown}} of {{.Total}}</span>
@@ -346,7 +346,7 @@
                   <option value="{{.}}" {{if eq . $.Page.PageSize}}selected{{end}}>{{.}} / page</option>
                 {{end}}
               </select>
-              <noscript><button type="submit">Apply</button></noscript>
+              <noscript><button type="submit" class="button button--secondary">Apply</button></noscript>
             </form>
           </nav>
         {{end}}
@@ -358,7 +358,7 @@
           {{/* "Include subfolders" off and nothing sits in the folder itself: say where
                the things are rather than pretending there are none. */}}
           <p>Nothing{{if .Kind}} of kind {{.Kind}}{{end}} sits directly in <strong>{{.Folder.Title}}</strong>.</p>
-          <p><a class="button primary" href="{{.Folder.SubURL}}">Show the {{.Folder.HiddenBelow}} in its subfolders</a></p>
+          <p><a class="button button--primary" href="{{.Folder.SubURL}}">Show the {{.Folder.HiddenBelow}} in its subfolders</a></p>
         {{else if .Search}}
           <p>Nothing{{if and .Folder .Folder.Dir}} in <strong>{{.Folder.Title}}</strong>{{end}} matched “{{.Search}}”.</p>
           <p class="hint">
@@ -413,15 +413,15 @@
   </p>
 
   <p class="peek-actions">
-    <a class="button primary" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener">Open page</a>
-    {{if not .Missing}}<a class="button button-quiet" href="/assets/{{.ID}}/download">Download</a>{{end}}
-    <a class="button button-quiet" href="{{call $.DirURL (libraryDir .LibraryPath)}}" title="{{libraryDir .LibraryPath}}">Show in folder</a>
+    <a class="button button--primary" href="/assets/{{.ID}}{{$.BrowseQuery}}" target="_blank" rel="noopener">Open page</a>
+    {{if not .Missing}}<a class="button button--secondary" href="/assets/{{.ID}}/download">Download</a>{{end}}
+    <a class="button button--secondary" href="{{call $.DirURL (libraryDir .LibraryPath)}}" title="{{libraryDir .LibraryPath}}">Show in folder</a>
   </p>
 
   {{with $.Local}}
     <p class="peek-path">
       <code>{{.Path}}</code>
-      <button type="button" class="button button-quiet" data-copy-path="{{.Path}}">Copy path</button>
+      <button type="button" class="button button--secondary" data-copy-path="{{.Path}}">Copy path</button>
     </p>
   {{end}}
 
@@ -448,7 +448,7 @@
       <h3>Open in</h3>
       <p class="open-apps">
         {{range $.OpenApps}}
-          <a class="button appbtn app-{{.Key}}" href="{{.URL}}"
+          <a class="button button--secondary appbtn app-{{.Key}}" href="{{.URL}}"
              title="Open in {{.Label}} — needs the one-time ambar:// helper on this machine">{{.Label}}</a>
         {{end}}
       </p>

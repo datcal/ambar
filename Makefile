@@ -35,9 +35,21 @@ export CGO_ENABLED := 0
 TESTDATA_LIBRARY := $(CURDIR)/testdata/library
 TESTDATA_DATA    := $(CURDIR)/testdata/data
 
-.PHONY: all build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check godot-test plugin-zip unreal-plugin-zip release-artifacts
+.PHONY: all css css-check build test test-race vet fmt fmt-check tidy run scan derive dupes trash user-add clean docker docker-run deploy deploy-config check godot-test plugin-zip unreal-plugin-zip release-artifacts
 
 all: check build
+
+# The UI is styled with HeroUI v3 (https://heroui.com). Its stylesheet is compiled once, from
+# tools/heroui, into internal/web/static/heroui.css and committed, so nothing here — the
+# Dockerfile, `make build`, CI's Go job — needs Node. Only a change to tools/heroui needs it:
+#
+#   make css        rebuild heroui.css (needs Node 20+ and npm)
+#   make css-check  fail if the committed heroui.css is not what tools/heroui produces
+css:
+	cd tools/heroui && npm ci && npm run build
+
+css-check: css
+	@git diff --exit-code -- internal/web/static/heroui.css || { echo "heroui.css is stale: run 'make css' and commit it"; exit 1; }
 
 build:
 	@mkdir -p dist

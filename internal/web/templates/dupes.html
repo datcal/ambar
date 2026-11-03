@@ -19,7 +19,7 @@
   <div class="actions-row">
     <form method="post" action="/dupes/scan" class="inline">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit"{{if .DupesRunning}} disabled{{end}}>
+      <button type="submit" class="button button--secondary"{{if .DupesRunning}} disabled{{end}}>
         {{if .Dupes}}Rescan{{else}}Scan for duplicates{{end}}
       </button>
     </form>
@@ -145,8 +145,8 @@
                 Remove the whole <code>{{.Candidate.Path}}</code> directory
               </label>
               <div class="actions-row">
-                <button type="submit" name="action" value="trash">Review removal…</button>
-                <button type="submit" name="action" value="trash" formaction="/removals/script" class="linkish">
+                <button type="submit" class="button button--secondary" name="action" value="trash">Review removal…</button>
+                <button type="submit" name="action" value="trash" formaction="/removals/script" class="button button--ghost button--sm">
                   Export as a shell script
                 </button>
               </div>
@@ -209,11 +209,11 @@
               </table>
             </div>
             <div class="actions-row">
-              <button type="submit" name="action" value="trash">Review removal…</button>
+              <button type="submit" class="button button--secondary" name="action" value="trash">Review removal…</button>
               {{if ne $.LinkMode "off"}}
-                <button type="submit" name="action" value="link">Review linking…</button>
+                <button type="submit" class="button button--secondary" name="action" value="link">Review linking…</button>
               {{end}}
-              <button type="submit" name="action" value="trash" formaction="/removals/script" class="linkish">
+              <button type="submit" name="action" value="trash" formaction="/removals/script" class="button button--ghost button--sm">
                 Export as a shell script
               </button>
             </div>

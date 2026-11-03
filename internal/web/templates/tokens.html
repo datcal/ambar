@@ -38,7 +38,7 @@
         Read alone is enough to browse and download.
       </p>
       <p><label>Expires (optional)<br><input type="date" name="expires"></label></p>
-      <p><button type="submit" class="primary">Create token</button></p>
+      <p><button type="submit" class="button button--primary">Create token</button></p>
     </form>
   </div>
 
@@ -71,7 +71,7 @@
                 {{if not .Revoked}}
                   <form method="post" action="/settings/tokens/{{.ID}}/revoke" class="inline">
                     <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
-                    <button type="submit" class="linkish">revoke</button>
+                    <button type="submit" class="button button--ghost button--sm">revoke</button>
                   </form>
                 {{end}}
               </td>

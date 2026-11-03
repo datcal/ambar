@@ -57,7 +57,7 @@
       </label>
       <p class="hint">At least {{.MinPasswordLength}} characters. Removing an account stays a
         deliberate command-line action — nobody here can lock anybody else out.</p>
-      <p><button type="submit" class="primary">Create user</button></p>
+      <p><button type="submit" class="button button--primary">Create user</button></p>
     </form>
 
     {{if .IsOwner}}{{if gt (len .Users) 1}}
@@ -87,7 +87,7 @@
       </label>
       <p class="hint">For a forgotten password. They are signed out everywhere and sign in
         with the new one; their API tokens keep working.</p>
-      <p><button type="submit" class="primary">Set password</button></p>
+      <p><button type="submit" class="button button--primary">Set password</button></p>
     </form>
     {{end}}{{end}}
   </div>
@@ -118,7 +118,7 @@
         revoke one under <a href="/settings/tokens">API tokens</a> if it may have leaked.
         A forgotten password is set by the first account under Users, or on the server
         with <code>ambar user passwd &lt;username&gt;</code>.</p>
-      <p><button type="submit" class="primary">Change password</button></p>
+      <p><button type="submit" class="button button--primary">Change password</button></p>
     </form>
   </div>
 
@@ -135,9 +135,9 @@
       Read it before you register it; it is a dozen lines.
     </p>
     <p class="actions">
-      <a class="button button-quiet" href="/settings/open-helper?platform=linux">Linux helper</a>
-      <a class="button button-quiet" href="/settings/open-helper?platform=macos">macOS helper</a>
-      <a class="button button-quiet" href="/settings/open-helper?platform=windows">Windows helper</a>
+      <a class="button button--secondary" href="/settings/open-helper?platform=linux">Linux helper</a>
+      <a class="button button--secondary" href="/settings/open-helper?platform=macos">macOS helper</a>
+      <a class="button button--secondary" href="/settings/open-helper?platform=windows">Windows helper</a>
     </p>
     <p class="hint">
       The links carry the path as your machine sees it, which comes from

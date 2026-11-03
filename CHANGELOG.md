@@ -6,6 +6,15 @@ will not change incompatibly without a major bump.
 
 ## Unreleased
 
+- **New look, built on [HeroUI](https://heroui.com).** The web UI is restyled with HeroUI v3's
+  design tokens and component classes — pill buttons, soft chips, rounded cards and fields,
+  a translucent toolbar. Still server-rendered Go templates and htmx, still dark: HeroUI's
+  Tailwind-based stylesheet is compiled once from `tools/heroui` (`make css`) into
+  `internal/web/static/heroui.css` and committed, so the image and `make build` have no Node
+  in them. `app.css` keeps its role names (`--brand`, `--surface-2`, …) as aliases of HeroUI
+  tokens, and the JavaScript islands are untouched. The amber accent of the
+  folder view is HeroUI's own `--accent`, set in `app.css`'s `@layer theme` block, so HeroUI's
+  buttons and chips follow it; warnings stay orange.
 - **A worker with Blender draws every model's thumbnail.** Model pictures came only from a
   browser, one tile at a time as someone scrolled past it: of 79,000 models in the library
   73,500 had none, so the grid, the Unreal plugin and `view_asset` showed an extension chip.

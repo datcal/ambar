@@ -17,6 +17,8 @@ One Go binary, one SQLite file, one container. Runs on a NAS.
 - **The filesystem stays the source of truth.** The database is an index you can throw
   away and rebuild (`ambar rebuild-index`).
 - **No CGO, no bundler, no Node.** Server-rendered HTML with htmx; the image is ~25 MB.
+  The look is [HeroUI](https://heroui.com)'s stylesheet, compiled once and committed
+  (`make css`, see `tools/heroui`) — Node is only needed to *change* it, never to build or run Ambar.
 
 ---
 

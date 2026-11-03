@@ -101,7 +101,7 @@
         <label class="sr-only" for="colour-typed">or type a colour</label>
         <input type="text" id="colour-typed" name="typed" placeholder="#aabbcc"
                autocomplete="off" spellcheck="false" inputmode="text">
-        <button type="submit">Find</button>
+        <button type="submit" class="button button--secondary">Find</button>
       </form>
       <ul class="colour-filter">
         {{range .Colours}}
@@ -144,7 +144,7 @@
          moving; without JavaScript the form posts normally and lands back on the page. */}}
     <form method="post" action="/scan" class="panel-action" data-role="scan-form">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit" class="button-quiet">Re-scan library</button>
+      <button type="submit" class="button button--secondary">Re-scan library</button>
     </form>
     <p class="panel-note" data-role="scan-line"
        {{if .LastScan}}title="{{.LastScan.At.Format "2006-01-02 15:04:05"}}"{{end}}>
